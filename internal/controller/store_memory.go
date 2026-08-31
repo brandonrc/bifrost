@@ -156,14 +156,14 @@ func (s *MemoryStore) List(_ context.Context) ([]StoredCluster, error) {
 
 func (s *MemoryStore) SetDesired(_ context.Context, id core.ClusterId, desired DesiredState) error {
 	if !desired.isValid() {
-		return storeErrorf("bad desired state %q", string(desired))
+		return errBadDesiredState(string(desired))
 	}
 
 	s.clustersMu.Lock()
 	defer s.clustersMu.Unlock()
 	c, ok := s.clusters[id]
 	if !ok {
-		return storeErrorf("no such cluster %s", id)
+		return errNoSuchCluster(string(id))
 	}
 	c.Desired = desired
 	// Anchor (or clear) the tombstone-retention clock: first transition
@@ -400,7 +400,7 @@ func (s *MemoryStore) DeletePool(_ context.Context, name string) error {
 	s.poolsMu.Lock()
 	defer s.poolsMu.Unlock()
 	if _, ok := s.pools[name]; !ok {
-		return storeErrorf("no such pool %s", name)
+		return errNoSuchPool(name)
 	}
 	delete(s.pools, name)
 	return nil
@@ -449,7 +449,7 @@ func (s *MemoryStore) DeleteAllocation(_ context.Context, pool, project string) 
 	defer s.allocationsMu.Unlock()
 	key := allocationKey{pool: pool, project: project}
 	if _, ok := s.allocations[key]; !ok {
-		return storeErrorf("no such allocation %s/%s", pool, project)
+		return errNoSuchAllocation(pool, project)
 	}
 	delete(s.allocations, key)
 	return nil
@@ -610,7 +610,7 @@ func (s *MemoryStore) CreateLocalUser(_ context.Context, username string, email 
 	s.localUsersMu.Lock()
 	defer s.localUsersMu.Unlock()
 	if _, ok := s.localUsers[username]; ok {
-		return storeErrorf("local user %s already exists", username)
+		return errLocalUserAlreadyExists(username)
 	}
 	s.localUsers[username] = core.LocalUserRecord{
 		Username: username,
@@ -653,7 +653,7 @@ func (s *MemoryStore) SetLocalUserPassword(_ context.Context, username, password
 	defer s.localUsersMu.Unlock()
 	u, ok := s.localUsers[username]
 	if !ok {
-		return storeErrorf("no such local user %s", username)
+		return errNoSuchLocalUser(username)
 	}
 	u.PasswordHash = passwordHash
 	s.localUsers[username] = u
@@ -665,7 +665,7 @@ func (s *MemoryStore) SetLocalUserRole(_ context.Context, username string, role 
 	defer s.localUsersMu.Unlock()
 	u, ok := s.localUsers[username]
 	if !ok {
-		return storeErrorf("no such local user %s", username)
+		return errNoSuchLocalUser(username)
 	}
 	u.Role = role
 	s.localUsers[username] = u
@@ -677,7 +677,7 @@ func (s *MemoryStore) SetLocalUserDisabled(_ context.Context, username string, d
 	defer s.localUsersMu.Unlock()
 	u, ok := s.localUsers[username]
 	if !ok {
-		return storeErrorf("no such local user %s", username)
+		return errNoSuchLocalUser(username)
 	}
 	u.Disabled = disabled
 	s.localUsers[username] = u
@@ -689,7 +689,7 @@ func (s *MemoryStore) SetLoginLockout(_ context.Context, username string, failed
 	defer s.localUsersMu.Unlock()
 	u, ok := s.localUsers[username]
 	if !ok {
-		return storeErrorf("no such local user %s", username)
+		return errNoSuchLocalUser(username)
 	}
 	u.FailedLogins = failedLogins
 	// Deep-copy on ingress: lockedUntil is a caller-owned pointer.
@@ -710,7 +710,7 @@ func (s *MemoryStore) RecordLoginFailure(ctx context.Context, username string) e
 		return err
 	}
 	if user == nil {
-		return storeErrorf("no such local user %s", username)
+		return errNoSuchLocalUser(username)
 	}
 	failed, locked := NextLoginFailureState(user.FailedLogins, NowUnix())
 	return s.SetLoginLockout(ctx, username, failed, locked)
@@ -726,7 +726,7 @@ func (s *MemoryStore) CreateApiToken(_ context.Context, record core.ApiTokenReco
 	s.apiTokensMu.Lock()
 	defer s.apiTokensMu.Unlock()
 	if _, ok := s.apiTokens[record.Prefix]; ok {
-		return storeErrorf("api token prefix %s already exists", record.Prefix)
+		return errApiTokenAlreadyExists(record.Prefix)
 	}
 	// Deep-copy on ingress: record.LastUsedAt is a caller-owned pointer.
 	s.apiTokens[record.Prefix] = cloneApiTokenRecord(record)
@@ -765,7 +765,7 @@ func (s *MemoryStore) RevokeApiToken(_ context.Context, prefix, username string)
 	defer s.apiTokensMu.Unlock()
 	t, ok := s.apiTokens[prefix]
 	if !ok || t.Username != username {
-		return storeErrorf("no such api token %s", prefix)
+		return errNoSuchApiToken(prefix)
 	}
 	t.Revoked = true
 	s.apiTokens[prefix] = t
@@ -831,7 +831,7 @@ func (s *MemoryStore) DeleteRoleAssignment(_ context.Context, principal, role, s
 	defer s.assignmentsMu.Unlock()
 	key := assignmentKey{principal: principal, role: role, scope: scope}
 	if _, ok := s.assignments[key]; !ok {
-		return storeErrorf("no such assignment %s/%s/%s", principal, role, scope)
+		return errNoSuchAssignment(principal, role, scope)
 	}
 	delete(s.assignments, key)
 	return nil

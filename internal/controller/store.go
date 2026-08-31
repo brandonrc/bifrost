@@ -91,7 +91,7 @@ func (d DesiredState) AsStr() string {
 func ParseDesiredState(s string) (DesiredState, error) {
 	d := DesiredState(s)
 	if !d.isValid() {
-		return "", storeErrorf("bad desired state %q", s)
+		return "", errBadDesiredState(s)
 	}
 	return d, nil
 }
@@ -309,7 +309,7 @@ func (s UsageSource) AsStr() string {
 func ParseUsageSource(s string) (UsageSource, error) {
 	v := UsageSource(s)
 	if !v.isValid() {
-		return "", storeErrorf("bad usage source %q", s)
+		return "", errBadUsageSource(s)
 	}
 	return v, nil
 }
