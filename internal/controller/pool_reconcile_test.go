@@ -441,3 +441,45 @@ func TestPoolReconcileAllIsRaceClean(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// --- Fix round 1 (review of commit 5e120e8) ---
+
+// TestPoolRunFiresFirstPassImmediately pins M1 for the pool engine: see
+// TestRunFiresFirstPassImmediately's doc comment in reconcile_test.go for
+// why a 1-hour interval is needed to actually detect a missing immediate
+// first tick (the existing 10ms-interval loop tests are blind to it).
+func TestPoolRunFiresFirstPassImmediately(t *testing.T) {
+	ctx := context.Background()
+	store, prov, rec := poolRig(true)
+	if _, err := store.UpsertPool(ctx, "gpu", testPoolSpec("gpu")); err != nil {
+		t.Fatalf("upsert pool: %v", err)
+	}
+
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		rec.Run(runCtx, time.Hour)
+		close(done)
+	}()
+
+	deadline := time.After(2 * time.Second)
+waitForFirstPass:
+	for {
+		if len(prov.applyCalls()) > 0 {
+			break waitForFirstPass
+		}
+		select {
+		case <-deadline:
+			cancel()
+			t.Fatal("expected an immediate first pass (interval is 1h); got none within 2s")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("loop should stop promptly on shutdown")
+	}
+}

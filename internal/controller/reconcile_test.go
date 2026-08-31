@@ -1130,3 +1130,217 @@ func TestReconcileAllAtIsRaceClean(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// --- Fix round 1 (review of commit 5e120e8) ---
+
+// TestRunFiresFirstPassImmediately pins M1: time.NewTicker (unlike Rust's
+// tokio::time::interval, whose first tick fires at creation time) waits a
+// full interval before its first tick. Run must not inherit that: with a
+// 1-hour interval, a pass must still happen almost immediately, or nothing
+// (reap/intent-sweep/tombstone-sweep/reconcile — including resuming any
+// crash-interrupted actuation) would happen for an hour after boot. The
+// existing 10ms-interval tests are blind to this bug (a ticker with a 1h
+// initial wait still "passes" the 60ms-sleep assertions in
+// TestPoolRunLoopConvergesThenStopsOnShutdown-style tests, and this file's
+// own 10ms-interval loop tests, because the interval itself is short
+// enough that the bug is invisible) — this test uses a deliberately huge
+// interval so only an immediate first pass can satisfy it.
+func TestRunFiresFirstPassImmediately(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryStore()
+	id := core.ClusterId("c")
+	if _, err := store.UpsertDesired(ctx, id, testClusterSpec()); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	prov := &fakeProvisioner{
+		observeFn: func(int) (provision.ObservedCluster, error) {
+			return provision.ObservedCluster{}, provision.ProvisionError{Kind: provision.ProvisionErrNotFound, ClusterID: id}
+		},
+	}
+	rec := NewReconciler(store, prov)
+
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		rec.Run(runCtx, time.Hour)
+		close(done)
+	}()
+
+	deadline := time.After(2 * time.Second)
+waitForFirstPass:
+	for {
+		prov.mu.Lock()
+		calls := prov.observeCalls
+		prov.mu.Unlock()
+		if calls > 0 {
+			break waitForFirstPass
+		}
+		select {
+		case <-deadline:
+			cancel()
+			t.Fatal("expected an immediate first pass (interval is 1h); got none within 2s")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("loop should stop promptly on shutdown")
+	}
+}
+
+// TestReconcileFailsClosedWhenNamespacePostureErrors pins M2(a): a
+// namespace-posture error must block the Apply call entirely (fail-closed,
+// #56/#62) and must not mark the outbox intent Applied.
+func TestReconcileFailsClosedWhenNamespacePostureErrors(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryStore()
+	id := core.ClusterId("c")
+	if _, err := store.UpsertDesired(ctx, id, testClusterSpec()); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	prov := &fakeProvisioner{
+		observeFn: func(int) (provision.ObservedCluster, error) {
+			return provision.ObservedCluster{}, provision.ProvisionError{Kind: provision.ProvisionErrNotFound, ClusterID: id}
+		},
+		ensurePostureErr: provision.ProvisionError{Kind: provision.ProvisionErrBackend, Message: "posture apply failed"},
+	}
+	rec := NewReconciler(store, prov)
+	out := rec.ReconcileAllAt(ctx, 0)
+	if len(out) != 1 {
+		t.Fatalf("out = %+v", out)
+	}
+	rerr, ok := out[0].Err.(ReconcileError)
+	if !ok || rerr.Kind != ReconcileErrProvision {
+		t.Fatalf("err = %#v, want ReconcileErrProvision", out[0].Err)
+	}
+	if len(prov.applyKeys) != 0 {
+		t.Fatalf("expected Apply never called when posture fails closed, got %v", prov.applyKeys)
+	}
+	if prov.ensurePostureCalls != 1 {
+		t.Fatalf("EnsureNamespacePosture calls = %d, want 1", prov.ensurePostureCalls)
+	}
+	c, err := store.Get(ctx, id)
+	if err != nil || c == nil {
+		t.Fatalf("get: %v %v", c, err)
+	}
+	rec1, err := store.GetIntent(ctx, c.IntentKey())
+	if err != nil || rec1 == nil || rec1.Status != IntentStatusPending {
+		t.Fatalf("intent = %+v, err=%v, want Pending (a posture failure must not complete it)", rec1, err)
+	}
+}
+
+// TestReconcilePendingIntentReplaysAndCompletesAfterApplyFailure pins
+// M2(b): a failure between BeginIntent and a successful Apply leaves a
+// Pending outbox row. The next pass's BeginIntent for the same key/
+// fingerprint finds it (IntentOutcomeProceed{Replay: true}) and the
+// reconciler re-actuates (idempotent SSA) rather than refusing — and this
+// time completes it.
+func TestReconcilePendingIntentReplaysAndCompletesAfterApplyFailure(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryStore()
+	id := core.ClusterId("c")
+	if _, err := store.UpsertDesired(ctx, id, testClusterSpec()); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	var failApply atomic.Bool
+	failApply.Store(true)
+	prov := &fakeProvisioner{
+		observeFn: func(int) (provision.ObservedCluster, error) {
+			return provision.ObservedCluster{}, provision.ProvisionError{Kind: provision.ProvisionErrNotFound, ClusterID: id}
+		},
+		applyFn: func(_ core.ClusterId, _ *core.ClusterSpec, generation uint64, _ string, _ *provision.QueueAssignment) (provision.ApplyResponse, error) {
+			if failApply.Load() {
+				return provision.ApplyResponse{}, provision.ProvisionError{Kind: provision.ProvisionErrBackend, Message: "injected apply failure"}
+			}
+			return provision.ApplyResponse{Generation: generation}, nil
+		},
+	}
+	rec := NewReconciler(store, prov)
+
+	// Pass 1: BeginIntent opens a Pending row, Apply fails. The error must
+	// surface and the intent must stay Pending (not Applied).
+	out := rec.ReconcileAllAt(ctx, 0)
+	if len(out) != 1 || out[0].Err == nil {
+		t.Fatalf("out = %+v, want an apply error", out)
+	}
+	c, err := store.Get(ctx, id)
+	if err != nil || c == nil {
+		t.Fatalf("get: %v %v", c, err)
+	}
+	key := c.IntentKey()
+	rec1, err := store.GetIntent(ctx, key)
+	if err != nil || rec1 == nil || rec1.Status != IntentStatusPending {
+		t.Fatalf("intent after failed apply = %+v, err=%v, want Pending", rec1, err)
+	}
+	if len(prov.applyKeys) != 1 {
+		t.Fatalf("apply calls = %v, want exactly 1", prov.applyKeys)
+	}
+
+	// Pass 2: the backend recovers. The same key/fingerprint replays and
+	// completes.
+	failApply.Store(false)
+	out = rec.ReconcileAllAt(ctx, 0)
+	if len(out) != 1 || out[0].Err != nil {
+		t.Fatalf("out = %+v, want a clean pass", out)
+	}
+	if out[0].Action != ActionApplied {
+		t.Fatalf("action = %v, want ActionApplied", out[0].Action)
+	}
+	if len(prov.applyKeys) != 2 {
+		t.Fatalf("apply calls = %v, want exactly 2 (the replay)", prov.applyKeys)
+	}
+	rec2, err := store.GetIntent(ctx, key)
+	if err != nil || rec2 == nil || rec2.Status != IntentStatusApplied {
+		t.Fatalf("intent after replay = %+v, err=%v, want Applied", rec2, err)
+	}
+}
+
+// TestReapTerminatedDefersRowRemovalWhenNetpolReapFails pins M2(c): a
+// failed per-cluster NetworkPolicy reap must defer the tombstone row
+// removal (leave it for the next pass to retry) rather than dropping the
+// last record the netpol reap is owed.
+func TestReapTerminatedDefersRowRemovalWhenNetpolReapFails(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryStore()
+	id := core.ClusterId("c")
+	if _, err := store.UpsertDesired(ctx, id, testClusterSpec()); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if err := store.SetDesired(ctx, id, DesiredTerminated); err != nil {
+		t.Fatalf("set desired: %v", err)
+	}
+	prov := &fakeProvisioner{
+		reapNetpolErr: provision.ProvisionError{Kind: provision.ProvisionErrBackend, Message: "injected netpol reap failure"},
+	}
+	rec := NewReconciler(store, prov).WithTerminatedRetention(0)
+
+	removed, err := rec.ReapTerminated(ctx, NowUnix()+10)
+	if err != nil {
+		t.Fatalf("reap terminated: %v", err)
+	}
+	if len(removed) != 0 {
+		t.Fatalf("removed = %v, want none (netpol reap failed, row removal deferred)", removed)
+	}
+	if len(prov.reapNetpolCalls) != 1 || prov.reapNetpolCalls[0] != id {
+		t.Fatalf("reap netpol calls = %v, want [%s]", prov.reapNetpolCalls, id)
+	}
+	if c, err := store.Get(ctx, id); err != nil || c == nil {
+		t.Fatalf("cluster row should still exist (deferred, not purged): %v %v", c, err)
+	}
+
+	// Once the backend recovers, the deferred row is purged.
+	prov.reapNetpolErr = nil
+	removed, err = rec.ReapTerminated(ctx, NowUnix()+10)
+	if err != nil {
+		t.Fatalf("reap terminated: %v", err)
+	}
+	if len(removed) != 1 || removed[0] != id.String() {
+		t.Fatalf("removed = %v, want [%s]", removed, id)
+	}
+	if c, _ := store.Get(ctx, id); c != nil {
+		t.Fatal("cluster row should be purged once the netpol reap succeeds")
+	}
+}

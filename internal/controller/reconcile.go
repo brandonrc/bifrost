@@ -39,10 +39,24 @@
 // docs/superpowers/sdd/2026-08-31-wave-1-critical-parity/task-9-report.md)
 //
 // specChanged (store.go) deliberately skips Engine/Owner when deciding
-// whether to bump a cluster's generation — Rust parity. Consequence: an
-// edit that changes only Engine or Owner never bumps Generation, so this
-// engine's generation-drift check (needsApply) never re-actuates it. This
-// is a known, accepted limitation, not a bug in this file.
+// whether to bump a cluster's generation — Rust parity, confirmed against
+// mobula-controller/src/store.rs's spec_changed, which skips the same two
+// fields. Because paramsFingerprint (below) hashes the FULL spec —
+// Engine and Owner included, matching Rust's params_fingerprint, which
+// does the same over the whole ClusterSpec — an edit that changes only
+// Engine or Owner changes the fingerprint under the existing
+// {id}/{generation} outbox key WITHOUT bumping Generation. The next
+// actuating pass's BeginIntent call then finds that key already holds a
+// DIFFERENT fingerprint than before the edit and returns
+// IntentOutcomeParamMismatch, so reconcileOne returns
+// ReconcileErrStaleIntent — every pass, from then on, permanently: the
+// key never changes (Generation is stuck) and the fingerprint mismatch
+// never resolves on its own. This is not merely "the edit is never
+// re-actuated" — it is a permanent StaleIntent wedge on that cluster.
+// Reproduced faithfully from the Rust reference (the same
+// params_fingerprint/spec_changed field-set mismatch exists there, so
+// this is Rust-parity, not a Go-only regression). Known, accepted
+// limitation — not a bug in this file.
 package controller
 
 import (
@@ -298,6 +312,12 @@ func (a Action) String() string {
 
 // ReconcileResult is one cluster's outcome from a reconcile pass — the Go
 // equivalent of Rust's (String, Result<Action, ReconcileError>) tuple.
+// Unlike Rust's Result, which carries no Action at all in its Err variant,
+// this struct's fields are always both present: when Err != nil, Action is
+// always its zero value (ActionNoOp) — reconcileOne returns (0, err) on
+// every error path — so it carries no information and callers must check
+// Err before consuming Action, exactly as a Rust caller must match on
+// Result::Err before an Ok(Action) is even reachable.
 type ReconcileResult struct {
 	ID     string
 	Action Action
@@ -865,37 +885,49 @@ func (r *Reconciler) DetectStaleRestore(ctx context.Context) (bool, error) {
 // interval (ADR-0006-equivalent) — an edge-trigger/watch is only an
 // optimization that can be added later. Errors are logged per pass, never
 // fatal, so one bad tick doesn't stop the loop.
+//
+// The first pass runs immediately, before the first interval elapses —
+// mirroring Rust's tokio::time::interval, whose first tick fires at
+// creation time rather than after a full period. Without this a fresh
+// process would sit idle for a whole interval (30s by default) before its
+// first reap/intent-sweep/tombstone-sweep/reconcile pass, which also
+// delays resuming any crash-interrupted actuation via the outbox intent
+// replay path (see the Pending-intent-replays test in reconcile_test.go).
 func (r *Reconciler) Run(ctx context.Context, interval time.Duration) {
 	slog.Info("reconcile loop started", "interval_secs", interval.Seconds())
+	tick := func() {
+		now := NowUnix()
+		if _, err := r.ReapExpired(ctx, now); err != nil {
+			slog.Warn("reap pass failed", "error", err)
+		}
+		// Bound outbox growth (ADR-0007-equivalent, #39): drop
+		// Applied intents older than the retention window.
+		cutoff := satSubU64(now, IntentRetentionSecs)
+		if n, err := r.store.ReapIntents(ctx, cutoff); err != nil {
+			slog.Warn("intent reap pass failed", "error", err)
+		} else if n > 0 {
+			slog.Debug("outbox intents reaped", "reaped", n)
+		}
+		// Truthful Console: drop terminated tombstone rows older
+		// than the retention window.
+		if ids, err := r.ReapTerminated(ctx, now); err != nil {
+			slog.Warn("terminated-row reap pass failed", "error", err)
+		} else if len(ids) > 0 {
+			slog.Info("terminated cluster rows reaped", "reaped", len(ids))
+		}
+		for _, res := range r.ReconcileAll(ctx) {
+			if res.Err != nil {
+				slog.Warn("reconcile failed", "cluster", res.ID, "error", res.Err)
+			}
+		}
+	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	tick()
 	for {
 		select {
 		case <-ticker.C:
-			now := NowUnix()
-			if _, err := r.ReapExpired(ctx, now); err != nil {
-				slog.Warn("reap pass failed", "error", err)
-			}
-			// Bound outbox growth (ADR-0007-equivalent, #39): drop
-			// Applied intents older than the retention window.
-			cutoff := satSubU64(now, IntentRetentionSecs)
-			if n, err := r.store.ReapIntents(ctx, cutoff); err != nil {
-				slog.Warn("intent reap pass failed", "error", err)
-			} else if n > 0 {
-				slog.Debug("outbox intents reaped", "reaped", n)
-			}
-			// Truthful Console: drop terminated tombstone rows older
-			// than the retention window.
-			if ids, err := r.ReapTerminated(ctx, now); err != nil {
-				slog.Warn("terminated-row reap pass failed", "error", err)
-			} else if len(ids) > 0 {
-				slog.Info("terminated cluster rows reaped", "reaped", len(ids))
-			}
-			for _, res := range r.ReconcileAll(ctx) {
-				if res.Err != nil {
-					slog.Warn("reconcile failed", "cluster", res.ID, "error", res.Err)
-				}
-			}
+			tick()
 		case <-ctx.Done():
 			slog.Info("reconcile loop shutting down")
 			return

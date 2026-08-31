@@ -72,6 +72,9 @@ func (a PoolAction) String() string {
 
 // PoolReconcileResult is one pool's outcome from a reconcile pass — the Go
 // equivalent of Rust's (String, Result<PoolAction, ReconcileError>) tuple.
+// As with ReconcileResult, Action is always its zero value (PoolActionNoOp)
+// when Err != nil (reconcileOne returns (0, err) on every error path), so
+// it carries no information in that case — callers must check Err first.
 type PoolReconcileResult struct {
 	Name   string
 	Action PoolAction
@@ -235,6 +238,11 @@ func (r *PoolReconciler) reconcileOne(ctx context.Context, pool *StoredPool) (Po
 // Run runs the pool control loop until ctx is done. Level-triggered on a
 // fixed resync interval, like the cluster reconciler. Errors are logged
 // per pass, never fatal.
+//
+// The first pass runs immediately, before the first interval elapses —
+// mirroring Rust's tokio::time::interval, whose first tick fires at
+// creation time rather than after a full period (see Reconciler.Run's doc
+// comment for the same fix on the cluster engine).
 func (r *PoolReconciler) Run(ctx context.Context, interval time.Duration) {
 	// Log the Kueue posture once at startup; the per-client cache in
 	// KueuePresent makes later checks free and keeps this accurate for
@@ -244,16 +252,20 @@ func (r *PoolReconciler) Run(ctx context.Context, interval time.Duration) {
 	} else {
 		slog.Info("Kueue CRDs absent — pools are in-process quota only")
 	}
+	tick := func() {
+		for _, res := range r.ReconcileAll(ctx) {
+			if res.Err != nil {
+				slog.Warn("pool reconcile failed", "pool", res.Name, "error", res.Err)
+			}
+		}
+	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	tick()
 	for {
 		select {
 		case <-ticker.C:
-			for _, res := range r.ReconcileAll(ctx) {
-				if res.Err != nil {
-					slog.Warn("pool reconcile failed", "pool", res.Name, "error", res.Err)
-				}
-			}
+			tick()
 		case <-ctx.Done():
 			slog.Info("pool reconcile loop shutting down")
 			return
