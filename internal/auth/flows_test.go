@@ -343,7 +343,15 @@ func TestExchangeTokenSuccess(t *testing.T) {
 	}
 }
 
-func TestPollDeviceTokenContextCancellation(t *testing.T) {
+// A deadline that fires mid-request must be reported as a real error, NOT
+// swallowed as a transient transport hiccup — see finding I3 (fix round
+// 1): the caller's poll loop must be able to tell "the IdP blipped, keep
+// polling" apart from "my own deadline/cancellation fired, stop." Before
+// the fix this asserted the OPPOSITE (that cancellation reads as
+// transient); TestCanceledContextIsNotReportedAsPending in
+// attack_probes_test.go covers the already-canceled-before-the-call case,
+// this one covers a deadline that expires WHILE the request is in flight.
+func TestPollDeviceTokenContextDeadlineDuringRequestIsAHardError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(50 * time.Millisecond)
 	}))
@@ -351,11 +359,14 @@ func TestPollDeviceTokenContextCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
 	defer cancel()
-	_, err := PollDeviceToken(ctx, srv.Client(), srv.URL, "cli", "dc")
-	// A canceled context surfaces as a client.Do error, which
-	// PollDeviceToken treats as transient (not a hard AuthError) —
-	// consistent with the "keep polling" posture for transport failures.
-	if err != nil {
-		t.Fatalf("context cancellation should be treated as transient, got error: %v", err)
+	poll, err := PollDeviceToken(ctx, srv.Client(), srv.URL, "cli", "dc")
+	if err == nil {
+		t.Fatal("expected the deadline to surface as an error, not transient Pending")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected errors.Is(err, context.DeadlineExceeded), got %v", err)
+	}
+	if poll.Ready {
+		t.Fatalf("expected a non-ready poll, got %+v", poll)
 	}
 }

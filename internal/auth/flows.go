@@ -86,6 +86,12 @@ func (d DeviceAuthorization) String() string {
 	)
 }
 
+// GoString redacts the same way as String. %#v dispatches to GoStringer
+// instead of Stringer, so without this a type with only String() still
+// leaks DeviceCode under %#v — Rust's redacting Debug covers both {:?} and
+// {:#?}; this and String together are its Go equivalent.
+func (d DeviceAuthorization) GoString() string { return d.String() }
+
 // TokenResponse is an OAuth 2.0 token response. AccessToken and
 // RefreshToken are bearer secrets (#33): MarshalJSON refuses to serialize
 // this type (mirroring flows.rs's Deserialize-only derive) and String
@@ -126,6 +132,10 @@ func (t TokenResponse) String() string {
 	)
 }
 
+// GoString redacts the same way as String; see
+// DeviceAuthorization.GoString for why this is needed alongside String.
+func (t TokenResponse) GoString() string { return t.String() }
+
 // tokenErrorBody is an RFC 6749 §5.2 error response body.
 type tokenErrorBody struct {
 	Error            string  `json:"error"`
@@ -137,6 +147,46 @@ func (e tokenErrorBody) description() string {
 		return *e.ErrorDescription
 	}
 	return ""
+}
+
+// parseTokenError decodes a token-endpoint RFC 6749 §5.2 error body. ok is
+// false when the body doesn't decode to a well-formed error: a JSON parse
+// failure, OR a body that parses but leaves "error" missing/empty. The
+// Rust reference's TokenError.error has no #[serde(default)], so a body
+// missing that field fails deserialize entirely there — this is the Go
+// equivalent of that same required-field failure, shared by every call
+// site that reads an error body so none of them can produce a stray
+// "<empty>: <empty>" message from an unparseable body.
+//
+// What "not ok" means differs by caller: PollDeviceToken treats it as
+// transient (no terminal grant error was legible, so keep polling — #22);
+// doTokenRequest's callers (ClientCredentials, ExchangeToken) have no such
+// fallback and treat it as fatal. See each call site.
+func parseTokenError(body []byte) (tokenErrorBody, bool) {
+	var tokErr tokenErrorBody
+	if err := json.Unmarshal(body, &tokErr); err != nil || tokErr.Error == "" {
+		return tokenErrorBody{}, false
+	}
+	return tokErr, true
+}
+
+// decodeTokenResponse decodes a 2xx token response body, rejecting one
+// carrying no access_token. AccessToken is a required field in the Rust
+// reference's serde struct (no #[serde(default)]) — a 2xx body missing it,
+// or explicitly empty, fails deserialize there. json.Unmarshal has no
+// required-field concept and would otherwise leave AccessToken as "",
+// silently turning an IdP denial re-encoded with a 200 status (or any body
+// that merely omits the field) into a "successful" flow holding an empty
+// bearer that only fails much later, at the first API call.
+func decodeTokenResponse(body []byte) (*TokenResponse, error) {
+	var tok TokenResponse
+	if err := json.Unmarshal(body, &tok); err != nil {
+		return nil, flowErrf(err, "%s", err.Error())
+	}
+	if tok.AccessToken == "" {
+		return nil, flowErrf(nil, "token response carried no access_token")
+	}
+	return &tok, nil
 }
 
 // flowErrf builds an AuthErrFlow AuthError, optionally wrapping source for
@@ -175,12 +225,16 @@ func DeviceAuthorize(ctx context.Context, client *http.Client, deviceAuthorizati
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	if !isSuccess(resp.StatusCode) {
+		// Mirror reqwest's `.error_for_status().without_url()`: status line
+		// only — no response body, no URL. device_authorize is a one-shot
+		// request with no TokenError-decoding fallback (unlike the
+		// token-endpoint calls below), matching the Rust reference exactly.
+		return nil, flowErrf(nil, "device authorization request failed: %s", resp.Status)
+	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, flowErrf(err, "%s", err.Error())
-	}
-	if !isSuccess(resp.StatusCode) {
-		return nil, flowErrf(nil, "%s: %s", resp.Status, body)
 	}
 	var da DeviceAuthorization
 	if err := json.Unmarshal(body, &da); err != nil {
@@ -211,11 +265,18 @@ type DevicePoll struct {
 // A transport hiccup (IdP/ingress blip, DNS, reset) is transient — the
 // caller should keep polling until its own deadline rather than aborting
 // the whole device flow (#22), so a send failure yields
-// DevicePoll{Ready:false} with a nil error, not an error return. The same
-// leniency applies to a non-2xx response whose body isn't a well-formed
-// RFC 8628 error (a 502 HTML page from an ingress, a truncated body):
-// treated as transient, not fatal. A malformed 2xx body IS fatal — the IdP
-// claims success but the token is unreadable.
+// DevicePoll{Ready:false} with a nil error, not an error return — UNLESS
+// ctx is what caused the send to fail: cancellation is not a blip, it's
+// the caller's own poll loop asking to stop, and if it read back
+// indistinguishably from authorization_pending that loop could never learn
+// it was canceled (Ctrl-C on `bifrost login` would appear to hang). ctx's
+// own error is returned in that case, checked before the transient
+// fallback. The same transient-on-anything-illegible leniency applies to a
+// non-2xx response whose body isn't a well-formed RFC 8628 error (a 502
+// HTML page from an ingress, a truncated body, one with an empty/missing
+// "error" field): treated as transient, not fatal. A malformed 2xx body,
+// OR a 2xx body carrying no access_token, IS fatal — the IdP claims
+// success but the token is unusable.
 //
 // Reference: mobula-auth/src/flows.rs:112-159 (poll_device_token).
 func PollDeviceToken(ctx context.Context, client *http.Client, tokenEndpoint, clientID, deviceCode string) (DevicePoll, error) {
@@ -231,6 +292,11 @@ func PollDeviceToken(ctx context.Context, client *http.Client, tokenEndpoint, cl
 
 	resp, err := client.Do(req)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return DevicePoll{}, ctxErr
+		}
+		// Transient transport hiccup (IdP/ingress blip, DNS, reset) — keep
+		// polling until the caller's deadline (#22).
 		return DevicePoll{}, nil
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -240,11 +306,11 @@ func PollDeviceToken(ctx context.Context, client *http.Client, tokenEndpoint, cl
 		if readErr != nil {
 			return DevicePoll{}, flowErrf(readErr, "%s", readErr.Error())
 		}
-		var tok TokenResponse
-		if err := json.Unmarshal(body, &tok); err != nil {
-			return DevicePoll{}, flowErrf(err, "%s", err.Error())
+		tok, err := decodeTokenResponse(body)
+		if err != nil {
+			return DevicePoll{}, err
 		}
-		return DevicePoll{Ready: true, Token: &tok}, nil
+		return DevicePoll{Ready: true, Token: tok}, nil
 	}
 
 	// Non-2xx: a well-formed RFC 8628 error acts; anything else is
@@ -252,8 +318,8 @@ func PollDeviceToken(ctx context.Context, client *http.Client, tokenEndpoint, cl
 	if readErr != nil {
 		return DevicePoll{}, nil
 	}
-	var tokErr tokenErrorBody
-	if err := json.Unmarshal(body, &tokErr); err != nil || tokErr.Error == "" {
+	tokErr, ok := parseTokenError(body)
+	if !ok {
 		return DevicePoll{}, nil
 	}
 	switch tokErr.Error {
@@ -365,6 +431,10 @@ func (p TokenExchangeParams) String() string {
 	)
 }
 
+// GoString redacts the same way as String; see
+// DeviceAuthorization.GoString for why this is needed alongside String.
+func (p TokenExchangeParams) GoString() string { return p.String() }
+
 // ExchangeToken performs an RFC 8693 OAuth 2.0 Token Exchange. A trusted
 // service swaps its own client credentials plus a user's SubjectToken for
 // a NEW token whose subject is the USER, scoped to the requested
@@ -405,7 +475,11 @@ func ExchangeToken(ctx context.Context, client *http.Client, tokenEndpoint strin
 // used by ClientCredentials and ExchangeToken: unlike PollDeviceToken,
 // both a network failure and a decode failure (success or error path) are
 // real errors here — there is no "keep polling" fallback for a one-shot
-// grant.
+// grant. That includes an error body with an unreadable/empty "error"
+// field (parseTokenError's ok=false): PollDeviceToken can shrug that off
+// as transient, but a one-shot grant has nothing left to retry, so it's a
+// hard failure here — not a "<empty>: <empty>" message synthesized from a
+// body that didn't actually parse.
 func doTokenRequest(ctx context.Context, client *http.Client, tokenEndpoint string, form url.Values) (*TokenResponse, error) {
 	resp, err := postForm(ctx, client, tokenEndpoint, form)
 	if err != nil {
@@ -418,15 +492,11 @@ func doTokenRequest(ctx context.Context, client *http.Client, tokenEndpoint stri
 		return nil, flowErrf(err, "%s", err.Error())
 	}
 	if !isSuccess(resp.StatusCode) {
-		var tokErr tokenErrorBody
-		if err := json.Unmarshal(body, &tokErr); err != nil {
-			return nil, flowErrf(err, "%s", err.Error())
+		tokErr, ok := parseTokenError(body)
+		if !ok {
+			return nil, flowErrf(nil, "token endpoint returned %s with an unreadable error body", resp.Status)
 		}
 		return nil, flowErrf(nil, "%s: %s", tokErr.Error, tokErr.description())
 	}
-	var tok TokenResponse
-	if err := json.Unmarshal(body, &tok); err != nil {
-		return nil, flowErrf(err, "%s", err.Error())
-	}
-	return &tok, nil
+	return decodeTokenResponse(body)
 }

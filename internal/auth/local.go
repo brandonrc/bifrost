@@ -15,9 +15,20 @@
 //     timing does not enumerate accounts;
 //   - 5 consecutive failures lock the account for 5 minutes (the store's
 //     LoginLockoutThreshold / LockoutSecs, Task 1);
-//   - every failure mode returns the same LocalAuthErrInvalidCredentials
-//     error to the caller — lockout/disablement is visible only in the
-//     audit trail.
+//   - LocalAuthError.Kind DOES distinguish invalid-credentials from locked
+//     from disabled — that distinction is what lets the audit trail (and
+//     any caller inspecting the Go error) tell them apart. What must
+//     collapse to the SAME wire response is the API layer's (Task 12) HTTP
+//     body: every Kind except TtlTooLong maps to one 401
+//     "invalid_credentials" (ADR-0011: no user enumeration in the
+//     response). That collapse does not close every side channel by
+//     itself: Locked/Disabled return before paying a bcrypt in Login's
+//     lock-check ordering below, while a wrong password pays one full
+//     verify (~200ms at cost 12) — so response TIMING still distinguishes
+//     "locked" from "wrong password" even when the body doesn't. This
+//     ordering is ported verbatim from the Rust reference (a deliberate
+//     tradeoff there, not a Bifrost regression); closing the timing
+//     channel too is not attempted by either implementation.
 //
 // LocalUserStore below is a consumer-defined interface scoped to exactly
 // what LocalAuthenticator calls, NOT internal/controller's full Store
@@ -85,12 +96,28 @@ func HashPassword(password string) (string, error) {
 	return string(hash), nil
 }
 
+// bcryptMaxPasswordBytes is the longest input bcrypt operates on.
+// golang.org/x/crypto/bcrypt.GenerateFromPassword already refuses to HASH
+// anything past this (ErrPasswordTooLong) — but CompareHashAndPassword has
+// no matching check: bcrypt's underlying blowfish key schedule silently
+// ignores bytes past 72, so a hash of an exactly-72-byte password would
+// otherwise also verify true for that password plus ANY suffix at all.
+// Enforcing the same limit on the verify side closes that asymmetry;
+// nothing this package ever hashes legitimately exceeds it (a login
+// password is user-chosen and a bcrypt hash rejects longer at rest anyway;
+// a mob_ token is a fixed 45 bytes).
+const bcryptMaxPasswordBytes = 72
+
 // VerifyPassword verifies password against a bcrypt hash. A malformed
-// stored hash returns false, not an error — a corrupt row must fail
-// closed, not 500.
+// stored hash, OR a password longer than bcrypt operates on
+// (bcryptMaxPasswordBytes — see its doc comment), returns false, not an
+// error — a corrupt row, or an oversized input, must fail closed, not 500.
 //
 // Reference: mobula-auth/src/local.rs:44-54 (verify_password).
 func VerifyPassword(password, hash string) bool {
+	if len(password) > bcryptMaxPasswordBytes {
+		return false
+	}
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
 }
 
@@ -233,9 +260,27 @@ func (MintedToken) MarshalJSON() ([]byte, error) {
 	return nil, errors.New("auth: MintedToken must never be marshaled — Token is the one-time plaintext; build an explicit response DTO")
 }
 
-// LoginOutcome is what a successful login returns. It embeds MintedToken
-// and Identity, both of which already refuse to marshal — LoginOutcome
-// inherits that guard through them rather than duplicating it.
+// String redacts Token and TokenHash — the plaintext and its hash are both
+// sensitive (the hash still lets an attacker who reads a log run an
+// offline crack) — while Prefix, the non-secret lookup key, stays visible.
+// Go's fmt already recurses into a struct's fields calling each field's
+// own String()/GoString(), so a container that only ever holds a
+// MintedToken behind a plain field (LoginOutcome below) would already be
+// safe under %v/%+v without its own method — but %s on a struct with NO
+// Stringer of its own does not get the same clean recursion (it falls
+// back to printing each field with %s directly, e.g. %!s(uint64=...) for
+// a non-string field), so LoginOutcome still defines its own for clean,
+// predictable output at every verb, not just correctness.
+func (t MintedToken) String() string {
+	return fmt.Sprintf("MintedToken{prefix: %q, token: [REDACTED], token_hash: [REDACTED]}", t.Prefix)
+}
+
+// GoString redacts the same way as String; see
+// DeviceAuthorization.GoString (flows.go) for why this is needed alongside
+// String.
+func (t MintedToken) GoString() string { return t.String() }
+
+// LoginOutcome is what a successful login returns.
 //
 // Reference: mobula-auth/src/local.rs:128-136 (LoginOutcome).
 type LoginOutcome struct {
@@ -246,6 +291,19 @@ type LoginOutcome struct {
 	ExpiresAt uint64
 	Identity  Identity
 }
+
+// String redacts via Token.String() (see MintedToken.String for why this
+// method exists explicitly rather than relying on fmt's per-field
+// recursion alone) — ExpiresAt and Identity carry nothing this package
+// treats as secret.
+func (o LoginOutcome) String() string {
+	return fmt.Sprintf("LoginOutcome{token: %s, expires_at: %d, identity: %+v}", o.Token.String(), o.ExpiresAt, o.Identity)
+}
+
+// GoString redacts the same way as String; see
+// DeviceAuthorization.GoString (flows.go) for why this is needed alongside
+// String.
+func (o LoginOutcome) GoString() string { return o.String() }
 
 // LocalAuthErrorKind discriminates LocalAuthError failures. Every login
 // failure kind maps to the SAME 401 on the wire
@@ -320,24 +378,36 @@ type LocalUserStore interface {
 
 // localRoleToRole maps core.LocalRole to the auth package's Role. Every
 // known LocalRole variant is enumerated explicitly (exhaustive lint,
-// default-signifies-exhaustive); the trailing return handles a value
-// outside the closed set the same defensive way
-// Role.AsStr/LocalRole.AsStr do — LocalRole's own UnmarshalJSON already
-// rejects anything else at ingress, so this is unreachable in practice.
-func localRoleToRole(r core.LocalRole) Role {
+// default-signifies-exhaustive). ok is false for anything outside that
+// closed set.
+//
+// This is NOT the same defensive posture as Role.AsStr/LocalRole.AsStr
+// (which return a labeled sentinel string for logging, since a display
+// value has no wrong answer to guess): localRoleToRole feeds an
+// authorization decision, so it must never guess a role for an
+// unrecognized value — identityOf below uses ok=false to grant NOTHING,
+// restoring what Rust's closed LocalRole enum made statically
+// unrepresentable (an exhaustive match has no arm to fall through). This
+// is reachable in Go despite core.LocalRole's validating UnmarshalJSON:
+// that guard only fires on JSON ingress, never on a value read straight
+// out of a DB text column (a hand-edited row, a bad migration, a
+// downgraded binary reading a row a newer one wrote) — which is exactly
+// the path identityOf's caller (AuthenticateToken/Login, via
+// LocalUserStore.GetLocalUser) takes.
+func localRoleToRole(r core.LocalRole) (role Role, ok bool) {
 	switch r {
 	case core.LocalRoleViewer:
-		return RoleViewer
+		return RoleViewer, true
 	case core.LocalRoleDeveloper:
-		return RoleDeveloper
+		return RoleDeveloper, true
 	case core.LocalRoleOperator:
-		return RoleOperator
+		return RoleOperator, true
 	case core.LocalRoleAdmin:
-		return RoleAdmin
+		return RoleAdmin, true
 	case core.LocalRoleAuditor:
-		return RoleAuditor
+		return RoleAuditor, true
 	}
-	return RoleViewer
+	return 0, false
 }
 
 // identityOf projects a LocalUserRecord to an Identity. Local auth has no
@@ -345,14 +415,31 @@ func localRoleToRole(r core.LocalRole) Role {
 // for local users come only from explicit role_assignments (handled at
 // the API layer over the Store, same as OIDC identities).
 //
+// An unrecognized Role value (see localRoleToRole) leaves Roles nil —
+// deny-by-default, not a silent grant of Viewer or any other role.
+//
 // Reference: mobula-auth/src/local.rs:173-185 (identity_of).
 func identityOf(user *core.LocalUserRecord) Identity {
 	username := user.Username
+	// Clone rather than alias user.Email: user is a record the caller
+	// owns (typically fresh from a store read, but callers must not have
+	// to reason about that) — aliasing its pointer field would let a
+	// mutation through either copy reach the other, the same aliasing
+	// hazard RoleMappings.Clone documents in auth.go.
+	var email *string
+	if user.Email != nil {
+		e := *user.Email
+		email = &e
+	}
+	var roles []Role
+	if role, ok := localRoleToRole(user.Role); ok {
+		roles = []Role{role}
+	}
 	return Identity{
 		Subject:      user.Username,
 		Username:     &username,
-		Email:        user.Email,
-		Roles:        []Role{localRoleToRole(user.Role)},
+		Email:        email,
+		Roles:        roles,
 		ProjectRoles: nil,
 	}
 }
