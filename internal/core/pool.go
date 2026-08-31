@@ -110,6 +110,21 @@ type PoolSpec struct {
 	GpuSharing *GpuSharing `json:"gpu_sharing,omitempty"`
 }
 
+// poolSpecAlias breaks the recursion MarshalJSON would otherwise cause by
+// re-entering PoolSpec's own MarshalJSON.
+type poolSpecAlias PoolSpec
+
+// MarshalJSON substitutes an empty slice for a nil Flavors, mirroring
+// Rust's Vec::default(), which serde always writes as `[]`, never `null`
+// (the frozen contract's PoolSpec schema types `flavors` as an array).
+func (p PoolSpec) MarshalJSON() ([]byte, error) {
+	a := poolSpecAlias(p)
+	if a.Flavors == nil {
+		a.Flavors = []FlavorSpec{}
+	}
+	return json.Marshal(a)
+}
+
 // PoolSpecErrorKind discriminates PoolSpec.Validate failures.
 type PoolSpecErrorKind int
 
@@ -321,6 +336,28 @@ type AllocationSpec struct {
 	Nominal        map[string]string `json:"nominal"`
 	BorrowingLimit map[string]string `json:"borrowing_limit"`
 	LendingLimit   map[string]string `json:"lending_limit"`
+}
+
+// allocationSpecAlias breaks the recursion MarshalJSON would otherwise
+// cause by re-entering AllocationSpec's own MarshalJSON.
+type allocationSpecAlias AllocationSpec
+
+// MarshalJSON substitutes an empty map for a nil Nominal, BorrowingLimit,
+// or LendingLimit, mirroring Rust's HashMap::default(), which serde
+// always writes as `{}`, never `null` (the frozen contract's
+// AllocationSpec schema types all three as required objects).
+func (a AllocationSpec) MarshalJSON() ([]byte, error) {
+	alias := allocationSpecAlias(a)
+	if alias.Nominal == nil {
+		alias.Nominal = map[string]string{}
+	}
+	if alias.BorrowingLimit == nil {
+		alias.BorrowingLimit = map[string]string{}
+	}
+	if alias.LendingLimit == nil {
+		alias.LendingLimit = map[string]string{}
+	}
+	return json.Marshal(alias)
 }
 
 // AllocationSpecError reports which named field of an AllocationSpec is

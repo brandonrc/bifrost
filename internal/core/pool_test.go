@@ -292,6 +292,48 @@ func TestFlavorSpecMarshalsNilCollectionsAsEmpty(t *testing.T) {
 	}
 }
 
+// Added (not ported from Rust): fix round 2 (review re-pass, same class
+// as M3). A zero-value PoolSpec (nil Flavors) must still marshal as `[]`,
+// not the Go zero value `null`, matching the frozen contract's `flavors`
+// array type and Rust's Vec::default() serde behavior.
+func TestPoolSpecMarshalsNilFlavorsAsEmpty(t *testing.T) {
+	var p PoolSpec
+	b, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var v map[string]any
+	if err := json.Unmarshal(b, &v); err != nil {
+		t.Fatalf("unmarshal to map: %v", err)
+	}
+	if flavors, ok := v["flavors"].([]any); !ok || len(flavors) != 0 {
+		t.Fatalf("flavors = %v, want []", v["flavors"])
+	}
+}
+
+// Added (not ported from Rust): fix round 2 (review re-pass, same class
+// as M3). A zero-value AllocationSpec (nil Nominal/BorrowingLimit/
+// LendingLimit) must still marshal each as `{}`, not the Go zero value
+// `null`, matching the frozen contract's required object types and
+// Rust's HashMap::default() serde behavior.
+func TestAllocationSpecMarshalsNilMapsAsEmpty(t *testing.T) {
+	var a AllocationSpec
+	b, err := json.Marshal(a)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var v map[string]any
+	if err := json.Unmarshal(b, &v); err != nil {
+		t.Fatalf("unmarshal to map: %v", err)
+	}
+	for _, field := range []string{"nominal", "borrowing_limit", "lending_limit"} {
+		m, ok := v[field].(map[string]any)
+		if !ok || len(m) != 0 {
+			t.Fatalf("%s = %v, want {}", field, v[field])
+		}
+	}
+}
+
 // poolSpecEqual compares two PoolSpecs by value, since maps/slices/pointers
 // prevent a plain ==.
 func poolSpecEqual(a, b PoolSpec) bool {
