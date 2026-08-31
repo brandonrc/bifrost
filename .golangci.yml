@@ -22,3 +22,10 @@ linters:
               desc: "core/policy are I/O-free"
             - pkg: "database/sql"
               desc: "core/policy are I/O-free"
+        controller-no-k8s:
+          files: ["**/internal/controller/**"]
+          deny:
+            - pkg: "k8s.io"
+              desc: "internal/controller talks only to the Provisioner interface and Store (Task 9); k8s-aware code belongs in internal/provision"
+            - pkg: "sigs.k8s.io"
+              desc: "internal/controller talks only to the Provisioner interface and Store (Task 9); k8s-aware code belongs in internal/provision"
