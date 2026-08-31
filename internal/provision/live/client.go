@@ -29,13 +29,11 @@ package live
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -139,9 +137,14 @@ func serviceURL(namespace, name string) string {
 	return fmt.Sprintf("http://%s-serve-svc.%s.svc:8000", name, namespace)
 }
 
-// wrapErr turns a client-go/controller-runtime error into a
-// [provision.ProvisionError], preserving a NotFound distinction where the
-// caller needs one.
+// wrapErr turns a non-nil client-go/controller-runtime error into a
+// [provision.ProvisionError] with [provision.ProvisionErrBackend] — it
+// does NOT itself special-case NotFound. Every call site that needs the
+// NotFound distinction checks apierrors.IsNotFound(err) and constructs
+// [provision.ProvisionErrNotFound] directly BEFORE ever calling wrapErr
+// (e.g. Observe, ClusterNodes, setSuspend), so wrapErr never even sees
+// those errors; it only wraps the generic "something else went wrong"
+// case.
 func wrapErr(err error) error {
 	if err == nil {
 		return nil
@@ -152,7 +155,17 @@ func wrapErr(err error) error {
 // applySSA performs a server-side-apply Patch of obj (ADR-0001 #5 /
 // task-6-brief.md's literal instruction:
 // `client.Patch(ctx, obj, client.Apply, ...)`), centralizing every SSA
-// call site in this package behind one deprecation suppression.
+// call site in this package behind one deprecation suppression AND the
+// [provision.ZeroStatus] guard. This is the ONLY function in the package
+// that calls client.Patch with client.Apply — every apply site in this
+// file goes through it — so ZeroStatus firing here, unconditionally,
+// before every Patch, is structural: no apply site can forget it (unlike
+// a per-call-site convention, which is exactly what let the
+// ResourceFlavor apply skip it in this file's first draft). ZeroStatus
+// itself is a documented no-op for types with no `.Status` field (e.g.
+// ResourceFlavor, NetworkPolicy) or types it doesn't recognize, so calling
+// it on every obj here is always safe.
+//
 // controller-runtime v0.24 offers a newer typed `c.Apply(ctx,
 // applyConfiguration, ...)` API, but it requires a generated
 // applyconfigurations package — code-generator's applyconfiguration-gen
@@ -162,6 +175,7 @@ func wrapErr(err error) error {
 // available for these types, so the deprecation is suppressed here rather
 // than at each of this file's apply sites.
 func applySSA(ctx context.Context, c client.Client, obj client.Object, opts ...client.PatchOption) error {
+	provision.ZeroStatus(obj)
 	return c.Patch(ctx, obj, client.Apply, opts...) //nolint:staticcheck // SA1019: see doc comment
 }
 
@@ -189,14 +203,9 @@ func (c *Client) adminManagedDeny(ctx context.Context, namespace string) (bool, 
 }
 
 // applyNetworkPolicy server-side-applies one NetworkPolicy manifest into
-// namespace. ZeroStatus is a no-op for NetworkPolicy today (this k8s.io/api
-// pin carries no Status field on it) but is still called — see
-// [provision.ZeroStatus]'s doc comment on why every apply site calls it
-// unconditionally rather than trusting per-type judgment calls. Ported
-// from kuberay_client.rs:176-204.
+// namespace. Ported from kuberay_client.rs:176-204.
 func (c *Client) applyNetworkPolicy(ctx context.Context, namespace string, policy *networkingv1.NetworkPolicy) error {
 	policy.Namespace = namespace
-	provision.ZeroStatus(policy)
 	return wrapErr(applySSA(ctx, c.c, policy, client.FieldOwner(provision.FieldManager), client.ForceOwnership))
 }
 
@@ -260,7 +269,6 @@ func (c *Client) EnsureNamespacePosture(ctx context.Context) error {
 		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Namespace"},
 		ObjectMeta: metav1.ObjectMeta{Name: c.namespace, Labels: provision.NamespacePSSLabels()},
 	}
-	provision.ZeroStatus(patch)
 	// No ForceOwnership: if another manager owns the enforce label with a
 	// conflicting (looser) value, the conflict error surfaces the
 	// disagreement instead of silently stealing the field (matches the
@@ -303,7 +311,6 @@ func (c *Client) Apply(ctx context.Context, id core.ClusterId, spec *core.Cluste
 		return provision.ApplyResponse{}, provision.ProvisionError{Kind: provision.ProvisionErrBackend, Message: err.Error()}
 	}
 	manifest.Namespace = c.namespace
-	provision.ZeroStatus(manifest)
 	if err := applySSA(ctx, c.c, manifest, client.FieldOwner(provision.FieldManager), client.ForceOwnership); err != nil {
 		return provision.ApplyResponse{}, wrapErr(err)
 	}
@@ -448,30 +455,6 @@ func (c *Client) ClusterEvents(ctx context.Context, id core.ClusterId) (*core.Cl
 	return &events, nil
 }
 
-// rankPods orders pod names head-first, then name-sorted, for a stable
-// selector order. Ported from kuberay_client.rs:573-589.
-func rankPods(pods []corev1.Pod) []string {
-	type ranked struct {
-		isHead bool
-		name   string
-	}
-	rs := make([]ranked, 0, len(pods))
-	for i := range pods {
-		rs = append(rs, ranked{isHead: pods[i].Labels[provision.RayNodeTypeLabel] == "head", name: pods[i].Name})
-	}
-	sort.Slice(rs, func(i, j int) bool {
-		if rs[i].isHead != rs[j].isHead {
-			return rs[i].isHead
-		}
-		return rs[i].name < rs[j].name
-	})
-	out := make([]string, len(rs))
-	for i, r := range rs {
-		out[i] = r.name
-	}
-	return out
-}
-
 // ClusterLogs tails logs for one of id's pods (head by default). pod, when
 // set, must name one of the cluster's own pods — a pod outside the set
 // returns (nil, nil) (404), never an arbitrary namespace pod. Ported from
@@ -481,7 +464,7 @@ func (c *Client) ClusterLogs(ctx context.Context, id core.ClusterId, pod *string
 	if err := c.c.List(ctx, &pods, client.InNamespace(c.namespace), client.MatchingLabels{provision.RayClusterLabel: string(id)}); err != nil {
 		return nil, wrapErr(err)
 	}
-	ordered := rankPods(pods.Items)
+	ordered := provision.RankPods(pods.Items)
 	if len(ordered) == 0 {
 		// Cluster exists but has no pods yet (just applied / suspended):
 		// an empty view, not 404, so the tab renders cleanly.
@@ -539,7 +522,6 @@ func (s *ServiceClient) Deploy(ctx context.Context, name string, spec *core.Serv
 		return provision.ProvisionError{Kind: provision.ProvisionErrBackend, Message: err.Error()}
 	}
 	manifest.Namespace = s.namespace
-	provision.ZeroStatus(manifest)
 	return wrapErr(applySSA(ctx, s.c, manifest, client.FieldOwner(provision.FieldManager), client.ForceOwnership))
 }
 
@@ -598,7 +580,6 @@ func (s *ServiceClient) List(ctx context.Context) ([]provision.ObservedService, 
 // than surface the conflict. Ported from kueue_client.rs:192-249.
 func (c *Client) ApplyPool(ctx context.Context, spec *core.PoolSpec, allocs []core.AllocationSpec) error {
 	cohort := provision.CohortFor(spec)
-	provision.ZeroStatus(cohort)
 	if err := applySSA(ctx, c.c, cohort, client.FieldOwner(provision.FieldManager)); err != nil {
 		return wrapErr(err)
 	}
@@ -612,13 +593,11 @@ func (c *Client) ApplyPool(ctx context.Context, spec *core.PoolSpec, allocs []co
 	if err != nil {
 		return provision.ProvisionError{Kind: provision.ProvisionErrBackend, Message: err.Error()}
 	}
-	provision.ZeroStatus(cq)
 	if err := applySSA(ctx, c.c, cq, client.FieldOwner(provision.FieldManager)); err != nil {
 		return wrapErr(err)
 	}
 	for i := range allocs {
 		lq := provision.LocalQueueFor(&allocs[i])
-		provision.ZeroStatus(lq)
 		if err := applySSA(ctx, c.c, lq, client.FieldOwner(provision.FieldManager)); err != nil {
 			return wrapErr(err)
 		}
@@ -693,53 +672,6 @@ func (c *Client) DeletePool(ctx context.Context, name string) error {
 	return deleteAll(ctx, c.c, cqObjs)
 }
 
-// flavorUsageMap converts a ClusterQueue's status.flavorsUsage into
-// flavor -> resource -> total quantity string. Ported from
-// kueue_client.rs:130-154 (flavors_usage_map).
-func flavorUsageMap(items []kueuev1beta2.FlavorUsage) map[string]map[string]string {
-	out := make(map[string]map[string]string, len(items))
-	for _, f := range items {
-		resources := make(map[string]string, len(f.Resources))
-		for _, r := range f.Resources {
-			resources[string(r.Name)] = r.Total.String()
-		}
-		out[string(f.Name)] = resources
-	}
-	return out
-}
-
-// sumLocalQueueUsage flattens a LocalQueue's flavor-scoped usage into
-// resource -> total quantity string, summing across flavors. Unlike the
-// Rust reference's kueue_client.rs:167-188 (which re-parses each quantity
-// string through a float parser to sum it, skipping unparseable ones with
-// a warning), this sums typed resource.Quantity values directly via
-// [resource.Quantity.Add] — no reparse, no precision loss, and nothing to
-// skip, since every value already arrived as a valid Quantity off the
-// typed API. Noted as a typed-API improvement, not a behavior change: the
-// wire result is the same canonical-quantity total.
-func sumLocalQueueUsage(items []kueuev1beta2.LocalQueueFlavorUsage) map[string]string {
-	sums := map[string]resource.Quantity{}
-	for _, f := range items {
-		for _, r := range f.Resources {
-			q := sums[string(r.Name)]
-			q.Add(r.Total)
-			sums[string(r.Name)] = q
-		}
-	}
-	out := make(map[string]string, len(sums))
-	for k, v := range sums {
-		out[k] = v.String()
-	}
-	return out
-}
-
-func nonNegativeU32(v int32) uint32 {
-	if v < 0 {
-		return 0
-	}
-	return uint32(v)
-}
-
 // ObservePool reads a pool's quota ledger off its ClusterQueue status —
 // the status IS the ledger — plus each of its LocalQueues' own
 // status.flavorsUsage for per-project attribution (the ClusterQueue-level
@@ -761,16 +693,16 @@ func (c *Client) ObservePool(ctx context.Context, name string) (*provision.PoolO
 	queuesUsage := map[string]map[string]string{}
 	for i := range lqs.Items {
 		lq := &lqs.Items[i]
-		if byResource := sumLocalQueueUsage(lq.Status.FlavorsUsage); len(byResource) > 0 {
+		if byResource := provision.SumLocalQueueUsage(lq.Status.FlavorsUsage); len(byResource) > 0 {
 			queuesUsage[lq.Name] = byResource
 		}
 	}
 
 	return &provision.PoolObservation{
-		AdmittedWorkloads:  nonNegativeU32(cq.Status.AdmittedWorkloads),
-		ReservingWorkloads: nonNegativeU32(cq.Status.ReservingWorkloads),
-		PendingWorkloads:   nonNegativeU32(cq.Status.PendingWorkloads),
-		FlavorsUsage:       flavorUsageMap(cq.Status.FlavorsUsage),
+		AdmittedWorkloads:  provision.NonNegativeUint32(cq.Status.AdmittedWorkloads),
+		ReservingWorkloads: provision.NonNegativeUint32(cq.Status.ReservingWorkloads),
+		PendingWorkloads:   provision.NonNegativeUint32(cq.Status.PendingWorkloads),
+		FlavorsUsage:       provision.FlavorUsageMap(cq.Status.FlavorsUsage),
 		QueuesUsage:        queuesUsage,
 	}, nil
 }

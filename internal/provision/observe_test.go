@@ -1,6 +1,7 @@
 package provision
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
+	kueuev1beta2 "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 )
 
 // mustParseTime/mustParseMicroTime build metav1.Time/metav1.MicroTime test
@@ -293,6 +295,17 @@ func TestEventsFilterByClusterAndSortNewestFirst(t *testing.T) {
 	}
 }
 
+// TestEventsDefaultCountAndType diverges from kuberay.rs's
+// events_default_count_and_type (kuberay.rs:1944-1954), which asserts
+// Count == 1 for an event whose wire JSON has NO "count" key at all —
+// serde_json::Value can represent "key absent" distinctly from "key
+// present with value 0", so Rust's `.unwrap_or(1)` only fires on true
+// absence. A typed corev1.Event.Count (int32, no pointer) cannot make
+// that distinction: "absent" and "explicitly 0" both decode to the Go
+// zero value. EventsFromK8s's RULING (fix round 1) is to yield the
+// literal 0 rather than guess "must have been absent" — see its inline
+// comment — so this port's equivalent event decodes to Count == 0, not 1.
+// EventType's "Normal" default is unaffected and still ported verbatim.
 func TestEventsDefaultCountAndType(t *testing.T) {
 	raw := []corev1.Event{{
 		Reason:         "Scheduled",
@@ -302,8 +315,8 @@ func TestEventsDefaultCountAndType(t *testing.T) {
 	if len(out.Events) != 1 {
 		t.Fatalf("len(Events) = %d, want 1", len(out.Events))
 	}
-	if out.Events[0].Count != 1 {
-		t.Fatalf("Count = %d, want 1", out.Events[0].Count)
+	if out.Events[0].Count != 0 {
+		t.Fatalf("Count = %d, want 0 (port-fidelity divergence from the Rust reference, see doc comment)", out.Events[0].Count)
 	}
 	if out.Events[0].EventType != "Normal" {
 		t.Fatalf("EventType = %q, want Normal", out.Events[0].EventType)
@@ -324,6 +337,33 @@ func TestEventsCappedAtMax(t *testing.T) {
 	out := EventsFromK8s("c", raw)
 	if len(out.Events) != MaxEvents {
 		t.Fatalf("len(Events) = %d, want %d", len(out.Events), MaxEvents)
+	}
+}
+
+// TestEventsSubSecondOrdering proves the RFC3339Nano fix (fix round 1):
+// two events within the same second, distinguished only by microsecond
+// EventTime, must still sort newest-first. Whole-second RFC3339 would
+// have rendered both timestamps identically ("...T10:00:00Z" for both)
+// and left their relative order to sort.SliceStable's input order instead
+// of the real one.
+func TestEventsSubSecondOrdering(t *testing.T) {
+	earlier := mustParseMicroTime(t, "2026-08-22T10:00:00Z")
+	earlier.Time = earlier.Add(100 * time.Millisecond)
+	later := mustParseMicroTime(t, "2026-08-22T10:00:00Z")
+	later.Time = later.Add(900 * time.Millisecond)
+	raw := []corev1.Event{
+		{Type: "Normal", Reason: "First", EventTime: earlier, InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: "c-head-0"}},
+		{Type: "Normal", Reason: "Second", EventTime: later, InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: "c-head-0"}},
+	}
+	out := EventsFromK8s("c", raw)
+	if len(out.Events) != 2 {
+		t.Fatalf("len(Events) = %d, want 2", len(out.Events))
+	}
+	if got := deref(out.Events[0].Reason); got != "Second" {
+		t.Fatalf("Events[0].Reason = %q, want Second (the later sub-second timestamp sorts first)", got)
+	}
+	if got := deref(out.Events[1].Reason); got != "First" {
+		t.Fatalf("Events[1].Reason = %q, want First", got)
 	}
 }
 
@@ -398,6 +438,44 @@ func TestTailLinesCapsAndFlagsTruncation(t *testing.T) {
 	}
 }
 
+// TestTailLinesMatchesRustLinesSemantics covers cases the Rust
+// kuberay.rs::tail_lines test never exercised (fix round 1, M2): the
+// interaction between a genuinely blank final line and the trailing-
+// newline artifact, and \r\n line endings.
+func TestTailLinesMatchesRustLinesSemantics(t *testing.T) {
+	// One blank line before the final newline: the trailing-newline
+	// artifact is dropped (Rust's str::lines() semantics), and the
+	// resulting trailing blank is ALSO dropped (this port's extra
+	// defense against a source that emits one anyway) — so "a", "b", and
+	// the blank line all collapse to just "a","b".
+	lines, truncated := TailLines("a\nb\n\n", 5)
+	assertStrSlice(t, lines, []string{"a", "b"})
+	if truncated {
+		t.Fatal("truncated = true, want false (2 lines < tail 5)")
+	}
+
+	// Two blank lines before the final newline: only ONE of the two gets
+	// collapsed away (one by the trailing-newline drop, one by the extra
+	// defensive pop) — the other blank line survives as a real "" line.
+	lines2, truncated2 := TailLines("a\nb\n\n\n", 5)
+	assertStrSlice(t, lines2, []string{"a", "b", ""})
+	if truncated2 {
+		t.Fatal("truncated = true, want false (3 lines < tail 5)")
+	}
+
+	// \r\n line endings: each line's trailing \r is stripped.
+	crlf, _ := TailLines("a\r\nb\r\n", 5)
+	assertStrSlice(t, crlf, []string{"a", "b"})
+
+	// Same blank-line collapse as the first case, but tail=2 exactly
+	// fills from the already-collapsed 2-line result.
+	exact, exactTruncated := TailLines("a\nb\n\n", 2)
+	assertStrSlice(t, exact, []string{"a", "b"})
+	if !exactTruncated {
+		t.Fatal("truncated = false, want true (exactly filled the tail)")
+	}
+}
+
 func assertStrSlice(t *testing.T, got, want []string) {
 	t.Helper()
 	if len(got) != len(want) {
@@ -415,4 +493,122 @@ func deref(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+// -----------------------------------------------------------------
+// RankPods (api-v1.md §5.6 pod-log selector order) — moved here from
+// internal/provision/live (fix round 1, M3). Pins the Rust cmp semantics
+// (`b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1))`: head-labeled pods sort
+// before worker pods; ties within a group break on name ascending).
+// -----------------------------------------------------------------
+
+func TestRankPodsHeadFirstThenNameSorted(t *testing.T) {
+	pods := []corev1.Pod{
+		testPod("demo-cpu-2", "worker", "cpu", "Running", true),
+		testPod("demo-cpu-1", "worker", "cpu", "Running", true),
+		testPod("demo-head", "head", "headgroup", "Running", true),
+	}
+	assertStrSlice(t, RankPods(pods), []string{"demo-head", "demo-cpu-1", "demo-cpu-2"})
+}
+
+func TestRankPodsNoHead(t *testing.T) {
+	pods := []corev1.Pod{
+		testPod("demo-b", "worker", "cpu", "Running", true),
+		testPod("demo-a", "worker", "cpu", "Running", true),
+	}
+	assertStrSlice(t, RankPods(pods), []string{"demo-a", "demo-b"})
+}
+
+func TestRankPodsMultipleHeads(t *testing.T) {
+	// Not a real KubeRay topology (KubeRay creates exactly one head pod
+	// per cluster), but RankPods is a pure function over whatever pods
+	// it's handed, and must still degrade sanely: every head-labeled pod
+	// sorts before every worker, name-sorted among themselves.
+	pods := []corev1.Pod{
+		testPod("demo-worker-1", "worker", "cpu", "Running", true),
+		testPod("demo-head-b", "head", "headgroup", "Running", true),
+		testPod("demo-head-a", "head", "headgroup", "Running", true),
+	}
+	assertStrSlice(t, RankPods(pods), []string{"demo-head-a", "demo-head-b", "demo-worker-1"})
+}
+
+func TestRankPodsEmpty(t *testing.T) {
+	got := RankPods(nil)
+	if len(got) != 0 {
+		t.Fatalf("got %v, want empty", got)
+	}
+}
+
+// -----------------------------------------------------------------
+// FlavorUsageMap / SumLocalQueueUsage (Kueue pool observation) — moved
+// here from internal/provision/live (fix round 1, M3).
+// -----------------------------------------------------------------
+
+func TestFlavorUsageMap(t *testing.T) {
+	items := []kueuev1beta2.FlavorUsage{
+		{
+			Name: "default",
+			Resources: []kueuev1beta2.ResourceUsage{
+				{Name: corev1.ResourceCPU, Total: resource.MustParse("4")},
+				{Name: corev1.ResourceMemory, Total: resource.MustParse("8Gi")},
+			},
+		},
+		{
+			Name: "gpu",
+			Resources: []kueuev1beta2.ResourceUsage{
+				{Name: corev1.ResourceName("nvidia.com/gpu"), Total: resource.MustParse("2")},
+			},
+		},
+	}
+	got := FlavorUsageMap(items)
+	want := map[string]map[string]string{
+		"default": {"cpu": "4", "memory": "8Gi"},
+		"gpu":     {"nvidia.com/gpu": "2"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestFlavorUsageMapEmpty(t *testing.T) {
+	got := FlavorUsageMap(nil)
+	if len(got) != 0 {
+		t.Fatalf("got %v, want empty", got)
+	}
+}
+
+// TestSumLocalQueueUsage proves the typed-API improvement documented on
+// SumLocalQueueUsage: summing across flavors via resource.Quantity.Add is
+// exact, unlike the Rust reference's float-reparse-and-sum
+// (kueue_client.rs's sum_usage_by_resource), which would compute
+// 0.1 + 0.2 == 0.30000000000000004 under IEEE-754 float64 — 100m + 200m
+// here canonicalizes cleanly to exactly "300m".
+func TestSumLocalQueueUsage(t *testing.T) {
+	items := []kueuev1beta2.LocalQueueFlavorUsage{
+		{
+			Name: "default",
+			Resources: []kueuev1beta2.LocalQueueResourceUsage{
+				{Name: corev1.ResourceCPU, Total: resource.MustParse("100m")},
+			},
+		},
+		{
+			Name: "gpu-flavor",
+			Resources: []kueuev1beta2.LocalQueueResourceUsage{
+				{Name: corev1.ResourceCPU, Total: resource.MustParse("200m")},
+				{Name: corev1.ResourceName("nvidia.com/gpu"), Total: resource.MustParse("1")},
+			},
+		},
+	}
+	got := SumLocalQueueUsage(items)
+	want := map[string]string{"cpu": "300m", "nvidia.com/gpu": "1"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestSumLocalQueueUsageEmpty(t *testing.T) {
+	got := SumLocalQueueUsage(nil)
+	if len(got) != 0 {
+		t.Fatalf("got %v, want empty", got)
+	}
 }

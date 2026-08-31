@@ -35,13 +35,20 @@ import (
 // failure mode this helper exists to make structurally impossible, not
 // just conventionally avoided).
 //
-// Called unconditionally on every object immediately before every SSA
-// apply call in internal/provision/live, regardless of whether the
-// in-memory object is already known to have a zero Status (e.g. because it
-// came straight out of a pure translator) — the invariant is enforced at
-// the apply boundary, not trusted to every call site that builds an
-// object, so a future refactor that reuses a freshly-Get'd (and therefore
-// really populated) object as an apply base can't reintroduce this bug.
+// Called from exactly one place: internal/provision/live's applySSA,
+// the sole function in that package that invokes
+// `client.Patch(ctx, obj, client.Apply, ...)`. Every apply site in
+// internal/provision/live goes through applySSA (no site calls
+// client.Patch directly), so this is a structural guarantee, not a
+// per-call-site convention — a future apply site literally cannot forget
+// to zero status, the way a first draft of this package's ResourceFlavor
+// apply once did when the guard was still a per-call-site
+// `provision.ZeroStatus(obj)` before each Patch (fix round 1, M1). Firing
+// unconditionally, regardless of whether the in-memory object is already
+// known to have a zero Status (e.g. because it came straight out of a
+// pure translator), also means a future refactor that reuses a
+// freshly-Get'd (and therefore really populated) object as an apply base
+// can't reintroduce this bug either.
 func ZeroStatus(obj client.Object) {
 	switch o := obj.(type) {
 	case *rayv1.RayCluster:

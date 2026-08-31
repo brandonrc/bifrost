@@ -3,12 +3,14 @@ package provision
 import (
 	"sort"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
+	kueuev1beta2 "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 
 	"github.com/brandonrc/bifrost/internal/core"
 )
@@ -122,15 +124,33 @@ func NodeBreakdown(clusterID string, rc *rayv1.RayCluster, pods []corev1.Pod) co
 	return core.ClusterNodes{ClusterId: clusterID, Head: head, WorkerGroups: workerGroups}
 }
 
-// nonNegativeU32 reads an optional int32 replica count as a uint32,
-// mirroring the Rust reference's `.and_then(|v| v.as_u64())` (which yields
-// None for a missing OR negative value, falling through to the next
-// `.or_else`). Returns ok=false for nil or negative.
+// NonNegativeUint32 clamps a possibly-negative int32 status/spec counter
+// to a uint32 (negative -> 0). Exported: both NodeBreakdown's
+// Replicas/MinReplicas fallback (via the unexported pointer-lifted
+// [nonNegativeU32] below) and internal/provision/live's ObservePool
+// (Kueue ClusterQueueStatus's Admitted/Reserving/PendingWorkloads int32
+// counters) need this same clamp — a single shared definition, not two
+// same-named-but-different functions in two packages (fix round 1, M3/dedupe).
+func NonNegativeUint32(v int32) uint32 {
+	if v < 0 {
+		return 0
+	}
+	return uint32(v)
+}
+
+// nonNegativeU32 is [NonNegativeUint32] lifted over an optional pointer,
+// distinguishing "nil" from "present" for NodeBreakdown's
+// Replicas-then-MinReplicas fallback chain (mirroring the Rust
+// reference's `.and_then(|v| v.as_u64())`, which yields None for a
+// missing OR negative value, falling through to the next `.or_else`) — a
+// value-only clamp can't express "try the next field instead," so this
+// stays a distinct, unexported helper rather than folding into
+// NonNegativeUint32 itself.
 func nonNegativeU32(v *int32) (n uint32, ok bool) {
 	if v == nil || *v < 0 {
 		return 0, false
 	}
-	return uint32(*v), true
+	return NonNegativeUint32(*v), true
 }
 
 func nodesForGroup(pods []corev1.Pod, isWorker func(*corev1.Pod) bool, group string) []core.NodeView {
@@ -280,13 +300,18 @@ func EventsFromK8s(clusterID string, raw []corev1.Event) core.ClusterEvents {
 		}
 		object := kind + "/" + name
 
+		// RULING (fix round 1): a typed corev1.Event.Count of 0 is
+		// indistinguishable from "count absent" (Go's int32 has no None),
+		// unlike Rust's serde_json::Value; rather than guess "absent, so
+		// default to 1" (the Rust reference's unwrap_or(1), which a real
+		// API-server-populated Event's count never actually exercises),
+		// this port yields the literal 0 — matching what the Rust
+		// reference itself would output for wire JSON with an explicit
+		// "count":0, i.e. port fidelity for the reachable case rather
+		// than an unverifiable guess for the unreachable one.
 		count := uint32(ev.Count)
-		if count == 0 {
-			if ev.Series != nil && ev.Series.Count > 0 {
-				count = uint32(ev.Series.Count)
-			} else {
-				count = 1
-			}
+		if count == 0 && ev.Series != nil && ev.Series.Count > 0 {
+			count = uint32(ev.Series.Count)
 		}
 
 		firstSeen := metaTimePtr(ev.FirstTimestamp)
@@ -349,21 +374,28 @@ func EventsFromK8s(clusterID string, raw []corev1.Event) core.ClusterEvents {
 	return core.ClusterEvents{ClusterId: clusterID, Events: events}
 }
 
-// metaTimePtr formats t as RFC3339, or nil when t is unset.
+// metaTimePtr formats t as RFC3339, or nil when t is unset. RFC3339Nano
+// (not the whole-second RFC3339) so two events within the same second
+// still sort correctly by [EventsFromK8s]'s lexicographic last-seen
+// comparison — metav1.Time only carries second precision, so this is a
+// no-op for it (RFC3339Nano's fractional digits are trimmed to nothing
+// when the value is exactly zero), but [microTimePtr] below shares this
+// format string and metav1.MicroTime carries real microsecond precision.
 func metaTimePtr(t metav1.Time) *string {
 	if t.IsZero() {
 		return nil
 	}
-	s := t.UTC().Format("2006-01-02T15:04:05Z07:00")
+	s := t.UTC().Format(time.RFC3339Nano)
 	return &s
 }
 
-// microTimePtr formats t as RFC3339, or nil when t is unset.
+// microTimePtr formats t as RFC3339Nano, or nil when t is unset — see
+// [metaTimePtr]'s doc comment for why sub-second precision matters here.
 func microTimePtr(t metav1.MicroTime) *string {
 	if t.IsZero() {
 		return nil
 	}
-	s := t.UTC().Format("2006-01-02T15:04:05Z07:00")
+	s := t.UTC().Format(time.RFC3339Nano)
 	return &s
 }
 
@@ -380,10 +412,32 @@ func TailLines(raw string, tail uint32) ([]string, bool) {
 	var lines []string
 	if raw != "" {
 		lines = strings.Split(raw, "\n")
-		// Drop a trailing empty line from a final newline so it is not
-		// counted.
+		// Rust's str::lines() splits on '\n' but never yields the empty
+		// element a trailing '\n' produces ("the final line ending is
+		// optional" — kuberay.rs relies on this to avoid counting a
+		// phantom empty last line for a blob that, like every real pod
+		// log, ends in a newline). Reproduce that first: drop the split's
+		// final element, but ONLY when raw actually ends in '\n' — an
+		// internal blank line (e.g. "a\nb\n\nc") must NOT be dropped by
+		// this step, only the artifact of the trailing terminator.
+		if strings.HasSuffix(raw, "\n") {
+			lines = lines[:len(lines)-1]
+		}
+		// A genuinely blank final line (raw ends "...\n\n") still leaves
+		// one more empty element after the drop above. kuberay.rs's
+		// tail_lines defends against a log source that emits one anyway
+		// (e.g. a doubled trailing newline) by dropping it too — same
+		// unconditional "is the last element empty" check the original
+		// Go implementation already had, just applied as a second pass
+		// after the Rust-semantics drop, not instead of it.
 		if len(lines) > 0 && lines[len(lines)-1] == "" {
 			lines = lines[:len(lines)-1]
+		}
+		// str::lines() also strips a trailing '\r' from every line (its
+		// LinesAnyMap), so \r\n-terminated logs (not just \n-terminated
+		// ones) tail cleanly.
+		for i, l := range lines {
+			lines[i] = strings.TrimSuffix(l, "\r")
 		}
 	}
 	total := uint32(len(lines))
@@ -392,4 +446,77 @@ func TailLines(raw string, tail uint32) ([]string, bool) {
 	}
 	truncated := tail > 0 && total >= tail
 	return lines, truncated
+}
+
+// RankPods orders pod names head-first, then name-sorted, for a stable
+// pod-log selector order (api-v1.md §5.6: "head first so the default
+// target is the head"). Moved here from internal/provision/live (fix
+// round 1, M3) — pure, so it belongs where it's covered/testable, per
+// this file's package doc. Ported from kuberay_client.rs:573-589.
+func RankPods(pods []corev1.Pod) []string {
+	type ranked struct {
+		isHead bool
+		name   string
+	}
+	rs := make([]ranked, 0, len(pods))
+	for i := range pods {
+		rs = append(rs, ranked{isHead: pods[i].Labels[RayNodeTypeLabel] == "head", name: pods[i].Name})
+	}
+	sort.Slice(rs, func(i, j int) bool {
+		if rs[i].isHead != rs[j].isHead {
+			return rs[i].isHead
+		}
+		return rs[i].name < rs[j].name
+	})
+	out := make([]string, len(rs))
+	for i, r := range rs {
+		out[i] = r.name
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// Kueue pool-observation mappers (ADR-0010-equivalent; the body of
+// PoolProvisioner.ObservePool). Moved here from internal/provision/live
+// (fix round 1, M3) — pure, so they belong where they're covered/testable.
+// ---------------------------------------------------------------------------
+
+// FlavorUsageMap converts a ClusterQueue's status.flavorsUsage into
+// flavor -> resource -> total quantity string. Ported from
+// kueue_client.rs:130-154 (flavors_usage_map).
+func FlavorUsageMap(items []kueuev1beta2.FlavorUsage) map[string]map[string]string {
+	out := make(map[string]map[string]string, len(items))
+	for _, f := range items {
+		resources := make(map[string]string, len(f.Resources))
+		for _, r := range f.Resources {
+			resources[string(r.Name)] = r.Total.String()
+		}
+		out[string(f.Name)] = resources
+	}
+	return out
+}
+
+// SumLocalQueueUsage flattens a LocalQueue's flavor-scoped usage into
+// resource -> total quantity string, summing across flavors. Unlike the
+// Rust reference's kueue_client.rs:167-188 (which re-parses each quantity
+// string through a float parser to sum it, skipping unparseable ones with
+// a warning), this sums typed resource.Quantity values directly via
+// [resource.Quantity.Add] — no reparse, no precision loss, and nothing to
+// skip, since every value already arrived as a valid Quantity off the
+// typed API. Noted as a typed-API improvement, not a behavior change: the
+// wire result is the same canonical-quantity total.
+func SumLocalQueueUsage(items []kueuev1beta2.LocalQueueFlavorUsage) map[string]string {
+	sums := map[string]resource.Quantity{}
+	for _, f := range items {
+		for _, r := range f.Resources {
+			q := sums[string(r.Name)]
+			q.Add(r.Total)
+			sums[string(r.Name)] = q
+		}
+	}
+	out := make(map[string]string, len(sums))
+	for k, v := range sums {
+		out[k] = v.String()
+	}
+	return out
 }

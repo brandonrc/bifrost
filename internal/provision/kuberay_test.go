@@ -342,6 +342,20 @@ func TestOwnedFingerprintRoundTripsThroughTheManifest(t *testing.T) {
 	}
 }
 
+// TestFingerprintFromRayClusterNilSpec is the review follow-up guard
+// (task-6-brief.md ledger item 3): a nil *rayv1.RayClusterSpec (a live
+// read that somehow produced no spec at all) must return ("", false) —
+// "nothing to compare against" — not panic on spec.HeadGroupSpec.
+func TestFingerprintFromRayClusterNilSpec(t *testing.T) {
+	fp, ok := FingerprintFromRayCluster(nil)
+	if ok {
+		t.Fatalf("ok = true, want false")
+	}
+	if fp != "" {
+		t.Fatalf("fingerprint = %q, want empty", fp)
+	}
+}
+
 // kuberay.rs: owned_fingerprint_ignores_replicas_but_catches_image
 func TestOwnedFingerprintIgnoresReplicasButCatchesImage(t *testing.T) {
 	a := testSpec(t, wg("cpu", 0, 4, 2))
