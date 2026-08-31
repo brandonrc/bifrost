@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"fmt"
 	"math"
 	"testing"
 )
@@ -146,4 +147,74 @@ func TestResourceHoursStableOnDuplicateTimestamps(t *testing.T) {
 	// three as "last" and change the result.
 	s := samples([2]float64{100, 1.0}, [2]float64{100, 2.0}, [2]float64{100, 3.0})
 	hoursApprox(t, ResourceHours(s, 0, 200), 300.0/3600.0)
+}
+
+// Strengthens TestResourceHoursStableOnDuplicateTimestamps: Go's sort.Slice
+// (pattern-defeating quicksort) falls back to a stable insertion sort for
+// small slices, so a handful of tied elements doesn't actually discriminate
+// sort.Slice from sort.SliceStable — the instability only becomes
+// observable once the slice is large enough to leave that fast path. 30
+// same-timestamp samples, fed in ascending order, forces the
+// discrimination.
+func TestResourceHoursStableOnManyDuplicateTimestamps(t *testing.T) {
+	const n = 30
+	pairs := make([][2]float64, n)
+	for i := range pairs {
+		pairs[i] = [2]float64{100, float64(i + 1)}
+	}
+	s := samples(pairs...)
+	// A stable sort preserves input order, so the last-given quantity (n)
+	// is the one holding from t=100 to the window end at t=200: n cores
+	// for 100s.
+	hoursApprox(t, ResourceHours(s, 0, 200), float64(n)*100.0/3600.0)
+}
+
+// C5 determinism regression: Cost sums hours*price over a ResourceMap's
+// keys. Go randomizes map iteration order, and float addition is not
+// associative, so without a fixed (sorted) accumulation order the result
+// can vary from call to call. Magnitudes are chosen (huge alternating with
+// tiny) so summation order actually changes the rounded result; running
+// the same accumulation repeatedly must yield a bit-identical total.
+func TestCostIsAccumulationOrderDeterministic(t *testing.T) {
+	hours := ResourceMap{}
+	sheet := PriceSheet{}
+	for i := 0; i < 30; i++ {
+		key := fmt.Sprintf("resource-%02d", i)
+		if i%2 == 0 {
+			hours[key] = 1e16
+		} else {
+			hours[key] = 1.0
+		}
+		sheet[key] = 1.0
+	}
+	want := Cost(hours, sheet)
+	for i := 0; i < 20; i++ {
+		if got := Cost(hours, sheet); got != want {
+			t.Fatalf("run %d: Cost() = %v, want %v (non-deterministic accumulation order)", i, got, want)
+		}
+	}
+}
+
+// C5 determinism regression, WindowedResourceHours: the per-(pool,resource)
+// hours are summed into out[resource] in map iteration order; without a
+// fixed (sorted) accumulation order the per-resource total can vary from
+// call to call. Many pools sharing one resource, with alternating huge/tiny
+// hour magnitudes, make the accumulation order observable.
+func TestWindowedResourceHoursIsAccumulationOrderDeterministic(t *testing.T) {
+	by := map[PoolResource][]UsageSampleView{}
+	for i := 0; i < 30; i++ {
+		pool := fmt.Sprintf("pool-%02d", i)
+		qty := 1.0
+		if i%2 == 0 {
+			qty = 1e16
+		}
+		by[PoolResource{Pool: pool, Resource: "cpu"}] = samples([2]float64{0, qty})
+	}
+	want := WindowedResourceHours(by, 0, 3600)
+	for i := 0; i < 20; i++ {
+		got := WindowedResourceHours(by, 0, 3600)
+		if got["cpu"] != want["cpu"] {
+			t.Fatalf("run %d: WindowedResourceHours()[cpu] = %v, want %v (non-deterministic accumulation order)", i, got["cpu"], want["cpu"])
+		}
+	}
 }

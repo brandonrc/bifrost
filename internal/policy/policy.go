@@ -18,6 +18,10 @@ package policy
 import (
 	"encoding/json"
 	"fmt"
+	"math"
+	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/brandonrc/bifrost/internal/core"
 )
@@ -92,6 +96,46 @@ func (r ResourceMap) FitsWithin(limit ResourceMap) bool {
 		}
 	}
 	return true
+}
+
+// rustFloatDebug renders a float64 the way Rust's derived Debug renders an
+// f64: the shortest decimal representation that round-trips, always with
+// an explicit decimal point (Rust's f64 Debug never prints a bare integer
+// like Go's %v does — 4.0 prints as "4.0", not "4"). NaN and the two
+// infinities use Rust's literal spellings.
+func rustFloatDebug(f float64) string {
+	switch {
+	case math.IsNaN(f):
+		return "NaN"
+	case math.IsInf(f, 1):
+		return "inf"
+	case math.IsInf(f, -1):
+		return "-inf"
+	}
+	s := strconv.FormatFloat(f, 'g', -1, 64)
+	if !strings.ContainsAny(s, ".eE") {
+		s += ".0"
+	}
+	return s
+}
+
+// rustDebug renders r the way Rust's derived Debug renders the reference's
+// `ResourceMap(BTreeMap<String, f64>)` newtype: keys in sorted order
+// (BTreeMap's iteration order), Rust's f64 Debug format for each value,
+// wrapped in the newtype's own `ResourceMap({...})` form. Used only for
+// error-message fidelity (QuotaExceeded/BudgetExceeded); JSON wire output
+// goes through MarshalJSON, unaffected by this.
+func (r ResourceMap) rustDebug() string {
+	keys := make([]string, 0, len(r))
+	for k := range r {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		parts[i] = fmt.Sprintf("%q: %s", k, rustFloatDebug(r[k]))
+	}
+	return "ResourceMap({" + strings.Join(parts, ", ") + "})"
 }
 
 // CPU returns cores under the well-known cpu key (0 when absent).
@@ -207,9 +251,17 @@ func (p PriceSheet) MarshalJSON() ([]byte, error) {
 }
 
 func (p PriceSheet) price(v ResourceMap) float64 {
+	// Sorted key order: deterministic float-summation order matching
+	// Rust's BTreeMap<String, f64> iteration order, rather than a Go
+	// map's randomized order.
+	keys := make([]string, 0, len(v))
+	for k := range v {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
 	var total float64
-	for k, amount := range v {
-		total += amount * p[k]
+	for _, k := range keys {
+		total += v[k] * p[k]
 	}
 	return total
 }
@@ -240,8 +292,8 @@ type QuotaExceeded struct {
 
 func (e QuotaExceeded) Error() string {
 	return fmt.Sprintf(
-		"project %s quota exceeded: requested max %v + in-use %v exceeds limit %v",
-		e.Project, e.Requested, e.InUse, e.Limit)
+		"project %s quota exceeded: requested max %s + in-use %s exceeds limit %s",
+		e.Project, e.Requested.rustDebug(), e.InUse.rustDebug(), e.Limit.rustDebug())
 }
 
 // AdmitQuota is the admission check (Borg: quota is admission control).
@@ -332,8 +384,8 @@ type BudgetExceeded struct {
 
 func (e BudgetExceeded) Error() string {
 	return fmt.Sprintf(
-		"project %s budget exceeded: consumed %v of %v resource-hours over the last %ds",
-		e.Project, e.Consumed, e.Limit, e.WindowSecs)
+		"project %s budget exceeded: consumed %s of %s resource-hours over the last %ds",
+		e.Project, e.Consumed.rustDebug(), e.Limit.rustDebug(), e.WindowSecs)
 }
 
 // AdmitBudget is time-windowed budget admission (#77). consumed is the

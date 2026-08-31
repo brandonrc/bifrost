@@ -2,6 +2,7 @@ package policy
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -339,5 +340,113 @@ func TestClusterDemandMinAndMaxAreIndependentMaps(t *testing.T) {
 	max["memory"] = -999.0
 	if !rmapEq(min, wantMin) {
 		t.Fatalf("mutating max affected min — they alias the same map (min = %v, want %v)", min, wantMin)
+	}
+}
+
+// Strengthens TestClusterDemandMinAndMaxAreIndependentMaps: that test's
+// spec always has one worker group, so the accumulation loop runs at least
+// once and every iteration's Add() call allocates a fresh map — which
+// masks a reintroduced `max = head` (no .Clone()) aliasing bug the moment
+// the loop runs, since min/max are reassigned to brand-new map objects
+// either way. The case that actually discriminates the bug is zero worker
+// groups: the loop body never runs, so min/max are returned exactly as
+// head/head.Clone() produced them, with no Add() call to paper over an
+// aliased max.
+func TestClusterDemandMinAndMaxAreIndependentMapsNoWorkerGroups(t *testing.T) {
+	spec := &core.ClusterSpec{
+		Engine:     core.EngineRay,
+		Name:       "c",
+		Project:    "p",
+		RayVersion: "2.57.0",
+		Image:      "img",
+		HeadCpu:    "1",
+		HeadMemory: "2Gi",
+	}
+	min, max, err := ClusterDemand(spec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	wantMax := max.Clone()
+	min["cpu"] = -999.0
+	if !rmapEq(max, wantMax) {
+		t.Fatalf("mutating min affected max — they alias the same map (max = %v, want %v)", max, wantMax)
+	}
+}
+
+// D: QuotaExceeded.Error() must render its ResourceMap fields the way
+// Rust's derived Debug renders `ResourceMap(BTreeMap<String, f64>)` —
+// sorted keys, `ResourceMap({"cpu": 4.0})` newtype-wrapped form, always a
+// decimal point on the float — not Go's %v map form.
+func TestQuotaExceededMessageMatchesRustDebug(t *testing.T) {
+	err := QuotaExceeded{
+		Project:   "p",
+		Requested: ResourceMap{"cpu": 4.0, "memory": 8.0},
+		InUse:     ResourceMap{},
+		Limit:     ResourceMap{"cpu": 2.0},
+	}
+	want := `project p quota exceeded: requested max ResourceMap({"cpu": 4.0, "memory": 8.0}) + in-use ResourceMap({}) exceeds limit ResourceMap({"cpu": 2.0})`
+	if got := err.Error(); got != want {
+		t.Fatalf("Error() =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// D: BudgetExceeded.Error() — same rustDebug fidelity as QuotaExceeded.
+func TestBudgetExceededMessageMatchesRustDebug(t *testing.T) {
+	err := BudgetExceeded{
+		Project:    "p",
+		Consumed:   ResourceMap{"cpu": 100.5},
+		Limit:      ResourceMap{"cpu": 100.0},
+		WindowSecs: 604800,
+	}
+	want := `project p budget exceeded: consumed ResourceMap({"cpu": 100.5}) of ResourceMap({"cpu": 100.0}) resource-hours over the last 604800s`
+	if got := err.Error(); got != want {
+		t.Fatalf("Error() =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// D: rustFloatDebug's NaN/inf spellings and the always-a-decimal-point rule.
+func TestRustFloatDebugFormatting(t *testing.T) {
+	cases := []struct {
+		in   float64
+		want string
+	}{
+		{4, "4.0"},
+		{4.5, "4.5"},
+		{0, "0.0"},
+		{math.NaN(), "NaN"},
+		{math.Inf(1), "inf"},
+		{math.Inf(-1), "-inf"},
+	}
+	for _, c := range cases {
+		if got := rustFloatDebug(c.in); got != c.want {
+			t.Fatalf("rustFloatDebug(%v) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// C5 determinism regression: PriceSheet.price sums amount*price over a
+// ResourceMap's keys. Go randomizes map iteration order, and float
+// addition is not associative, so without a fixed (sorted) accumulation
+// order the result can vary from call to call. Magnitudes are chosen (huge
+// alternating with tiny) so summation order actually changes the rounded
+// result; running the same accumulation repeatedly must yield a
+// bit-identical total.
+func TestPriceSheetPriceIsAccumulationOrderDeterministic(t *testing.T) {
+	v := ResourceMap{}
+	sheet := PriceSheet{}
+	for i := 0; i < 30; i++ {
+		key := fmt.Sprintf("resource-%02d", i)
+		if i%2 == 0 {
+			v[key] = 1e16
+		} else {
+			v[key] = 1.0
+		}
+		sheet[key] = 1.0
+	}
+	want := sheet.price(v)
+	for i := 0; i < 20; i++ {
+		if got := sheet.price(v); got != want {
+			t.Fatalf("run %d: price() = %v, want %v (non-deterministic accumulation order)", i, got, want)
+		}
 	}
 }

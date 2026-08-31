@@ -88,9 +88,25 @@ type PoolResource struct {
 // normally lives in one pool, but a re-homed project can have samples in
 // two; this sums them honestly.
 func WindowedResourceHours(byPoolResource map[PoolResource][]UsageSampleView, from, to uint64) ResourceMap {
+	// Accumulate in sorted (pool, resource) key order — Rust's reference
+	// keys this map with a BTreeMap<(String, String), _>, whose iteration
+	// order is the tuple's lexicographic order, so summing the per-pool
+	// hours into out[resource] in a Go map's (random) iteration order
+	// would make float-summation rounding order-dependent where Rust is
+	// deterministic. Sorting first makes the two match.
+	keys := make([]PoolResource, 0, len(byPoolResource))
+	for k := range byPoolResource {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Pool != keys[j].Pool {
+			return keys[i].Pool < keys[j].Pool
+		}
+		return keys[i].Resource < keys[j].Resource
+	})
 	out := ResourceMap{}
-	for key, series := range byPoolResource {
-		hours := ResourceHours(series, from, to)
+	for _, key := range keys {
+		hours := ResourceHours(byPoolResource[key], from, to)
 		out[key.Resource] += hours
 	}
 	return out
@@ -101,9 +117,16 @@ func WindowedResourceHours(byPoolResource map[PoolResource][]UsageSampleView, fr
 // 0 (an unpriced resource is free for estimation, never an error — same
 // rule as PriceSheet.Estimate).
 func Cost(quantityHoursPerResource ResourceMap, sheet PriceSheet) float64 {
+	// Sorted key order for the same reason as WindowedResourceHours:
+	// deterministic float-summation order matching Rust's BTreeMap.
+	keys := make([]string, 0, len(quantityHoursPerResource))
+	for k := range quantityHoursPerResource {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
 	var total float64
-	for k, hours := range quantityHoursPerResource {
-		total += hours * sheet[k]
+	for _, k := range keys {
+		total += quantityHoursPerResource[k] * sheet[k]
 	}
 	return total
 }
