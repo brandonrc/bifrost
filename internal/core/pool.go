@@ -219,8 +219,8 @@ type FlavorSpec struct {
 type flavorSpecAlias FlavorSpec
 
 // MarshalJSON substitutes an empty map/slice for a nil Resources,
-// NodeLabels, or Taints, mirroring Rust's Vec/HashMap ::default(), which
-// serde always writes as `{}`/`[]`, never `null`.
+// NodeLabels, or Taints, mirroring Rust's Vec::default()/BTreeMap::default(),
+// which serde always writes as `{}`/`[]`, never `null`.
 func (f FlavorSpec) MarshalJSON() ([]byte, error) {
 	a := flavorSpecAlias(f)
 	if a.Resources == nil {
@@ -343,7 +343,7 @@ type AllocationSpec struct {
 type allocationSpecAlias AllocationSpec
 
 // MarshalJSON substitutes an empty map for a nil Nominal, BorrowingLimit,
-// or LendingLimit, mirroring Rust's HashMap::default(), which serde
+// or LendingLimit, mirroring Rust's BTreeMap::default(), which serde
 // always writes as `{}`, never `null` (the frozen contract's
 // AllocationSpec schema types all three as required objects).
 func (a AllocationSpec) MarshalJSON() ([]byte, error) {

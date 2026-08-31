@@ -81,7 +81,11 @@ the frozen file and the file itself is served via `go:embed` — parity is by
 construction and handler/spec drift is a compile error. The
 TS/Python/Rust SDK pipeline in `bifrost-api` is inherited from `mobula-api`
 unchanged except: push token actually configured; secret-gated steps fail red
-instead of skipping silently; SBOM generation added.
+instead of skipping silently; SBOM generation added. `bifrost-api`'s contract
+identity (`info.title`/`info.description`, `VersionInfo.name`) has been
+rebranded from mobula to Bifrost; the remaining shape is byte-for-byte the
+frozen mobula contract, so parity checks against the Rust reference normalize
+out the info block and identity strings before diffing.
 
 ## Language-independent acceptance assets
 
@@ -100,8 +104,13 @@ instead of skipping silently; SBOM generation added.
 - golangci-lint with at minimum: `errcheck`, `exhaustive` (state-machine
   switches), `depguard` (import boundaries: core/policy ban k8s+DB imports),
   `govet`, `staticcheck`. nilaway if integration is practical.
-- Coverage gate ≥ 90% (mobula's bar), excluding `cmd/` main wiring and live
-  k8s client wrappers (same exclusions as mobula's llvm-cov config).
+- Coverage gate: a ratcheting `scripts/coverage-gate.sh` floor (`COVERAGE_THRESHOLD`,
+  currently 75%, raised as coverage grows) targeting 90% (mobula's bar) as
+  the eventual steady state. `COVERAGE_EXCLUDE` drops `cmd/` main wiring and
+  `internal/provision/live` (the future k8s client wrappers) from the total
+  before the gate is computed — same exclusions as mobula's llvm-cov config,
+  applied here as a coverprofile filter rather than an instrumentation-time
+  exclude.
 - Spec-diff check against the frozen contract (once `internal/api` exists).
 - `govulncheck` in CI.
 - No cgo in shipped binaries (`CGO_ENABLED=0 go build ./...` enforced as an

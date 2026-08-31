@@ -13,12 +13,16 @@ JSON-Schema-style `oneOf: [{type: "null"}, {$ref}]` nullability idiom — the on
 ## Command Wave 1's api package should use
 
 ```
-go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest \
+go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
   -generate types,std-http,strict-server -package api openapi.json
 ```
 
 Pin: `oapi-codegen/v2` resolved `@latest` to **v2.8.0** (matches the version pinned
-in ADR-0001 #2; no drift). Run it from *inside* the target Go module (i.e. with a
+in ADR-0001 #2; no drift) — now tracked canonically as a `tool` directive in
+`go.mod` (`go get -tool github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0`),
+so `go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen` resolves the
+pinned version without needing the `@v2.8.0` suffix repeated at every call site.
+Run it from *inside* the target Go module (i.e. with a
 `go.mod` in scope) — run bare (no enclosing module) it still generates correctly but
 emits a benign warning:
 

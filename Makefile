@@ -9,4 +9,4 @@ cover:
 	CGO_ENABLED=1 go test -race -covermode=atomic -coverprofile=coverage.txt ./...
 	go tool cover -func=coverage.txt | tail -1
 lint:
-	golangci-lint run
+	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2 run
