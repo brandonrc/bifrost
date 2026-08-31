@@ -548,10 +548,10 @@ type AuditChainWindow struct {
 func AuditChainHash(prevHash string, event *core.AuditEvent) string {
 	canonical, err := json.Marshal(event)
 	if err != nil {
-		// core.AuditEvent is plain data; MarshalJSON only fails on a
-		// caller-constructed AuditRequired/enum invariant this package
-		// never produces — mirrors Rust's `.expect("AuditEvent is plain
-		// data; serialization cannot fail")`.
+		// MarshalJSON over core.AuditEvent's plain-data alias (see
+		// AuditEvent.MarshalJSON in internal/core/audit.go) cannot fail;
+		// this panic mirrors Rust's `.expect("AuditEvent is plain data;
+		// serialization cannot fail")`.
 		panic(fmt.Sprintf("controller: AuditEvent canonical serialization failed: %v", err))
 	}
 	h := sha256.New()

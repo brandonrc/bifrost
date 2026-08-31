@@ -55,10 +55,11 @@ relies on three properties that hold for `core.AuditEvent` specifically:
    Every writer of a `core.AuditEvent` value (this store, a future
    SQLite/Postgres store, the chain verifier) marshals through the same
    Go type definition, so they all reproduce the same field order.
-2. **Every field is always present.** `AuditEvent`'s ten `Reason`-shaped
-   fields are `*T` (pointer) rather than using `omitempty`, so an absent
-   value marshals as an explicit `null`, not a dropped key. There is no
-   "missing key" ambiguity to canonicalize away.
+2. **Every field is always present.** Nine of `AuditEvent`'s fields —
+   `Subject`, `Reason`, `Action`, `Cluster`, `Method`, `Path`, `Status`,
+   `LatencyMs`, `Required` — are `*T` (pointer) rather than using
+   `omitempty`, so an absent value marshals as an explicit `null`, not a
+   dropped key. There is no "missing key" ambiguity to canonicalize away.
 3. **`AuditEvent.MarshalJSON` already normalizes the two fields that
    would otherwise vary.** `GrantedRoles` (a `[]string`) marshals as `[]`
    rather than `null` when nil, and a zero-value `Decision` defaults to
