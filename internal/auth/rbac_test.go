@@ -201,6 +201,36 @@ func TestRoleWireNamesRoundTrip(t *testing.T) {
 	}
 }
 
+// Nit (fix round 1): pin ParseRole's zero-value-on-failure behavior so a
+// caller that (incorrectly) drops ok can't regress this silently. Unlike
+// Rust's Option<Role>, an unchecked ParseRole result is RoleViewer's zero
+// value, not a safe "no role" sentinel — see the ParseRole doc comment.
+func TestParseRoleGarbageIsZeroValueNotOk(t *testing.T) {
+	role, ok := ParseRole("garbage")
+	if ok {
+		t.Fatal("expected ok=false for an unrecognized role string")
+	}
+	if role != 0 {
+		t.Fatalf("expected the zero Role value on failure, got %v", role)
+	}
+	if role != RoleViewer {
+		t.Fatal("sanity: Role's zero value is RoleViewer — the whole point of this test")
+	}
+}
+
+// Nit (fix round 1): AsStr() on an out-of-range Role value must return an
+// honest sentinel, not a value that looks like it could be a real role.
+func TestRoleAsStrOutOfRangeIsHonestSentinel(t *testing.T) {
+	got := Role(99).AsStr()
+	if got == "role" || got == "" {
+		t.Fatalf("expected an honest out-of-range sentinel, got %q", got)
+	}
+	want := "invalid-role(99)"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 // Port of scope_grammar_is_star_or_project_name (lib.rs:843-859).
 func TestScopeGrammarIsStarOrProjectName(t *testing.T) {
 	if !ValidScope("*") {
@@ -416,6 +446,60 @@ func TestAuthConfigParsesProjectRoles(t *testing.T) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
 }
+
+// Fix round 1, #5 — marshal guards. The report's original Rust analogy was
+// inverted: Rust's "no Serialize derive" on Identity/Role/PermissionType/
+// Target is a COMPILE error at every marshal site (mobula-auth/src/lib.rs
+// never derives Serialize for any of them); Go has no such compile-time
+// guard, so an unguarded Identity/Role/etc. would marshal SILENTLY —
+// Identity as a raw struct dump (including Email, and via ProjectRoles the
+// caller's full scoped-grant set) and Role/PermissionType/Target as bare
+// ordinals ("operator" -> 2). internal/core/auth.go:103-109 documents the
+// convention this follows: credential/identity-bearing types either refuse
+// to marshal outright, or marshal through an explicit wire-safe form.
+
+// Identity must never marshal directly.
+func TestIdentityMarshalJSONAlwaysFails(t *testing.T) {
+	id := Identity{Subject: "u", Email: strPtr("u@example.com")}
+	if _, err := json.Marshal(id); err == nil {
+		t.Fatal("expected Identity to refuse to marshal")
+	}
+	// Also via a pointer receiver call site (json.Marshal(&id)).
+	if _, err := json.Marshal(&id); err == nil {
+		t.Fatal("expected *Identity to refuse to marshal")
+	}
+}
+
+// Role, PermissionType, and Target must marshal as their AsStr() string,
+// never as the bare underlying int — a handler emitting a Role in a
+// response body must produce "operator", not 2.
+func TestEnumsMarshalAsWireStrings(t *testing.T) {
+	if got, err := json.Marshal(RoleOperator); err != nil || string(got) != `"operator"` {
+		t.Fatalf("Role: got %s, err %v", got, err)
+	}
+	if got, err := json.Marshal(Write); err != nil || string(got) != `"write"` {
+		t.Fatalf("PermissionType: got %s, err %v", got, err)
+	}
+	if got, err := json.Marshal(TargetCluster); err != nil || string(got) != `"cluster"` {
+		t.Fatalf("Target: got %s, err %v", got, err)
+	}
+}
+
+// RoleScope gets snake_case json tags (it's the wire shape for
+// project_roles entries and scoped assignments).
+func TestRoleScopeSnakeCaseTags(t *testing.T) {
+	rs := RoleScope{Role: RoleOperator, Scope: "project:team-a"}
+	got, err := json.Marshal(rs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"role":"operator","scope":"project:team-a"}`
+	if string(got) != want {
+		t.Fatalf("got %s, want %s", got, want)
+	}
+}
+
+func strPtr(s string) *string { return &s }
 
 func containsRole(roles []Role, r Role) bool {
 	for _, x := range roles {

@@ -7,6 +7,8 @@ package auth
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 	"unicode"
 )
@@ -24,6 +26,31 @@ const (
 	Delete
 	Admin
 )
+
+// AsStr returns the snake_case wire form. Rust's PermissionType has no
+// Serialize derive (it's programmatic-only there); this exists so a Go
+// handler that DOES embed a PermissionType in a response body emits
+// "operator"-style text instead of a bare enum ordinal — see MarshalJSON.
+func (p PermissionType) AsStr() string {
+	switch p {
+	case Read:
+		return "read"
+	case Write:
+		return "write"
+	case Delete:
+		return "delete"
+	case Admin:
+		return "admin"
+	}
+	return fmt.Sprintf("invalid-permission(%d)", int(p))
+}
+
+// MarshalJSON emits the wire string form (AsStr), never the bare int, so a
+// PermissionType embedded in a response body can't silently regress to
+// "2" instead of "delete".
+func (p PermissionType) MarshalJSON() ([]byte, error) {
+	return json.Marshal(p.AsStr())
+}
 
 // Target is what a permission applies to — artifact-keeper's target_type.
 // This is what lets Operator (cluster lifecycle) differ from Developer (job
@@ -50,6 +77,28 @@ const (
 	// of duties: auditors inspect the trail without holding Admin.
 	TargetAudit
 )
+
+// AsStr returns the snake_case wire form (see PermissionType.AsStr).
+func (t Target) AsStr() string {
+	switch t {
+	case TargetJob:
+		return "job"
+	case TargetCluster:
+		return "cluster"
+	case TargetService:
+		return "service"
+	case TargetPool:
+		return "pool"
+	case TargetAudit:
+		return "audit"
+	}
+	return fmt.Sprintf("invalid-target(%d)", int(t))
+}
+
+// MarshalJSON emits the wire string form (AsStr), never the bare int.
+func (t Target) MarshalJSON() ([]byte, error) {
+	return json.Marshal(t.AsStr())
+}
 
 // Role is a built-in v0 role (ADR-0003). Roles are permission-sets over
 // (verb, target), not an ordinal rank — RoleOperator (lifecycle but not
@@ -139,10 +188,25 @@ func (r Role) AsStr() string {
 	case RoleAuditor:
 		return "auditor"
 	}
-	return "role"
+	// Not a valid Role value at all (e.g. a raw int conversion from
+	// outside this package) — an honest sentinel beats silently claiming
+	// to be a real role.
+	return fmt.Sprintf("invalid-role(%d)", int(r))
+}
+
+// MarshalJSON emits the wire string form (AsStr), never the bare int, so a
+// Role embedded in a response body can't silently regress to "2" instead
+// of "operator".
+func (r Role) MarshalJSON() ([]byte, error) {
+	return json.Marshal(r.AsStr())
 }
 
 // ParseRole is the inverse of AsStr; ok is false for anything else.
+//
+// Callers MUST check ok. Unlike Rust's Option<Role> (which makes an
+// unchecked "unknown role" access a compile error), a caller that drops ok
+// silently gets role's zero value — RoleViewer, not a safe "no role"
+// sentinel — for any unrecognized string, including "" and garbage input.
 func ParseRole(s string) (role Role, ok bool) {
 	switch s {
 	case "viewer":
@@ -200,8 +264,8 @@ func ScopeCovers(scope, project string) bool {
 // assigned project-scoped grant. Go's named-struct equivalent of Rust's
 // (Role, String) tuple.
 type RoleScope struct {
-	Role  Role
-	Scope string
+	Role  Role   `json:"role"`
+	Scope string `json:"scope"`
 }
 
 // Identity is an authenticated caller, attached to requests after
@@ -227,6 +291,19 @@ type Identity struct {
 	// PermitsScoped). Empty for local auth and when [project_roles] is
 	// unset — deny-by-default holds.
 	ProjectRoles []RoleScope
+}
+
+// MarshalJSON always fails: Identity is a validated-request-scoped
+// principal, not a wire type — it carries Email (and, via ProjectRoles,
+// the caller's full scoped-grant set) with no `json` tags of its own and
+// no vetted egress shape. The Rust reference never derives Serialize for
+// Identity at all (a compile-time refusal); Go has no such compile-time
+// guard, so this is the runtime equivalent — a handler that means to
+// return identity information must build its own explicit response DTO
+// (as internal/core's LocalUserRecord -> LocalUserView does), not
+// serialize this type directly.
+func (id Identity) MarshalJSON() ([]byte, error) {
+	return nil, errors.New("auth: Identity must never be marshaled directly — project to a wire-safe view")
 }
 
 // Owner is the identity to attribute owned resources to (tier-2 owned
@@ -326,6 +403,24 @@ func (m *RoleMappings) HasWildcard() bool {
 		}
 	}
 	return false
+}
+
+// Clone returns a deep copy of m: the group-pattern slices get their own
+// backing arrays, independent of m's. Required whenever a RoleMappings
+// crosses out of the validator's control (e.g. Validator.RoleMappings()) —
+// a plain struct copy shares the slice headers' backing arrays, so a
+// caller mutating an element of the "copy" (or appending within its
+// capacity) silently corrupts the live authz config, which can promote an
+// otherwise-unmapped caller (e.g. writing "*" into a returned Viewer
+// slice).
+func (m *RoleMappings) Clone() RoleMappings {
+	return RoleMappings{
+		Admin:     append([]string(nil), m.Admin...),
+		Operator:  append([]string(nil), m.Operator...),
+		Developer: append([]string(nil), m.Developer...),
+		Viewer:    append([]string(nil), m.Viewer...),
+		Auditor:   append([]string(nil), m.Auditor...),
+	}
 }
 
 // Resolve returns every role whose group mapping matches groups (a caller

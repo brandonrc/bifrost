@@ -199,7 +199,10 @@ func (v *Validator) Issuer() string {
 // RoleMappings returns the configured group->role mappings (for GET
 // /api/v1/access/roles).
 func (v *Validator) RoleMappings() RoleMappings {
-	return v.config.Roles
+	// Deep-copy: the caller must not be able to mutate the live authz
+	// config through the slices a plain struct copy would alias (#2, fix
+	// round 1).
+	return v.config.Roles.Clone()
 }
 
 // Discover runs OIDC discovery and the initial JWKS fetch. It fails
@@ -295,7 +298,17 @@ func (v *Validator) refreshJWKS(ctx context.Context) error {
 	v.lastRefresh = time.Now()
 	v.refreshMu.Unlock()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.jwksURI, nil)
+	// This fetch is shared, cooldown-gated background infrastructure, not
+	// work scoped to the caller who happened to trigger it: if the
+	// caller's request context is canceled (client disconnect, handler
+	// timeout) mid-fetch, the fetch must still run to completion. Without
+	// this, a single canceled caller aborts the network call AFTER the
+	// cooldown slot above was already claimed, and no other caller can
+	// retry for a full cooldown window — a trivial DoS against key
+	// rotation (one canceled request every 30s starves it forever). The
+	// client's own bounded timeout (see IdpClient) still caps the call.
+	fetchCtx := context.WithoutCancel(ctx)
+	req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, v.jwksURI, nil)
 	if err != nil {
 		return AuthError{Kind: AuthErrJwks, Message: err.Error(), Source: err}
 	}
@@ -402,6 +415,14 @@ func (v *Validator) keyFunc(ctx context.Context) jwt.Keyfunc {
 	}
 }
 
+// authLeeway is the clock-skew allowance applied to exp/nbf checks. This
+// isn't a deliberate Bifrost choice: it mirrors jsonwebtoken's
+// Validation::default() leeway (60s), which the Rust reference inherits
+// silently (it never overrides the field) — ported here for fidelity
+// rather than independently chosen. golang-jwt defaults leeway to zero, so
+// it must be set explicitly to match.
+const authLeeway = 60 * time.Second
+
 // Validate validates a Bearer token: RS256 signature against JWKS, iss,
 // aud, exp/nbf. Returns the mapped identity.
 //
@@ -418,6 +439,7 @@ func (v *Validator) Validate(ctx context.Context, tokenString string) (*Identity
 		jwt.WithExpirationRequired(),
 		jwt.WithIssuer(strings.TrimRight(v.config.Issuer, "/")),
 		jwt.WithAudience(v.config.Audience),
+		jwt.WithLeeway(authLeeway),
 		// nbf is validated whenever present (golang-jwt's default), but
 		// not required — matching Rust's validate_nbf=true without adding
 		// nbf to required_spec_claims.

@@ -367,6 +367,100 @@ func TestJWKSRefreshIsCooldownGated(t *testing.T) {
 	}
 }
 
+// Fix round 1, #1 (reproduced DoS): a caller whose request context is
+// already canceled by the time Validate reaches the JWKS refresh must not
+// abort the (shared, cooldown-gated) fetch. Before the fix, the canceled
+// context aborted the HTTP round trip AFTER the cooldown slot had already
+// been claimed, so the refresh never completed and no other caller — not
+// even an honest one — could retry for a full cooldown window. One
+// canceled request every 30s would starve key rotation forever.
+func TestJWKSRefreshSurvivesCanceledCallerContext(t *testing.T) {
+	idp := newTestIdp(t)
+	v := discoverT(t, idp, RoleMappings{Developer: []string{"/ml-eng"}})
+	if got := idp.hits.Load(); got != 1 {
+		t.Fatalf("expected 1 fetch from discovery, got %d", got)
+	}
+	v.refreshCooldown = 100 * time.Millisecond
+	v.lastRefresh = time.Now().Add(-v.refreshCooldown)
+
+	unknownKidTok := idp.signRawKid(t, "does-not-exist", jwt.MapClaims{
+		"sub": "u", "iss": idp.issuer, "aud": "bifrost",
+		"exp": time.Now().Add(5 * time.Minute).Unix(), "groups": []string{"/ml-eng"},
+	})
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := v.Validate(canceled, unknownKidTok); authErrKind(t, err) != AuthErrUnknownKeyID {
+		t.Fatalf("expected AuthErrUnknownKeyID despite a canceled ctx (the refresh must still complete), got %v", err)
+	}
+	if got := idp.hits.Load(); got != 2 {
+		t.Fatalf("expected the refresh to complete despite the canceled context, got %d fetches", got)
+	}
+
+	// An honest call in the SAME cooldown window must not trigger another
+	// fetch — the canceled call's refresh already completed successfully.
+	if _, err := v.Validate(context.Background(), unknownKidTok); authErrKind(t, err) != AuthErrUnknownKeyID {
+		t.Fatalf("expected AuthErrUnknownKeyID, got %v", err)
+	}
+	if got := idp.hits.Load(); got != 2 {
+		t.Fatalf("expected the cooldown to hold (no 3rd fetch), got %d fetches", got)
+	}
+}
+
+// Fix round 1, #2 (reproduced privilege escalation): Validator.RoleMappings()
+// must return a defensive copy. Before the fix, the returned RoleMappings'
+// slices aliased the live authz config's backing arrays; a caller (or a
+// handler building a response) mutating an element of the "copy" silently
+// promoted an unmapped caller (e.g. overwriting index 0 of a Viewer mapping
+// with "*").
+func TestValidatorRoleMappingsIsDefensivelyCopied(t *testing.T) {
+	idp := newTestIdp(t)
+	v := discoverT(t, idp, RoleMappings{Viewer: []string{"/observers"}})
+
+	got := v.RoleMappings()
+	got.Viewer[0] = "*"                   // would corrupt the shared backing array if aliased
+	got.Viewer = append(got.Viewer, "/x") // and this would too, within capacity
+
+	// A fresh accessor call must be unaffected by the mutation above.
+	live := v.RoleMappings()
+	if len(live.Viewer) != 1 || live.Viewer[0] != "/observers" {
+		t.Fatalf("mutating a returned RoleMappings corrupted the live config: %v", live.Viewer)
+	}
+
+	// End-to-end: an unrelated, unmapped group must still be denied — if
+	// the "*" mutation above had reached the live config, this caller
+	// would now be promoted to Viewer.
+	stranger := idp.token(t, []string{"/unrelated-group"}, "bifrost", 5*time.Minute)
+	id, err := v.Validate(context.Background(), stranger)
+	if err != nil {
+		t.Fatalf("validate stranger token: %v", err)
+	}
+	if id.IsAuthorized() {
+		t.Fatal("mutating the returned RoleMappings promoted an unmapped caller")
+	}
+}
+
+// Fix round 1, #4 — clock skew leeway (RULING: port fidelity with the
+// jsonwebtoken reference's default 60s leeway, applied via authLeeway).
+func TestClockSkewLeeway(t *testing.T) {
+	idp := newTestIdp(t)
+	v := discoverT(t, idp, RoleMappings{Developer: []string{"/ml-eng"}})
+
+	t.Run("expired 30s ago is within leeway", func(t *testing.T) {
+		tok := idp.token(t, []string{"/ml-eng"}, "bifrost", -30*time.Second)
+		if _, err := v.Validate(context.Background(), tok); err != nil {
+			t.Fatalf("expected acceptance within the 60s leeway, got %v", err)
+		}
+	})
+
+	t.Run("expired 90s ago exceeds leeway", func(t *testing.T) {
+		tok := idp.token(t, []string{"/ml-eng"}, "bifrost", -90*time.Second)
+		if _, err := v.Validate(context.Background(), tok); err == nil {
+			t.Fatal("expected rejection beyond the 60s leeway")
+		}
+	})
+}
+
 // Port of wildcard-warning boot logging (#35), mobula-auth/src/lib.rs:504-512.
 func TestDiscoverLogsWildcardWarning(t *testing.T) {
 	idp := newTestIdp(t)
