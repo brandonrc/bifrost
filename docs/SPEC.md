@@ -1,22 +1,18 @@
 # Bifrost — Program Specification
 
 **Bifrost** is a FOSS, Anyscale-grade control plane for Ray and Dask clusters,
-written in Go. It is the successor to [mobula](https://github.com/brandonrc/mobula)
-(Rust), which remains the **frozen executable reference** until Bifrost reaches
-parity. The name: Bifrost is the guarded bridge between realms — a gateway that
-decides who crosses. That is requirement 3.
+written in Go. The name: Bifrost is the guarded bridge between realms — a
+gateway that decides who crosses. That is requirement 3.
 
-## Why a port, on the record
+## Engineering posture, on the record
 
-The Rust implementation is sound. The port exists because the team that will
-maintain and support this long-term (Nebari) works in Go, and because the
-Kubernetes ecosystem Bifrost drives (KubeRay, Kueue, client-go) is Go-native.
-The trade accepted: compile-time data-race freedom and no-GC gateway
-determinism (Rust guarantees) become CI-enforced disciplines (Go processes).
-The disciplines are therefore **non-negotiable CI gates from day one** (see
-"Port governance"). This paragraph supersedes mobula `REQUIREMENTS.md:87`
-("Rust for the control plane … no GC pauses in the proxy path"): measured
-gateway p99 under the contract-replay load rig is the acceptance evidence.
+Bifrost's design was validated by a Rust proof-of-concept (now retired; a
+read-only local checkout serves as the behavioral test oracle for Waves 1–3,
+after which it has no role). The trade accepted in choosing Go: compile-time
+data-race freedom and no-GC gateway determinism become CI-enforced
+disciplines. The disciplines are therefore **non-negotiable CI gates from day
+one** (see "Port governance"); measured gateway p99 under the contract-replay
+load rig is the acceptance evidence for the gateway path.
 
 ## Requirements (Ray Software Pack — Desired User Experience)
 
