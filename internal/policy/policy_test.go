@@ -300,3 +300,44 @@ func TestMinReplicasAboveMaxIsRejected(t *testing.T) {
 		t.Fatalf("message %q does not contain %q", qe.Msg, want)
 	}
 }
+
+// Fix-round-1 regression tests (review findings I1, M1, M2).
+
+func TestBudgetUnmarshalRequiresWindowSecs(t *testing.T) {
+	// window_secs is required on the wire (BudgetView's frozen schema, and
+	// Rust's serde derive errors on a missing non-Option field). Silently
+	// defaulting to 0 would make AdmitBudget a permanent no-op.
+	var b Budget
+	err := json.Unmarshal([]byte(`{"nvidia.com/gpu":100.0,"cpu":5000.0}`), &b)
+	if err == nil {
+		t.Fatal("expected an error for missing window_secs")
+	}
+}
+
+func TestFitsWithinDeniesNaN(t *testing.T) {
+	// NaN must diverge the same direction as Rust's `v <= limit` (false
+	// for any comparison against NaN, so the demand is denied, not
+	// silently admitted).
+	demand := rmap(map[string]float64{"cpu": math.NaN()})
+	limit := rmap(map[string]float64{"cpu": 10.0})
+	if demand.FitsWithin(limit) {
+		t.Fatal("expected NaN demand to be denied, not fit")
+	}
+}
+
+func TestClusterDemandMinAndMaxAreIndependentMaps(t *testing.T) {
+	min, max, err := ClusterDemand(testSpec(1, 3, nil))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	wantMax := max.Clone()
+	min["cpu"] = -999.0
+	if !rmapEq(max, wantMax) {
+		t.Fatalf("mutating min affected max — they alias the same map (max = %v, want %v)", max, wantMax)
+	}
+	wantMin := min.Clone()
+	max["memory"] = -999.0
+	if !rmapEq(min, wantMin) {
+		t.Fatalf("mutating max affected min — they alias the same map (min = %v, want %v)", min, wantMin)
+	}
+}

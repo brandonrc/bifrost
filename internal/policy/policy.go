@@ -81,10 +81,13 @@ func (r ResourceMap) Scale(n float64) ResourceMap {
 
 // FitsWithin reports whether every key in r is <= limit's value for that
 // key. A key missing from limit counts as 0, so any demand for an unlisted
-// resource does not fit.
+// resource does not fit. The predicate is written as !(v <= limit[k]),
+// not v > limit[k], so a NaN value denies (as Rust's `v <= limit` does:
+// NaN compares false against everything, so `!(NaN <= x)` is true and the
+// negated form here matches).
 func (r ResourceMap) FitsWithin(limit ResourceMap) bool {
 	for k, v := range r {
-		if v > limit[k] {
+		if !(v <= limit[k]) {
 			return false
 		}
 	}
@@ -165,7 +168,7 @@ func ClusterDemand(spec *core.ClusterSpec) (min, max ResourceMap, err error) {
 		return nil, nil, err
 	}
 	min = head
-	max = head
+	max = head.Clone()
 	for i := range spec.WorkerGroups {
 		g := &spec.WorkerGroups[i]
 		// A group with min > max is nonsensical and would make the "max"
@@ -284,12 +287,19 @@ func (b *Budget) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
-	if wsRaw, ok := raw["window_secs"]; ok {
-		if err := json.Unmarshal(wsRaw, &b.WindowSecs); err != nil {
-			return err
-		}
-		delete(raw, "window_secs")
+	// window_secs is a required field on the wire (BudgetView's frozen
+	// schema lists it under `required`, and Rust's serde derive errors on
+	// a missing non-Option field). Silently defaulting to 0 here would
+	// produce a zero-width window that makes AdmitBudget a permanent
+	// no-op — fail loudly instead.
+	wsRaw, ok := raw["window_secs"]
+	if !ok {
+		return fmt.Errorf("policy: Budget missing required field \"window_secs\"")
 	}
+	if err := json.Unmarshal(wsRaw, &b.WindowSecs); err != nil {
+		return err
+	}
+	delete(raw, "window_secs")
 	limits := make(map[string]float64, len(raw))
 	for k, v := range raw {
 		var f float64

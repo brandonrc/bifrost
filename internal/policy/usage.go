@@ -43,7 +43,10 @@ func ResourceHours(samples []UsageSampleView, from, to uint64) float64 {
 	}
 	pts := make([]UsageSampleView, len(samples))
 	copy(pts, samples)
-	sort.Slice(pts, func(i, j int) bool { return pts[i].TS < pts[j].TS })
+	// Stable: Rust's sort_by_key is a stable sort, so samples sharing a
+	// timestamp must keep their input relative order — an unstable sort
+	// would make the integration result order-dependent on ties.
+	sort.SliceStable(pts, func(i, j int) bool { return pts[i].TS < pts[j].TS })
 
 	level := 0.0
 	cursor := from

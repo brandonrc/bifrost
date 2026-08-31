@@ -134,3 +134,16 @@ func TestSampleViewIsTheDocumentedInputShape(t *testing.T) {
 	v := UsageSampleView{TS: 0, Quantity: 2.0}
 	hoursApprox(t, ResourceHours([]UsageSampleView{v}, 0, 3600), 2.0)
 }
+
+// Fix-round-1 regression test (review finding M3): the sort must be
+// stable, mirroring Rust's sort_by_key, so duplicate timestamps keep their
+// input relative order instead of making the integration order-dependent.
+func TestResourceHoursStableOnDuplicateTimestamps(t *testing.T) {
+	// Three readings all at t=100, given in this order; a stable sort
+	// preserves that order, so the level after t=100 is the *last* one
+	// given (3.0), holding to the window end at t=200: 3.0 cores for
+	// 100s = 300/3600 core-hours. An unstable sort could pick any of the
+	// three as "last" and change the result.
+	s := samples([2]float64{100, 1.0}, [2]float64{100, 2.0}, [2]float64{100, 3.0})
+	hoursApprox(t, ResourceHours(s, 0, 200), 300.0/3600.0)
+}
