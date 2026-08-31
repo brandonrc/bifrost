@@ -15,7 +15,7 @@ jobs:
         with: { version: v2.13.2 }
   test:
     runs-on: ubuntu-latest
-    env: { COVERAGE_THRESHOLD: "75" }
+    env: { COVERAGE_THRESHOLD: "80" }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
