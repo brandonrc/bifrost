@@ -1,0 +1,24 @@
+version: "2"
+linters:
+  default: standard
+  enable:
+    - exhaustive
+    - depguard
+  settings:
+    errcheck:
+      check-type-assertions: true
+    exhaustive:
+      default-signifies-exhaustive: true
+    depguard:
+      rules:
+        pure-domain:
+          files: ["**/internal/core/**", "**/internal/policy/**"]
+          deny:
+            - pkg: "k8s.io"
+              desc: "core/policy are k8s-free (mobula ADR-0002)"
+            - pkg: "sigs.k8s.io"
+              desc: "core/policy are k8s-free (mobula ADR-0002)"
+            - pkg: "github.com/jackc/pgx"
+              desc: "core/policy are I/O-free"
+            - pkg: "database/sql"
+              desc: "core/policy are I/O-free"
