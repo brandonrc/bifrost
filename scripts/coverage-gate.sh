@@ -12,7 +12,12 @@
 set -euo pipefail
 THRESHOLD="${COVERAGE_THRESHOLD:-70}"
 COVERAGE_EXCLUDE="${COVERAGE_EXCLUDE:-/cmd/
-internal/provision/live}"
+internal/provision/live
+internal/controller/storetest}"
+# storetest is excluded per the T2 review's measured recommendation: it is a
+# test-support package whose own "coverage" counts unfired t.Fatalf branches,
+# so the number worsens as the suite gets MORE thorough - a perverse gradient.
+# Its code is executed on every conformance run; nothing is hidden.
 
 filtered=coverage.filtered.txt
 head -1 coverage.txt > "$filtered"
