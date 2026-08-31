@@ -71,9 +71,11 @@ Key invariants carried over verbatim:
 
 ## The frozen contract
 
-`openapi.json` exported from mobula **after** the registry-drift fix (all 48
-annotated operations), normalized once for stable key ordering, is the founding
-commit of `bifrost-api` and the port's specification. Per ADR-0001 the Go
+`openapi.json` exported from mobula (verified complete: **47 operations across
+36 paths**, registry-completeness now enforced by the guard test
+`openapi_document_registers_every_annotated_operation` on mobula branch
+`fix/openapi-complete-registry`), normalized once for stable key ordering, is
+the founding commit of `bifrost-api` and the port's specification. Per ADR-0001 the Go
 server is **spec-first**: oapi-codegen strict-server stubs are generated from
 the frozen file and the file itself is served via `go:embed` — parity is by
 construction and handler/spec drift is a compile error. The

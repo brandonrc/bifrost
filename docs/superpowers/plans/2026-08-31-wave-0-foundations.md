@@ -253,13 +253,13 @@ func AdmitQuota(usage, request, limit ResourceMap) error // admission decision, 
 - Create: new repo `/Users/khan/openteams/bifrost-api` — `openapi.json` (frozen), `openapi.yaml`, `README.md`, `redocly.yaml`, `.spectral.yaml`, `sdk/{typescript,python,rust}/config.yaml`, `.github/workflows/{validate.yml,generate.yml}`
 
 **Interfaces:**
-- Consumes: the complete `openapi.json` from mobula branch `fix/openapi-complete-registry` (all 48 operations), normalized (run through `jq -S .` once for stable key ordering — record the exact command in the README).
+- Consumes: the complete `openapi.json` from mobula branch `fix/openapi-complete-registry` (verified complete: 47 operations across 36 paths), normalized (run through `jq -S .` once for stable key ordering — record the exact command in the README).
 - Produces: `@brandonrc/bifrost-client` (npm, GitHub Packages), `bifrost_client` (Python), `bifrost-client` (Rust crate) SDK configs.
 
 - [ ] **Step 1:** Copy `/Users/khan/openteams/mobula-api/{redocly.yaml,.spectral.yaml,sdk,.github}` as the starting point; rename all `mobula` → `bifrost` in package names and workflow env.
 - [ ] **Step 2:** In both workflows: change every secret-gated `::notice::`-skip into a hard `exit 1` when the secret is absent on main-branch pushes (SPEC.md: silent skips are a defect).
 - [ ] **Step 3:** Add SBOM step to generate.yml: `anchore/sbom-action@v0` producing CycloneDX for each SDK artifact.
-- [ ] **Step 4:** `jq -S . < mobula/openapi.json > openapi.json` (the freeze), commit `feat: freeze bifrost API contract v1 (from mobula@<sha>, 48 operations)`, then `gh repo create brandonrc/bifrost-api --public --source . --push`.
+- [ ] **Step 4:** `jq -S . < mobula/openapi.json > openapi.json` (the freeze), commit `feat: freeze bifrost API contract v1 (from mobula@<sha>, 47 operations)`, then `gh repo create brandonrc/bifrost-api --public --source . --push`.
 
 ### Task 8: Fork bifrost-ui
 

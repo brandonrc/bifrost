@@ -17,7 +17,7 @@ Status: accepted · Wave 0 · Decisions from community-practice research (source
 
 ## Risks
 
-- **#2 is the load-bearing bet.** oapi-codegen 3.1 support is self-described "initial." Wave 0 includes generating against the real frozen spec and eyeballing all 48 operations; fallback preserves the architecture.
+- **#2 is the load-bearing bet.** oapi-codegen 3.1 support is self-described "initial." Wave 0 includes generating against the real frozen spec and eyeballing all 47 operations; fallback preserves the architecture.
 - Toolchain: Go ≥ 1.25 required (oapi-codegen); we target the installed 1.26.x.
 - k8s dependency set (controller-runtime, k8s.io/*, KubeRay apis, Kueue apis) must be pinned to one compatible k8s minor and upgraded as a set.
 - Normalize the utoipa export once (stable key ordering) before freezing so parity checks never flake on serialization order.
