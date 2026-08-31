@@ -1,0 +1,719 @@
+// Package live is Bifrost's live Kubernetes client (Wave 1 Task 6): the
+// only place in the codebase that opens a real connection to an API
+// server. It wires internal/provision's pure translators
+// (RayClusterFor/RayServiceFor/CohortFor/... and the interfaces they
+// implement — Provisioner/PoolProvisioner/ServiceProvisioner) onto
+// controller-runtime, mirroring mobula-provision's `kuberay_client`/
+// `kueue_client` (feature `kuberay`).
+//
+// Client mechanics (ADR-0001 #5, task-6-brief.md): controller-runtime as a
+// LIBRARY only — client.New() uncached (no Manager, no informer cache;
+// every read below is a live round trip to the API server), a scheme
+// registering ray v1 + kueue v1beta2 + the core Kubernetes API groups;
+// mutations are server-side apply (client.Patch with client.Apply +
+// client.FieldOwner(provision.FieldManager) [+ client.ForceOwnership,
+// except pool objects — see ApplyPool]); reads are Get/List for
+// observation, plus a raw clientset for the pod-logs subresource, which
+// controller-runtime's typed client has no verb for.
+//
+// This file is in scripts/coverage-gate.sh's COVERAGE_EXCLUDE and MUST
+// stay thin: every method here is I/O plus a direct call into
+// internal/provision's pure functions (translators, NodeBreakdown,
+// EventsFromK8s, TailLines, ZeroStatus, ...) or straightforward
+// list/filter/delete loops with no meaningful branching of their own.
+// Anything with logic worth unit-testing belongs in internal/provision,
+// not here — see internal/provision/observe.go's package doc for why the
+// live-read mappers in particular live there.
+package live
+
+import (
+	"context"
+	"fmt"
+	"strconv"
+
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
+	kueuev1beta2 "sigs.k8s.io/kueue/apis/kueue/v1beta2"
+
+	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/brandonrc/bifrost/internal/provision"
+)
+
+// Client is the live KubeRay + Kueue backend, scoped to one namespace.
+// Implements [provision.Provisioner] and [provision.PoolProvisioner]
+// directly; [provision.ServiceProvisioner] is implemented by
+// [ServiceClient] (see NewServiceClient) because Go methods — unlike Rust
+// trait impls — cannot be overloaded on return type alone, and
+// Provisioner.List / ServiceProvisioner.List share a name but return
+// different element types.
+type Client struct {
+	c           client.Client
+	clientset   kubernetes.Interface
+	namespace   string
+	autoscaling bool
+}
+
+var (
+	_ provision.Provisioner     = (*Client)(nil)
+	_ provision.PoolProvisioner = (*Client)(nil)
+)
+
+// NewScheme builds the runtime.Scheme this package's client needs: the
+// core Kubernetes API groups (corev1, networkingv1, eventsv1, ...) plus
+// ray.io/v1 and kueue.x-k8s.io/v1beta2 (ADR-0003's pinned typed APIs).
+func NewScheme() (*runtime.Scheme, error) {
+	sch := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(sch); err != nil {
+		return nil, fmt.Errorf("live: registering core k8s API groups: %w", err)
+	}
+	if err := rayv1.AddToScheme(sch); err != nil {
+		return nil, fmt.Errorf("live: registering ray.io/v1: %w", err)
+	}
+	if err := kueuev1beta2.AddToScheme(sch); err != nil {
+		return nil, fmt.Errorf("live: registering kueue.x-k8s.io/v1beta2: %w", err)
+	}
+	return sch, nil
+}
+
+// NewClient connects to the API server described by cfg (ambient
+// kubeconfig / in-cluster service account is the caller's concern to
+// resolve into cfg, e.g. via ctrl.GetConfig()) and returns a live
+// [Client] scoped to namespace. autoscaling selects the field-ownership
+// regime new clusters apply under (ADR-0007-equivalent; see
+// [provision.RayClusterFor]). Uncached per ADR-0001 #5: no Manager, no
+// informer cache — client.New() talks to the API server directly on every
+// call.
+func NewClient(cfg *rest.Config, namespace string, autoscaling bool) (*Client, error) {
+	sch, err := NewScheme()
+	if err != nil {
+		return nil, err
+	}
+	c, err := client.New(cfg, client.Options{Scheme: sch})
+	if err != nil {
+		return nil, fmt.Errorf("live: building controller-runtime client: %w", err)
+	}
+	// controller-runtime's typed client has no verb for the pod logs
+	// subresource; a plain clientset is the only way to reach
+	// GET /api/v1/namespaces/{ns}/pods/{name}/log.
+	clientset, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("live: building clientset for pod logs: %w", err)
+	}
+	return &Client{c: c, clientset: clientset, namespace: namespace, autoscaling: autoscaling}, nil
+}
+
+// ServiceClient is [Client]'s [provision.ServiceProvisioner] façade over
+// the same connection — a distinct Go type solely because
+// Provisioner.List and ServiceProvisioner.List can't both be named `List`
+// on the same receiver with different return types the way Rust's two
+// trait impls can share one struct.
+type ServiceClient struct {
+	*Client
+}
+
+var _ provision.ServiceProvisioner = (*ServiceClient)(nil)
+
+// NewServiceClient returns c's ServiceProvisioner façade.
+func NewServiceClient(c *Client) *ServiceClient { return &ServiceClient{c} }
+
+func (c *Client) apiBaseURL(id string) string {
+	// KubeRay's head service is always named "<id>-head-svc"; the
+	// dashboard / Ray Job Submission API listens on 8265.
+	return fmt.Sprintf("http://%s-head-svc.%s.svc:8265", id, c.namespace)
+}
+
+func serviceURL(namespace, name string) string {
+	return fmt.Sprintf("http://%s-serve-svc.%s.svc:8000", name, namespace)
+}
+
+// wrapErr turns a non-nil client-go/controller-runtime error into a
+// [provision.ProvisionError] with [provision.ProvisionErrBackend] — it
+// does NOT itself special-case NotFound. Every call site that needs the
+// NotFound distinction checks apierrors.IsNotFound(err) and constructs
+// [provision.ProvisionErrNotFound] directly BEFORE ever calling wrapErr
+// (e.g. Observe, ClusterNodes, setSuspend), so wrapErr never even sees
+// those errors; it only wraps the generic "something else went wrong"
+// case.
+func wrapErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	return provision.ProvisionError{Kind: provision.ProvisionErrBackend, Message: err.Error()}
+}
+
+// applySSA performs a server-side-apply Patch of obj (ADR-0001 #5 /
+// task-6-brief.md's literal instruction:
+// `client.Patch(ctx, obj, client.Apply, ...)`), centralizing every SSA
+// call site in this package behind one deprecation suppression AND the
+// [provision.ZeroStatus] guard. This is the ONLY function in the package
+// that calls client.Patch with client.Apply — every apply site in this
+// file goes through it — so ZeroStatus firing here, unconditionally,
+// before every Patch, is structural: no apply site can forget it (unlike
+// a per-call-site convention, which is exactly what let the
+// ResourceFlavor apply skip it in this file's first draft). ZeroStatus
+// itself is a documented no-op for types with no `.Status` field (e.g.
+// ResourceFlavor, NetworkPolicy) or types it doesn't recognize, so calling
+// it on every obj here is always safe.
+//
+// controller-runtime v0.24 offers a newer typed `c.Apply(ctx,
+// applyConfiguration, ...)` API, but it requires a generated
+// applyconfigurations package — code-generator's applyconfiguration-gen
+// output — which does not exist (and is not vendored) for the third-party
+// ray.io/v1 or kueue.x-k8s.io/v1beta2 types this client applies. The
+// classic Patch-with-client.Apply path is the only viable SSA mechanism
+// available for these types, so the deprecation is suppressed here rather
+// than at each of this file's apply sites.
+func applySSA(ctx context.Context, c client.Client, obj client.Object, opts ...client.PatchOption) error {
+	provision.ZeroStatus(obj)
+	return c.Patch(ctx, obj, client.Apply, opts...) //nolint:staticcheck // SA1019: see doc comment
+}
+
+// ---------------------------------------------------------------------------
+// Network posture (namespace-level default-deny + allows, per-cluster allow)
+// ---------------------------------------------------------------------------
+
+// adminManagedDeny is the check-then-apply probe: does namespace carry a
+// default-deny NetworkPolicy Bifrost does not manage? If so, an admin runs
+// their own network posture and Bifrost must leave ALL network policy in
+// the namespace untouched. Ported from kuberay_client.rs:160-174.
+func (c *Client) adminManagedDeny(ctx context.Context, namespace string) (bool, error) {
+	var list networkingv1.NetworkPolicyList
+	if err := c.c.List(ctx, &list, client.InNamespace(namespace)); err != nil {
+		return false, wrapErr(err)
+	}
+	for i := range list.Items {
+		p := &list.Items[i]
+		ours := p.Labels[provision.ManagedByLabel] == provision.FieldManager
+		if !ours && provision.IsDefaultDeny(p) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// applyNetworkPolicy server-side-applies one NetworkPolicy manifest into
+// namespace. Ported from kuberay_client.rs:176-204.
+func (c *Client) applyNetworkPolicy(ctx context.Context, namespace string, policy *networkingv1.NetworkPolicy) error {
+	policy.Namespace = namespace
+	return wrapErr(applySSA(ctx, c.c, policy, client.FieldOwner(provision.FieldManager), client.ForceOwnership))
+}
+
+// ensureClusterAllow ensures the per-cluster intra-tenant allow policy for
+// id (kuberay_client.rs:211-234): cluster pods may talk to each other, and
+// to nothing else. Skipped under an admin-managed default-deny, same as
+// the namespace posture — Bifrost never widens an admin posture.
+func (c *Client) ensureClusterAllow(ctx context.Context, id string, owner *string) error {
+	deny, err := c.adminManagedDeny(ctx, c.namespace)
+	if err != nil {
+		return err
+	}
+	if deny {
+		return nil
+	}
+	return c.applyNetworkPolicy(ctx, c.namespace, provision.ClusterAllowNetworkPolicy(id, owner))
+}
+
+// deleteClusterAllow deletes the per-cluster allow policy for id.
+// Idempotent: already-gone is success. Ported from
+// kuberay_client.rs:239-256.
+func (c *Client) deleteClusterAllow(ctx context.Context, id string) error {
+	np := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: provision.ClusterAllowPolicyName(id), Namespace: c.namespace}}
+	if err := c.c.Delete(ctx, np); err != nil && !apierrors.IsNotFound(err) {
+		return wrapErr(err)
+	}
+	return nil
+}
+
+// EnsureNamespacePosture ensures the namespace-level security posture:
+// default-deny + tenant-allow NetworkPolicies (skipped under an
+// admin-managed default-deny) and Pod Security Standards labels (skipped
+// if the namespace already enforces `restricted`, never downgraded).
+// Idempotent server-side apply throughout. Ported from
+// kuberay_client.rs:282-341.
+func (c *Client) EnsureNamespacePosture(ctx context.Context) error {
+	deny, err := c.adminManagedDeny(ctx, c.namespace)
+	if err != nil {
+		return err
+	}
+	if !deny {
+		for _, policy := range []*networkingv1.NetworkPolicy{provision.DefaultDenyNetworkPolicy(), provision.TenantAllowNetworkPolicy()} {
+			if err := c.applyNetworkPolicy(ctx, c.namespace, policy); err != nil {
+				return err
+			}
+		}
+	}
+
+	var ns corev1.Namespace
+	if err := c.c.Get(ctx, client.ObjectKey{Name: c.namespace}, &ns); err != nil {
+		if apierrors.IsNotFound(err) {
+			return provision.ProvisionError{Kind: provision.ProvisionErrBackend, Message: fmt.Sprintf("namespace %s not found", c.namespace)}
+		}
+		return wrapErr(err)
+	}
+	if ns.Labels["pod-security.kubernetes.io/enforce"] == "restricted" {
+		// Already stricter than Bifrost's baseline — never downgrade.
+		return nil
+	}
+	patch := &corev1.Namespace{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Namespace"},
+		ObjectMeta: metav1.ObjectMeta{Name: c.namespace, Labels: provision.NamespacePSSLabels()},
+	}
+	// No ForceOwnership: if another manager owns the enforce label with a
+	// conflicting (looser) value, the conflict error surfaces the
+	// disagreement instead of silently stealing the field (matches the
+	// Rust reference's `PatchParams::apply` without `.force()` here).
+	return wrapErr(applySSA(ctx, c.c, patch, client.FieldOwner(provision.FieldManager)))
+}
+
+// ---------------------------------------------------------------------------
+// Provisioner: cluster lifecycle
+// ---------------------------------------------------------------------------
+
+func observedGeneration(obj client.Object) *uint64 {
+	v, ok := obj.GetAnnotations()[provision.GenerationAnnotation]
+	if !ok {
+		return nil
+	}
+	g, err := strconv.ParseUint(v, 10, 64)
+	if err != nil {
+		return nil
+	}
+	return &g
+}
+
+// Apply creates or updates the RayCluster for id (server-side apply,
+// force-owned by [provision.FieldManager]). idempotencyKey identifies this
+// logical apply for the caller's own audit trail (internal/controller,
+// Task 9); the live client itself does not need it to be idempotent — SSA
+// with an unchanged desired state already is. Ported from
+// kuberay_client.rs:356-412.
+func (c *Client) Apply(ctx context.Context, id core.ClusterId, spec *core.ClusterSpec, generation uint64, idempotencyKey string, queue *provision.QueueAssignment) (provision.ApplyResponse, error) {
+	_ = idempotencyKey // audit-trail correlation lives with the caller (Task 9); not used by the client itself.
+	// The per-cluster intra-tenant allow goes in first, so the cluster's
+	// pods are never up under the default-deny without their own allow
+	// (head<->worker traffic would stall the rollout).
+	if err := c.ensureClusterAllow(ctx, string(id), spec.Owner); err != nil {
+		return provision.ApplyResponse{}, err
+	}
+	manifest, err := provision.RayClusterFor(id, spec, c.autoscaling, generation, queue)
+	if err != nil {
+		return provision.ApplyResponse{}, provision.ProvisionError{Kind: provision.ProvisionErrBackend, Message: err.Error()}
+	}
+	manifest.Namespace = c.namespace
+	if err := applySSA(ctx, c.c, manifest, client.FieldOwner(provision.FieldManager), client.ForceOwnership); err != nil {
+		return provision.ApplyResponse{}, wrapErr(err)
+	}
+	url := c.apiBaseURL(string(id))
+	return provision.ApplyResponse{Generation: generation, ApiBaseUrl: &url}, nil
+}
+
+// Terminate deletes the RayCluster for id and its per-cluster allow
+// policy. Idempotent: already-gone is success. Ported from
+// kuberay_client.rs:421-430.
+func (c *Client) Terminate(ctx context.Context, id core.ClusterId) error {
+	rc := &rayv1.RayCluster{ObjectMeta: metav1.ObjectMeta{Name: string(id), Namespace: c.namespace}}
+	if err := c.c.Delete(ctx, rc); err != nil && !apierrors.IsNotFound(err) {
+		return wrapErr(err)
+	}
+	return c.deleteClusterAllow(ctx, string(id))
+}
+
+// ReapNetworkPolicies deletes id's per-cluster allow policy — a backstop
+// for a RayCluster CR that has already vanished (Terminate would then
+// never fire). Ported from kuberay_client.rs:432-437.
+func (c *Client) ReapNetworkPolicies(ctx context.Context, id core.ClusterId) error {
+	return c.deleteClusterAllow(ctx, string(id))
+}
+
+// setSuspend flips only spec.suspend via a JSON merge patch — see
+// [provision.SuspendPatch]'s doc comment for why this is not a partial SSA
+// apply. Ported from kuberay_client.rs:138-148.
+func (c *Client) setSuspend(ctx context.Context, id core.ClusterId, suspend bool) error {
+	rc := &rayv1.RayCluster{ObjectMeta: metav1.ObjectMeta{Name: string(id), Namespace: c.namespace}}
+	patch := client.RawPatch(types.MergePatchType, provision.SuspendPatch(suspend))
+	if err := c.c.Patch(ctx, rc, patch); err != nil {
+		if apierrors.IsNotFound(err) {
+			return provision.ProvisionError{Kind: provision.ProvisionErrNotFound, ClusterID: id}
+		}
+		return wrapErr(err)
+	}
+	return nil
+}
+
+func (c *Client) Suspend(ctx context.Context, id core.ClusterId) error {
+	return c.setSuspend(ctx, id, true)
+}
+
+func (c *Client) Resume(ctx context.Context, id core.ClusterId) error {
+	return c.setSuspend(ctx, id, false)
+}
+
+// Observe reads a RayCluster's status, mapping it to a
+// [provision.ObservedCluster]. Ported from kuberay_client.rs:447-469.
+func (c *Client) Observe(ctx context.Context, id core.ClusterId) (provision.ObservedCluster, error) {
+	var rc rayv1.RayCluster
+	if err := c.c.Get(ctx, client.ObjectKey{Namespace: c.namespace, Name: string(id)}, &rc); err != nil {
+		if apierrors.IsNotFound(err) {
+			return provision.ObservedCluster{}, provision.ProvisionError{Kind: provision.ProvisionErrNotFound, ClusterID: id}
+		}
+		return provision.ObservedCluster{}, wrapErr(err)
+	}
+	var fpPtr *string
+	if fp, ok := provision.FingerprintFromRayCluster(&rc.Spec); ok {
+		fpPtr = &fp
+	}
+	url := c.apiBaseURL(string(id))
+	return provision.ObservedCluster{
+		ID:                 id,
+		State:              provision.StatusToState(rc.Status),
+		ObservedGeneration: observedGeneration(&rc),
+		SpecFingerprint:    fpPtr,
+		ApiBaseUrl:         &url,
+	}, nil
+}
+
+// List returns every RayCluster this field manager owns in the namespace.
+// Ported from kuberay_client.rs:471-492.
+func (c *Client) List(ctx context.Context) ([]provision.ObservedCluster, error) {
+	var list rayv1.RayClusterList
+	if err := c.c.List(ctx, &list, client.InNamespace(c.namespace), client.MatchingLabels{provision.ManagedByLabel: provision.FieldManager}); err != nil {
+		return nil, wrapErr(err)
+	}
+	out := make([]provision.ObservedCluster, 0, len(list.Items))
+	for i := range list.Items {
+		rc := &list.Items[i]
+		var fpPtr *string
+		if fp, ok := provision.FingerprintFromRayCluster(&rc.Spec); ok {
+			fpPtr = &fp
+		}
+		url := c.apiBaseURL(rc.Name)
+		out = append(out, provision.ObservedCluster{
+			ID:                 core.ClusterId(rc.Name),
+			State:              provision.StatusToState(rc.Status),
+			ObservedGeneration: observedGeneration(rc),
+			SpecFingerprint:    fpPtr,
+			ApiBaseUrl:         &url,
+		})
+	}
+	return out, nil
+}
+
+// MetricsEndpoint returns the Ray head's Prometheus metrics endpoint.
+// Ported from kuberay_client.rs:494-499.
+func (c *Client) MetricsEndpoint(id core.ClusterId) (string, bool) {
+	return c.apiBaseURL(string(id)) + "/metrics", true
+}
+
+// DashboardApiBase returns the cluster's native Ray dashboard / Job
+// Submission API base URL. Ported from kuberay_client.rs:501-506.
+func (c *Client) DashboardApiBase(id core.ClusterId) (string, bool) {
+	return c.apiBaseURL(string(id)), true
+}
+
+// ClusterNodes reads the RayCluster + the pods KubeRay owns for it
+// (label [provision.RayClusterLabel]=id) and hands them to
+// [provision.NodeBreakdown]. Kubernetes is the source, never the Ray
+// dashboard, so this answers even when the dashboard is unreachable.
+// Ported from kuberay_client.rs:508-536.
+func (c *Client) ClusterNodes(ctx context.Context, id core.ClusterId) (*core.ClusterNodes, error) {
+	var rc rayv1.RayCluster
+	if err := c.c.Get(ctx, client.ObjectKey{Namespace: c.namespace, Name: string(id)}, &rc); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, provision.ProvisionError{Kind: provision.ProvisionErrNotFound, ClusterID: id}
+		}
+		return nil, wrapErr(err)
+	}
+	var pods corev1.PodList
+	if err := c.c.List(ctx, &pods, client.InNamespace(c.namespace), client.MatchingLabels{provision.RayClusterLabel: string(id)}); err != nil {
+		return nil, wrapErr(err)
+	}
+	nodes := provision.NodeBreakdown(string(id), &rc, pods.Items)
+	return &nodes, nil
+}
+
+// ClusterEvents lists core/v1 Events in the namespace and normalizes them
+// via [provision.EventsFromK8s]. No fieldSelector (it can't express the
+// `<id>-` name-prefix match); filtering happens in the pure helper. Ported
+// from kuberay_client.rs:538-556.
+func (c *Client) ClusterEvents(ctx context.Context, id core.ClusterId) (*core.ClusterEvents, error) {
+	var list corev1.EventList
+	if err := c.c.List(ctx, &list, client.InNamespace(c.namespace)); err != nil {
+		return nil, wrapErr(err)
+	}
+	events := provision.EventsFromK8s(string(id), list.Items)
+	return &events, nil
+}
+
+// ClusterLogs tails logs for one of id's pods (head by default). pod, when
+// set, must name one of the cluster's own pods — a pod outside the set
+// returns (nil, nil) (404), never an arbitrary namespace pod. Ported from
+// kuberay_client.rs:558-635.
+func (c *Client) ClusterLogs(ctx context.Context, id core.ClusterId, pod *string, tail uint32) (*core.ClusterLogs, error) {
+	var pods corev1.PodList
+	if err := c.c.List(ctx, &pods, client.InNamespace(c.namespace), client.MatchingLabels{provision.RayClusterLabel: string(id)}); err != nil {
+		return nil, wrapErr(err)
+	}
+	ordered := provision.RankPods(pods.Items)
+	if len(ordered) == 0 {
+		// Cluster exists but has no pods yet (just applied / suspended):
+		// an empty view, not 404, so the tab renders cleanly.
+		return &core.ClusterLogs{ClusterId: string(id), Tail: tail}, nil
+	}
+
+	var target string
+	if pod != nil {
+		found := false
+		for _, n := range ordered {
+			if n == *pod {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, nil //nolint:nilnil // a pod outside the cluster's set is a 404, not an error — matches Observe/Get elsewhere in this package returning (nil, nil) for "not found, not a failure"
+		}
+		target = *pod
+	} else {
+		target = ordered[0]
+	}
+
+	tailInt64 := int64(tail)
+	raw, err := c.clientset.CoreV1().Pods(c.namespace).GetLogs(target, &corev1.PodLogOptions{TailLines: &tailInt64, Timestamps: true}).DoRaw(ctx)
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			return nil, wrapErr(err)
+		}
+		// The pod vanished between list and fetch: empty tail, not an error.
+		raw = nil
+	}
+	lines, truncated := provision.TailLines(string(raw), tail)
+	return &core.ClusterLogs{ClusterId: string(id), Pods: ordered, Pod: target, Tail: tail, Lines: lines, Truncated: truncated}, nil
+}
+
+// ---------------------------------------------------------------------------
+// ServiceProvisioner: Ray Serve services (RayService)
+// ---------------------------------------------------------------------------
+
+// Deploy server-side-applies the RayService for name. Ported from
+// kuberay_client.rs:640-664.
+func (s *ServiceClient) Deploy(ctx context.Context, name string, spec *core.ServiceSpec) error {
+	// Service pods carry the same cluster-id label (RayServiceFor's pod
+	// templates stamp it), so they get the same per-cluster allow —
+	// including across a RayService zero-downtime upgrade, where old and
+	// new generated RayClusters coexist but share it. Services carry no
+	// per-owner Ray-client pin: they are addressed through the Serve
+	// gateway, not a user's ray.init.
+	if err := s.ensureClusterAllow(ctx, name, nil); err != nil {
+		return err
+	}
+	manifest, err := provision.RayServiceFor(name, spec)
+	if err != nil {
+		return provision.ProvisionError{Kind: provision.ProvisionErrBackend, Message: err.Error()}
+	}
+	manifest.Namespace = s.namespace
+	return wrapErr(applySSA(ctx, s.c, manifest, client.FieldOwner(provision.FieldManager), client.ForceOwnership))
+}
+
+// Get reads a RayService's status. Ported from kuberay_client.rs:666-684.
+func (s *ServiceClient) Get(ctx context.Context, name string) (*provision.ObservedService, error) {
+	var rs rayv1.RayService
+	if err := s.c.Get(ctx, client.ObjectKey{Namespace: s.namespace, Name: name}, &rs); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil //nolint:nilnil // not-found is (nil, nil), matching kuberay_client.rs's Option-returning `get`
+		}
+		return nil, wrapErr(err)
+	}
+	url := serviceURL(s.namespace, name)
+	return &provision.ObservedService{Name: name, State: provision.ServiceStatusToState(rs.Status), Url: &url}, nil
+}
+
+// Delete deletes the RayService and its per-cluster allow policy.
+// Idempotent. Ported from kuberay_client.rs:686-696.
+func (s *ServiceClient) Delete(ctx context.Context, name string) error {
+	rs := &rayv1.RayService{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: s.namespace}}
+	if err := s.c.Delete(ctx, rs); err != nil && !apierrors.IsNotFound(err) {
+		return wrapErr(err)
+	}
+	return s.deleteClusterAllow(ctx, name)
+}
+
+// List returns every RayService this field manager owns in the namespace.
+// Ported from kuberay_client.rs:698-723.
+func (s *ServiceClient) List(ctx context.Context) ([]provision.ObservedService, error) {
+	var list rayv1.RayServiceList
+	if err := s.c.List(ctx, &list, client.InNamespace(s.namespace), client.MatchingLabels{provision.ManagedByLabel: provision.FieldManager}); err != nil {
+		return nil, wrapErr(err)
+	}
+	out := make([]provision.ObservedService, 0, len(list.Items))
+	for i := range list.Items {
+		rs := &list.Items[i]
+		url := serviceURL(s.namespace, rs.Name)
+		out = append(out, provision.ObservedService{Name: rs.Name, State: provision.ServiceStatusToState(rs.Status), Url: &url})
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// PoolProvisioner: Kueue objects (Cohort / ResourceFlavors / ClusterQueue /
+// LocalQueues)
+// ---------------------------------------------------------------------------
+
+// ApplyPool server-side-applies a pool's shared Cohort and flavors, its
+// ClusterQueue, and every allocation's LocalQueue. Order: the shared
+// Cohort + flavors first, then the ClusterQueue that references them, then
+// the namespaced LocalQueues (which need their namespaces to exist)
+// pointing at it — Kueue is eventually consistent, so this is for tidiness,
+// not correctness. Unlike the cluster/service applies, this does NOT pass
+// client.ForceOwnership: the Cohort may be shared with pools/objects
+// Bifrost does not own, and a forced apply would steal those fields rather
+// than surface the conflict. Ported from kueue_client.rs:192-249.
+func (c *Client) ApplyPool(ctx context.Context, spec *core.PoolSpec, allocs []core.AllocationSpec) error {
+	cohort := provision.CohortFor(spec)
+	if err := applySSA(ctx, c.c, cohort, client.FieldOwner(provision.FieldManager)); err != nil {
+		return wrapErr(err)
+	}
+	for i := range spec.Flavors {
+		flavor := provision.ResourceFlavorFor(spec.Name, &spec.Flavors[i])
+		if err := applySSA(ctx, c.c, flavor, client.FieldOwner(provision.FieldManager)); err != nil {
+			return wrapErr(err)
+		}
+	}
+	cq, err := provision.ClusterQueueFor(spec)
+	if err != nil {
+		return provision.ProvisionError{Kind: provision.ProvisionErrBackend, Message: err.Error()}
+	}
+	if err := applySSA(ctx, c.c, cq, client.FieldOwner(provision.FieldManager)); err != nil {
+		return wrapErr(err)
+	}
+	for i := range allocs {
+		lq := provision.LocalQueueFor(&allocs[i])
+		if err := applySSA(ctx, c.c, lq, client.FieldOwner(provision.FieldManager)); err != nil {
+			return wrapErr(err)
+		}
+	}
+	return nil
+}
+
+// deleteAll deletes every object in objs, treating already-gone as
+// success.
+func deleteAll(ctx context.Context, c client.Client, objs []client.Object) error {
+	for _, o := range objs {
+		if err := c.Delete(ctx, o); err != nil && !apierrors.IsNotFound(err) {
+			return wrapErr(err)
+		}
+	}
+	return nil
+}
+
+// DeletePool deletes every Kueue object carrying [provision.PoolLabel]=name
+// — every object Bifrost creates for a pool carries it (stamped by the
+// pure translators), so teardown finds them by selector even though the
+// pool spec is already gone from the store. LocalQueues are namespaced
+// (listed across all namespaces); the rest are cluster-scoped. Idempotent.
+// Ported from kueue_client.rs:251-281.
+func (c *Client) DeletePool(ctx context.Context, name string) error {
+	sel := client.MatchingLabels{provision.PoolLabel: name}
+
+	var lqs kueuev1beta2.LocalQueueList
+	if err := c.c.List(ctx, &lqs, sel); err != nil {
+		return wrapErr(err)
+	}
+	lqObjs := make([]client.Object, len(lqs.Items))
+	for i := range lqs.Items {
+		lqObjs[i] = &lqs.Items[i]
+	}
+	if err := deleteAll(ctx, c.c, lqObjs); err != nil {
+		return err
+	}
+
+	var cohorts kueuev1beta2.CohortList
+	if err := c.c.List(ctx, &cohorts, sel); err != nil {
+		return wrapErr(err)
+	}
+	cohortObjs := make([]client.Object, len(cohorts.Items))
+	for i := range cohorts.Items {
+		cohortObjs[i] = &cohorts.Items[i]
+	}
+	if err := deleteAll(ctx, c.c, cohortObjs); err != nil {
+		return err
+	}
+
+	var flavors kueuev1beta2.ResourceFlavorList
+	if err := c.c.List(ctx, &flavors, sel); err != nil {
+		return wrapErr(err)
+	}
+	flavorObjs := make([]client.Object, len(flavors.Items))
+	for i := range flavors.Items {
+		flavorObjs[i] = &flavors.Items[i]
+	}
+	if err := deleteAll(ctx, c.c, flavorObjs); err != nil {
+		return err
+	}
+
+	var cqs kueuev1beta2.ClusterQueueList
+	if err := c.c.List(ctx, &cqs, sel); err != nil {
+		return wrapErr(err)
+	}
+	cqObjs := make([]client.Object, len(cqs.Items))
+	for i := range cqs.Items {
+		cqObjs[i] = &cqs.Items[i]
+	}
+	return deleteAll(ctx, c.c, cqObjs)
+}
+
+// ObservePool reads a pool's quota ledger off its ClusterQueue status —
+// the status IS the ledger — plus each of its LocalQueues' own
+// status.flavorsUsage for per-project attribution (the ClusterQueue-level
+// FlavorsUsage is pool-scoped, not per-project). Returns (nil, nil) when
+// the ClusterQueue does not exist. Ported from kueue_client.rs:283-317.
+func (c *Client) ObservePool(ctx context.Context, name string) (*provision.PoolObservation, error) {
+	var cq kueuev1beta2.ClusterQueue
+	if err := c.c.Get(ctx, client.ObjectKey{Name: name}, &cq); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil //nolint:nilnil // not-found is (nil, nil), matching kueue_client.rs's Option-returning `observe_pool`
+		}
+		return nil, wrapErr(err)
+	}
+
+	var lqs kueuev1beta2.LocalQueueList
+	if err := c.c.List(ctx, &lqs, client.MatchingLabels{provision.PoolLabel: name}); err != nil {
+		return nil, wrapErr(err)
+	}
+	queuesUsage := map[string]map[string]string{}
+	for i := range lqs.Items {
+		lq := &lqs.Items[i]
+		if byResource := provision.SumLocalQueueUsage(lq.Status.FlavorsUsage); len(byResource) > 0 {
+			queuesUsage[lq.Name] = byResource
+		}
+	}
+
+	return &provision.PoolObservation{
+		AdmittedWorkloads:  provision.NonNegativeUint32(cq.Status.AdmittedWorkloads),
+		ReservingWorkloads: provision.NonNegativeUint32(cq.Status.ReservingWorkloads),
+		PendingWorkloads:   provision.NonNegativeUint32(cq.Status.PendingWorkloads),
+		FlavorsUsage:       provision.FlavorUsageMap(cq.Status.FlavorsUsage),
+		QueuesUsage:        queuesUsage,
+	}, nil
+}
+
+// KueuePresent reports whether the API server serves the Kueue CRDs
+// (probed via the ClusterQueue GVK's REST mapping). Ported from
+// kueue_client.rs:319-335; unlike the Rust reference this is not
+// result-cached per client — the REST mapper controller-runtime's
+// uncached client.New() builds already caches API-group discovery
+// internally, so a repeated call is cheap once the mapping is resolved.
+func (c *Client) KueuePresent(ctx context.Context) bool {
+	_, err := c.c.RESTMapper().RESTMapping(schema.GroupKind{Group: "kueue.x-k8s.io", Kind: "ClusterQueue"}, "v1beta2")
+	return err == nil
+}
