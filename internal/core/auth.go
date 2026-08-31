@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 )
 
@@ -99,6 +100,14 @@ type LocalUserRecord struct {
 	LockedUntil *uint64
 }
 
+// MarshalJSON always fails: the Rust reference makes LocalUserRecord
+// deliberately non-Serialize (a compile error to marshal it), since it
+// carries the bcrypt password hash. Go has no such compile-time guard, so
+// this is the runtime equivalent — callers must go through View().
+func (r LocalUserRecord) MarshalJSON() ([]byte, error) {
+	return nil, errors.New("core: LocalUserRecord must never be marshaled — use View()")
+}
+
 // LocalUserView is the public projection of a local user — everything
 // EXCEPT the password hash and the lockout internals that are nobody
 // else's business.
@@ -142,6 +151,14 @@ type ApiTokenRecord struct {
 	ExpiresAt  uint64
 	Revoked    bool
 	LastUsedAt *uint64
+}
+
+// MarshalJSON always fails: the Rust reference makes ApiTokenRecord
+// deliberately non-Serialize (a compile error to marshal it), since it
+// carries the bcrypt token hash. Go has no such compile-time guard, so
+// this is the runtime equivalent — callers must go through View().
+func (r ApiTokenRecord) MarshalJSON() ([]byte, error) {
+	return nil, errors.New("core: ApiTokenRecord must never be marshaled — use View()")
 }
 
 // ApiTokenView is the public projection of an API token — no hash, no

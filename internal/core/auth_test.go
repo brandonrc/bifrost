@@ -59,3 +59,28 @@ func TestViewsCarryNoHashes(t *testing.T) {
 		t.Fatalf("view leaked hash material: %s", tokJSON)
 	}
 }
+
+// Added (not ported from Rust): the Rust reference makes LocalUserRecord
+// and ApiTokenRecord deliberately non-Serialize, so marshaling either is a
+// Rust compile error. Go has no compile-time equivalent, so this
+// characterizes the runtime guard (MarshalJSON always fails) added in fix
+// round 1 (review finding H1) to close the gap.
+func TestLocalUserRecordNeverMarshals(t *testing.T) {
+	rec := LocalUserRecord{Username: "alice", PasswordHash: "$2b$12$secret"}
+	if _, err := json.Marshal(rec); err == nil {
+		t.Fatal("expected json.Marshal(LocalUserRecord) to fail")
+	}
+	if _, err := json.Marshal(&rec); err == nil {
+		t.Fatal("expected json.Marshal(*LocalUserRecord) to fail")
+	}
+}
+
+func TestApiTokenRecordNeverMarshals(t *testing.T) {
+	tok := ApiTokenRecord{Prefix: "abcd1234", TokenHash: "$2b$12$secret"}
+	if _, err := json.Marshal(tok); err == nil {
+		t.Fatal("expected json.Marshal(ApiTokenRecord) to fail")
+	}
+	if _, err := json.Marshal(&tok); err == nil {
+		t.Fatal("expected json.Marshal(*ApiTokenRecord) to fail")
+	}
+}
