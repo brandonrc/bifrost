@@ -120,6 +120,25 @@ type LocalUserView struct {
 	CreatedAt uint64 `json:"created_at"`
 }
 
+// localUserViewAlias breaks the recursion MarshalJSON would otherwise
+// cause by re-entering LocalUserView's own MarshalJSON.
+type localUserViewAlias LocalUserView
+
+// MarshalJSON refuses to serialize a zero-value Role. Unlike Engine or
+// AuditDecision, LocalRole has no documented Rust #[derive(Default)] — a
+// LocalUserView built without setting Role would otherwise marshal as
+// `"role":""`, which the frozen OpenAPI contract's LocalRole enum schema
+// rejects, and there is no safe default to substitute (a role is a
+// security-relevant field; guessing one would be worse than failing).
+// Failing loudly here mirrors LocalUserRecord's error-guard style, catching
+// the bug at the marshal site instead of shipping contract-invalid egress.
+func (v LocalUserView) MarshalJSON() ([]byte, error) {
+	if v.Role == "" {
+		return nil, errors.New("core: LocalUserView.Role must be set — a zero-value Role is not a valid wire enum and has no documented default")
+	}
+	return json.Marshal(localUserViewAlias(v))
+}
+
 // View projects a LocalUserRecord to its wire-safe LocalUserView.
 func (r *LocalUserRecord) View() LocalUserView {
 	return LocalUserView{

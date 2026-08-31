@@ -64,6 +64,51 @@ func TestCohortMustBeK8sSafe(t *testing.T) {
 	}
 }
 
+// E2/L2: exhaustive byte-membership test for IsK8sName. Brute-forces every
+// possible byte value (0-255) both as a lone character (exercising the
+// lead/trail alnum rule) and sandwiched between two 'a's (exercising
+// interior accepted-set membership), cross-checked against the documented
+// accepted set (`-.0-9a-z`, no leading/trailing `-`/`.`) rather than
+// IsK8sName's own implementation, plus explicit named boundary cases.
+func TestIsK8sNameExhaustiveByteMembership(t *testing.T) {
+	accepted := func(b byte) bool {
+		return (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') || b == '-' || b == '.'
+	}
+	alnum := func(b byte) bool {
+		return (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9')
+	}
+	for i := 0; i < 256; i++ {
+		b := byte(i)
+		lone := string([]byte{b})
+		if want, got := alnum(b), IsK8sName(lone); got != want {
+			t.Fatalf("IsK8sName(%q) [lone byte %d] = %v, want %v", lone, b, got, want)
+		}
+		mid := "a" + lone + "a"
+		if want, got := accepted(b), IsK8sName(mid); got != want {
+			t.Fatalf("IsK8sName(%q) [interior byte %d] = %v, want %v", mid, b, got, want)
+		}
+	}
+	for _, tc := range []struct {
+		s    string
+		want bool
+	}{
+		{"-a", false}, // leading '-'
+		{"a-", false}, // trailing '-'
+		{".a", false}, // leading '.'
+		{"a.", false}, // trailing '.'
+		{"a-a", true}, // interior '-'
+		{"a.a", true}, // interior '.'
+		{"0", true},   // single digit: alnum, valid lead and trail
+		{"a", true},   // single letter
+		{"-", false},  // single '-': accepted-set member, not alnum
+		{".", false},  // single '.': accepted-set member, not alnum
+	} {
+		if got := IsK8sName(tc.s); got != tc.want {
+			t.Fatalf("IsK8sName(%q) = %v, want %v", tc.s, got, tc.want)
+		}
+	}
+}
+
 func TestPoolRequiresAFlavor(t *testing.T) {
 	p := testPool()
 	p.Flavors = nil
@@ -325,7 +370,7 @@ func TestTaintEffectMustBeNonEmpty(t *testing.T) {
 // Added (not ported from Rust): fix round 1 (review finding M3). A
 // zero-value FlavorSpec (nil Resources/NodeLabels/Taints) must still
 // marshal each as `{}`/`[]`, not the Go zero value `null`, matching
-// Rust's Vec/HashMap ::default() serde behavior.
+// Rust's Vec::default()/BTreeMap::default() serde behavior.
 func TestFlavorSpecMarshalsNilCollectionsAsEmpty(t *testing.T) {
 	var f FlavorSpec
 	b, err := json.Marshal(f)
@@ -370,7 +415,7 @@ func TestPoolSpecMarshalsNilFlavorsAsEmpty(t *testing.T) {
 // as M3). A zero-value AllocationSpec (nil Nominal/BorrowingLimit/
 // LendingLimit) must still marshal each as `{}`, not the Go zero value
 // `null`, matching the frozen contract's required object types and
-// Rust's HashMap::default() serde behavior.
+// Rust's BTreeMap::default() serde behavior.
 func TestAllocationSpecMarshalsNilMapsAsEmpty(t *testing.T) {
 	var a AllocationSpec
 	b, err := json.Marshal(a)
@@ -418,6 +463,19 @@ func flavorSpecEqual(a, b FlavorSpec) bool {
 	}
 	for k, v := range a.Resources {
 		if b.Resources[k] != v {
+			return false
+		}
+	}
+	// E5/M2/M3: NodeLabels and Taints length checks alone would pass two
+	// flavors whose contents differ but whose sizes match — compare
+	// contents too. Taints is a slice, so order matters (it isn't a set).
+	for k, v := range a.NodeLabels {
+		if b.NodeLabels[k] != v {
+			return false
+		}
+	}
+	for i := range a.Taints {
+		if a.Taints[i] != b.Taints[i] {
 			return false
 		}
 	}

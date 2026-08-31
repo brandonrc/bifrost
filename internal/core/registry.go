@@ -169,24 +169,28 @@ type TokenSourceNote struct {
 
 // ByHostname looks up a cluster by request Host header value. Ports are
 // ignored and matching is case-insensitive, per RFC 9110 host semantics.
-func (r *ClusterRegistry) ByHostname(host string) *ClusterEndpoint {
+// Returns a copy of the matched entry, not a pointer into the live slice —
+// a caller must not be able to mutate the registry's stored entries (and
+// in particular AuthToken) through a lookup result.
+func (r *ClusterRegistry) ByHostname(host string) (ClusterEndpoint, bool) {
 	h := stripPort(host)
 	for i := range r.Clusters {
 		if strings.EqualFold(r.Clusters[i].Hostname, h) {
-			return &r.Clusters[i]
+			return r.Clusters[i], true
 		}
 	}
-	return nil
+	return ClusterEndpoint{}, false
 }
 
-// ByID looks up a cluster by id.
-func (r *ClusterRegistry) ByID(id ClusterId) *ClusterEndpoint {
+// ByID looks up a cluster by id. Returns a copy of the matched entry, not
+// a pointer into the live slice, for the same reason as ByHostname.
+func (r *ClusterRegistry) ByID(id ClusterId) (ClusterEndpoint, bool) {
 	for i := range r.Clusters {
 		if r.Clusters[i].Id == id {
-			return &r.Clusters[i]
+			return r.Clusters[i], true
 		}
 	}
-	return nil
+	return ClusterEndpoint{}, false
 }
 
 // ResolveAuthTokens resolves AuthTokenEnv indirections into AuthToken at

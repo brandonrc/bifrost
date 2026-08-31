@@ -32,24 +32,50 @@ func testEndpoint(id string) ClusterEndpoint {
 
 func TestHostnameLookupIgnoresPortAndCase(t *testing.T) {
 	r := testRegistry()
-	if r.ByHostname("demo.ray.example.com") == nil {
+	if _, ok := r.ByHostname("demo.ray.example.com"); !ok {
 		t.Fatal("expected match")
 	}
-	if r.ByHostname("DEMO.ray.Example.com:8484") == nil {
+	if _, ok := r.ByHostname("DEMO.ray.Example.com:8484"); !ok {
 		t.Fatal("expected case/port-insensitive match")
 	}
-	if r.ByHostname("other.example.com") != nil {
+	if _, ok := r.ByHostname("other.example.com"); ok {
 		t.Fatal("expected no match")
 	}
 }
 
 func TestLookupById(t *testing.T) {
 	r := testRegistry()
-	if r.ByID(ClusterId("demo")) == nil {
+	if _, ok := r.ByID(ClusterId("demo")); !ok {
 		t.Fatal("expected match")
 	}
-	if r.ByID(ClusterId("nope")) != nil {
+	if _, ok := r.ByID(ClusterId("nope")); ok {
 		t.Fatal("expected no match")
+	}
+}
+
+// L6/C6: ByHostname/ByID must return a copy, not a pointer into the live
+// slice — mutating the returned value must not affect the registry's
+// stored entry (in particular, must not be a way to corrupt or leak-write
+// AuthToken across lookups).
+func TestByHostnameAndByIDReturnCopiesNotAliases(t *testing.T) {
+	r := testRegistry()
+
+	byHost, ok := r.ByHostname("demo.ray.example.com")
+	if !ok {
+		t.Fatal("expected match")
+	}
+	byHost.Hostname = "mutated"
+	if r.Clusters[0].Hostname == "mutated" {
+		t.Fatal("mutating ByHostname's result mutated the registry's stored entry")
+	}
+
+	byID, ok := r.ByID(ClusterId("demo"))
+	if !ok {
+		t.Fatal("expected match")
+	}
+	byID.Hostname = "mutated"
+	if r.Clusters[0].Hostname == "mutated" {
+		t.Fatal("mutating ByID's result mutated the registry's stored entry")
 	}
 }
 
@@ -64,13 +90,13 @@ func TestIpv6HostsAreNotMangledByPortStripping(t *testing.T) {
 			},
 		},
 	}
-	if r.ByHostname("fe80::1") == nil {
+	if _, ok := r.ByHostname("fe80::1"); !ok {
 		t.Fatal("expected match")
 	}
-	if r.ByHostname("[fe80::1]:8484") == nil {
+	if _, ok := r.ByHostname("[fe80::1]:8484"); !ok {
 		t.Fatal("expected bracketed match")
 	}
-	if r.ByHostname("fe80::2") != nil {
+	if _, ok := r.ByHostname("fe80::2"); ok {
 		t.Fatal("expected no match")
 	}
 }

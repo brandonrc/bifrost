@@ -84,3 +84,25 @@ func TestApiTokenRecordNeverMarshals(t *testing.T) {
 		t.Fatal("expected json.Marshal(*ApiTokenRecord) to fail")
 	}
 }
+
+// C8: LocalRole has no documented Rust default (unlike Engine/
+// AuditDecision), so a LocalUserView with a zero-value Role must fail to
+// marshal rather than emit contract-invalid `"role":""`.
+func TestLocalUserViewRefusesToMarshalZeroValueRole(t *testing.T) {
+	v := LocalUserView{Username: "alice"} // Role left unset
+	if _, err := json.Marshal(v); err == nil {
+		t.Fatal("expected json.Marshal(LocalUserView with zero-value Role) to fail")
+	}
+}
+
+// A LocalUserView with a real Role still marshals normally.
+func TestLocalUserViewMarshalsWithRoleSet(t *testing.T) {
+	v := LocalUserView{Username: "alice", Role: LocalRoleViewer, CreatedAt: 1}
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(b), `"role":"viewer"`) {
+		t.Fatalf("expected role in JSON: %s", b)
+	}
+}
