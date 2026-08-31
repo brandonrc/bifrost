@@ -104,7 +104,9 @@ instead of skipping silently; SBOM generation added.
   k8s client wrappers (same exclusions as mobula's llvm-cov config).
 - Spec-diff check against the frozen contract (once `internal/api` exists).
 - `govulncheck` in CI.
-- No cgo anywhere (`CGO_ENABLED=0` enforced in CI build): pure-Go SQLite
+- No cgo in shipped binaries (`CGO_ENABLED=0 go build ./...` enforced as an
+  explicit CI step). Race-enabled test runs (`go test -race`) use cgo — the
+  race runtime is a test-only tool and ships nothing. Pure-Go SQLite
   (`modernc.org/sqlite`), static binary, UBI9-micro image posture inherited
   from mobula ADR-0008. FIPS variant later via `GOFIPS140` (req 18) — native,
   still no cgo; fail-closed startup check via `crypto/fips140`.
