@@ -89,6 +89,12 @@ var _ Store = (*MemoryStore)(nil)
 // --- Clusters ---
 
 func (s *MemoryStore) UpsertDesired(_ context.Context, id core.ClusterId, spec core.ClusterSpec) (uint64, error) {
+	// Deep-copy on ingress: spec is caller-owned memory (WorkerGroups,
+	// TtlSeconds/IdleTimeoutSecs/Owner pointers); storing it by shallow
+	// copy would let the caller mutate stored state after the call
+	// returns.
+	spec = cloneClusterSpec(spec)
+
 	s.clustersMu.Lock()
 	defer s.clustersMu.Unlock()
 
@@ -131,7 +137,11 @@ func (s *MemoryStore) Get(_ context.Context, id core.ClusterId) (*StoredCluster,
 	if !ok {
 		return nil, nil
 	}
-	return &c, nil
+	// Deep-copy on egress: c's Spec/pointer fields must not alias the
+	// stored map entry, or a caller mutating the returned value would
+	// mutate the store.
+	cc := cloneStoredCluster(c)
+	return &cc, nil
 }
 
 func (s *MemoryStore) List(_ context.Context) ([]StoredCluster, error) {
@@ -139,12 +149,16 @@ func (s *MemoryStore) List(_ context.Context) ([]StoredCluster, error) {
 	defer s.clustersMu.Unlock()
 	out := make([]StoredCluster, 0, len(s.clusters))
 	for _, c := range s.clusters {
-		out = append(out, c)
+		out = append(out, cloneStoredCluster(c))
 	}
 	return out, nil
 }
 
 func (s *MemoryStore) SetDesired(_ context.Context, id core.ClusterId, desired DesiredState) error {
+	if !desired.isValid() {
+		return storeErrorf("bad desired state %q", string(desired))
+	}
+
 	s.clustersMu.Lock()
 	defer s.clustersMu.Unlock()
 	c, ok := s.clusters[id]
@@ -184,7 +198,8 @@ func (s *MemoryStore) RecordObservation(_ context.Context, id core.ClusterId, ob
 	if !ok {
 		return nil
 	}
-	c.ObservedState = observed
+	// Deep-copy on ingress: observed is a caller-owned pointer.
+	c.ObservedState = clonePtr(observed)
 	// Monotonic fence: never roll the observed generation backwards (a
 	// stale-restore observation must not overwrite a newer one).
 	if observedGeneration > c.ObservedGeneration {
@@ -201,7 +216,8 @@ func (s *MemoryStore) SetCondition(_ context.Context, id core.ClusterId, conditi
 	if !ok {
 		return nil
 	}
-	c.Condition = condition
+	// Deep-copy on ingress: condition is a caller-owned pointer.
+	c.Condition = clonePtr(condition)
 	s.clusters[id] = c
 	return nil
 }
@@ -313,6 +329,9 @@ func (s *MemoryStore) ListJobs(_ context.Context) ([]core.JobRecord, error) {
 // --- Pools ---
 
 func (s *MemoryStore) UpsertPool(_ context.Context, name string, spec core.PoolSpec) (uint64, error) {
+	// Deep-copy on ingress: spec's Flavors/GpuSharing are caller-owned.
+	spec = clonePoolSpec(spec)
+
 	s.poolsMu.Lock()
 	defer s.poolsMu.Unlock()
 	existing, ok := s.pools[name]
@@ -348,7 +367,9 @@ func (s *MemoryStore) GetPool(_ context.Context, name string) (*StoredPool, erro
 	if !ok {
 		return nil, nil
 	}
-	return &p, nil
+	// Deep-copy on egress.
+	pp := cloneStoredPool(p)
+	return &pp, nil
 }
 
 func (s *MemoryStore) ListPools(_ context.Context) ([]StoredPool, error) {
@@ -356,7 +377,7 @@ func (s *MemoryStore) ListPools(_ context.Context) ([]StoredPool, error) {
 	defer s.poolsMu.Unlock()
 	out := make([]StoredPool, 0, len(s.pools))
 	for _, p := range s.pools {
-		out = append(out, p)
+		out = append(out, cloneStoredPool(p))
 	}
 	return out, nil
 }
@@ -388,6 +409,9 @@ func (s *MemoryStore) RecordPoolObservation(_ context.Context, name, observedJSO
 // --- Allocations ---
 
 func (s *MemoryStore) UpsertAllocation(_ context.Context, alloc core.AllocationSpec) error {
+	// Deep-copy on ingress: alloc's three maps are caller-owned.
+	alloc = cloneAllocationSpec(alloc)
+
 	s.allocationsMu.Lock()
 	defer s.allocationsMu.Unlock()
 	s.allocations[allocationKey{pool: alloc.Pool, project: alloc.Project}] = alloc
@@ -397,10 +421,10 @@ func (s *MemoryStore) UpsertAllocation(_ context.Context, alloc core.AllocationS
 func (s *MemoryStore) ListAllocations(_ context.Context, pool string) ([]core.AllocationSpec, error) {
 	s.allocationsMu.Lock()
 	defer s.allocationsMu.Unlock()
-	var out []core.AllocationSpec
+	out := make([]core.AllocationSpec, 0)
 	for _, a := range s.allocations {
 		if a.Pool == pool {
-			out = append(out, a)
+			out = append(out, cloneAllocationSpec(a))
 		}
 	}
 	return out, nil
@@ -429,7 +453,7 @@ func (s *MemoryStore) RecordUsageSamples(_ context.Context, samples []UsageSampl
 func (s *MemoryStore) UsageSamples(_ context.Context, project, pool *string, from, to uint64) ([]UsageSample, error) {
 	s.usageMu.Lock()
 	defer s.usageMu.Unlock()
-	var out []UsageSample
+	out := make([]UsageSample, 0)
 	for _, u := range s.usage {
 		if u.Ts < from || u.Ts > to {
 			continue
@@ -456,14 +480,16 @@ func (s *MemoryStore) GetPolicy(_ context.Context) (*StoredPolicy, error) {
 	if s.policy == nil {
 		return nil, nil
 	}
-	p := *s.policy
+	// Deep-copy on egress: Prices/Quotas/Budgets are maps.
+	p := cloneStoredPolicy(*s.policy)
 	return &p, nil
 }
 
 func (s *MemoryStore) SetPolicy(_ context.Context, policy *StoredPolicy) error {
 	s.policyMu.Lock()
 	defer s.policyMu.Unlock()
-	p := *policy
+	// Deep-copy on ingress: policy is a caller-owned pointer.
+	p := cloneStoredPolicy(*policy)
 	s.policy = &p
 	return nil
 }
@@ -474,7 +500,8 @@ func (s *MemoryStore) SeedPolicy(_ context.Context, policy *StoredPolicy) (bool,
 	if s.policy != nil {
 		return false, nil
 	}
-	p := *policy
+	// Deep-copy on ingress.
+	p := cloneStoredPolicy(*policy)
 	s.policy = &p
 	return true, nil
 }
@@ -490,7 +517,13 @@ func (s *MemoryStore) RecordAudit(_ context.Context, event *core.AuditEvent) (ui
 		prev = s.audit[n-1].ChainHash
 	}
 	chainHash := AuditChainHash(prev, event)
-	s.audit = append(s.audit, ChainedAuditRow{Seq: seq, Event: *event, ChainHash: chainHash})
+	// Deep-copy on ingress: *event is a caller-owned value whose pointer
+	// fields (Subject, Required, ...) and GrantedRoles slice still alias
+	// caller memory after a plain dereference. Storing an alias here
+	// means a later caller mutation of *event silently rewrites the
+	// stored row without touching chainHash, which VerifyAuditChain then
+	// reports as a tamper that never happened.
+	s.audit = append(s.audit, ChainedAuditRow{Seq: seq, Event: cloneAuditEvent(*event), ChainHash: chainHash})
 	return seq, nil
 }
 
@@ -511,7 +544,7 @@ func (s *MemoryStore) AuditChain(_ context.Context, fromSeq *uint64, limit uint3
 		}
 	}
 
-	var window []ChainedAuditRow
+	window := make([]ChainedAuditRow, 0)
 	for _, r := range s.audit {
 		if r.Seq < from {
 			continue
@@ -519,7 +552,9 @@ func (s *MemoryStore) AuditChain(_ context.Context, fromSeq *uint64, limit uint3
 		if uint32(len(window)) >= limit {
 			break
 		}
-		window = append(window, r)
+		// Deep-copy on egress: r.Event's pointer fields/GrantedRoles
+		// must not alias the stored row.
+		window = append(window, ChainedAuditRow{Seq: r.Seq, Event: cloneAuditEvent(r.Event), ChainHash: r.ChainHash})
 	}
 
 	return AuditChainWindow{Head: head, Rows: window}, nil
@@ -530,7 +565,7 @@ func (s *MemoryStore) ListAudit(_ context.Context, filter core.AuditFilter) ([]A
 	defer s.auditMu.Unlock()
 
 	limit := int(filter.EffectiveLimit())
-	var rows []AuditRow
+	rows := make([]AuditRow, 0)
 	for _, r := range s.audit {
 		if filter.Cursor != nil && r.Seq >= *filter.Cursor {
 			continue
@@ -538,7 +573,8 @@ func (s *MemoryStore) ListAudit(_ context.Context, filter core.AuditFilter) ([]A
 		if !filter.Matches(&r.Event) {
 			continue
 		}
-		rows = append(rows, AuditRow{Seq: r.Seq, Event: r.Event})
+		// Deep-copy on egress.
+		rows = append(rows, AuditRow{Seq: r.Seq, Event: cloneAuditEvent(r.Event)})
 	}
 	// Newest first; insertion order is ascending seq.
 	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
@@ -579,7 +615,9 @@ func (s *MemoryStore) GetLocalUser(_ context.Context, username string) (*core.Lo
 	if !ok {
 		return nil, nil
 	}
-	return &u, nil
+	// Deep-copy on egress: Email/LockedUntil are pointers.
+	uu := cloneLocalUserRecord(u)
+	return &uu, nil
 }
 
 func (s *MemoryStore) ListLocalUsers(_ context.Context) ([]core.LocalUserRecord, error) {
@@ -587,7 +625,7 @@ func (s *MemoryStore) ListLocalUsers(_ context.Context) ([]core.LocalUserRecord,
 	defer s.localUsersMu.Unlock()
 	out := make([]core.LocalUserRecord, 0, len(s.localUsers))
 	for _, u := range s.localUsers {
-		out = append(out, u)
+		out = append(out, cloneLocalUserRecord(u))
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].Username < out[j].Username
@@ -685,16 +723,18 @@ func (s *MemoryStore) GetApiTokenByPrefix(_ context.Context, prefix string) (*co
 	if !ok {
 		return nil, nil
 	}
-	return &t, nil
+	// Deep-copy on egress: LastUsedAt is a pointer.
+	tt := cloneApiTokenRecord(t)
+	return &tt, nil
 }
 
 func (s *MemoryStore) ListApiTokens(_ context.Context, username string) ([]core.ApiTokenRecord, error) {
 	s.apiTokensMu.Lock()
 	defer s.apiTokensMu.Unlock()
-	var out []core.ApiTokenRecord
+	out := make([]core.ApiTokenRecord, 0)
 	for _, t := range s.apiTokens {
 		if t.Username == username {
-			out = append(out, t)
+			out = append(out, cloneApiTokenRecord(t))
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -750,7 +790,7 @@ func (s *MemoryStore) UpsertRoleAssignment(_ context.Context, principal, role, s
 func (s *MemoryStore) ListRoleAssignments(_ context.Context, principal *string) ([]RoleAssignment, error) {
 	s.assignmentsMu.Lock()
 	defer s.assignmentsMu.Unlock()
-	var out []RoleAssignment
+	out := make([]RoleAssignment, 0)
 	for _, a := range s.assignments {
 		if principal != nil && a.Principal != *principal {
 			continue
