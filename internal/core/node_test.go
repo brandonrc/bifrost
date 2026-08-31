@@ -68,3 +68,37 @@ func TestClusterNodesShape(t *testing.T) {
 		t.Fatalf("round trip mismatch: got %#v", round)
 	}
 }
+
+// Added (not ported from Rust): fix round 1 (review finding M3). A
+// zero-value WorkerGroupNodes/ClusterNodes (nil Nodes/WorkerGroups) must
+// still marshal each as `[]`, not the Go zero value `null`, matching
+// Rust's Vec::default() serde behavior.
+func TestWorkerGroupNodesMarshalsNilNodesAsEmpty(t *testing.T) {
+	var w WorkerGroupNodes
+	b, err := json.Marshal(w)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var v map[string]any
+	if err := json.Unmarshal(b, &v); err != nil {
+		t.Fatalf("unmarshal to map: %v", err)
+	}
+	if nodes, ok := v["nodes"].([]any); !ok || len(nodes) != 0 {
+		t.Fatalf("nodes = %v, want []", v["nodes"])
+	}
+}
+
+func TestClusterNodesMarshalsNilWorkerGroupsAsEmpty(t *testing.T) {
+	var cn ClusterNodes
+	b, err := json.Marshal(cn)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var v map[string]any
+	if err := json.Unmarshal(b, &v); err != nil {
+		t.Fatalf("unmarshal to map: %v", err)
+	}
+	if wg, ok := v["worker_groups"].([]any); !ok || len(wg) != 0 {
+		t.Fatalf("worker_groups = %v, want []", v["worker_groups"])
+	}
+}

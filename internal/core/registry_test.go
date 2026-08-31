@@ -317,3 +317,22 @@ func TestTokenSourceNotesFlagPlaintextAndAcknowledgeEnv(t *testing.T) {
 		t.Fatalf("expected no notes, got %v", got)
 	}
 }
+
+// Added (not ported from Rust): fix round 1 (review finding M3). A
+// zero-value ClusterRegistry (nil Clusters) must still marshal as `[]`,
+// not the Go zero value `null`, matching Rust's Vec::default() serde
+// behavior.
+func TestClusterRegistryMarshalsNilClustersAsEmpty(t *testing.T) {
+	var r ClusterRegistry
+	b, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var v map[string]any
+	if err := json.Unmarshal(b, &v); err != nil {
+		t.Fatalf("unmarshal to map: %v", err)
+	}
+	if clusters, ok := v["clusters"].([]any); !ok || len(clusters) != 0 {
+		t.Fatalf("clusters = %v, want []", v["clusters"])
+	}
+}

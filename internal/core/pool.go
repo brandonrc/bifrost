@@ -199,6 +199,27 @@ type FlavorSpec struct {
 	Taints     []TaintSpec       `json:"taints"`
 }
 
+// flavorSpecAlias breaks the recursion MarshalJSON would otherwise cause
+// by re-entering FlavorSpec's own MarshalJSON.
+type flavorSpecAlias FlavorSpec
+
+// MarshalJSON substitutes an empty map/slice for a nil Resources,
+// NodeLabels, or Taints, mirroring Rust's Vec/HashMap ::default(), which
+// serde always writes as `{}`/`[]`, never `null`.
+func (f FlavorSpec) MarshalJSON() ([]byte, error) {
+	a := flavorSpecAlias(f)
+	if a.Resources == nil {
+		a.Resources = map[string]string{}
+	}
+	if a.NodeLabels == nil {
+		a.NodeLabels = map[string]string{}
+	}
+	if a.Taints == nil {
+		a.Taints = []TaintSpec{}
+	}
+	return json.Marshal(a)
+}
+
 // FlavorSpecErrorKind discriminates FlavorSpec.Validate failures.
 type FlavorSpecErrorKind int
 

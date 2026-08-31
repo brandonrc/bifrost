@@ -267,6 +267,31 @@ func TestTaintEffectMustBeNonEmpty(t *testing.T) {
 	}
 }
 
+// Added (not ported from Rust): fix round 1 (review finding M3). A
+// zero-value FlavorSpec (nil Resources/NodeLabels/Taints) must still
+// marshal each as `{}`/`[]`, not the Go zero value `null`, matching
+// Rust's Vec/HashMap ::default() serde behavior.
+func TestFlavorSpecMarshalsNilCollectionsAsEmpty(t *testing.T) {
+	var f FlavorSpec
+	b, err := json.Marshal(f)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var v map[string]any
+	if err := json.Unmarshal(b, &v); err != nil {
+		t.Fatalf("unmarshal to map: %v", err)
+	}
+	if resources, ok := v["resources"].(map[string]any); !ok || len(resources) != 0 {
+		t.Fatalf("resources = %v, want {}", v["resources"])
+	}
+	if labels, ok := v["node_labels"].(map[string]any); !ok || len(labels) != 0 {
+		t.Fatalf("node_labels = %v, want {}", v["node_labels"])
+	}
+	if taints, ok := v["taints"].([]any); !ok || len(taints) != 0 {
+		t.Fatalf("taints = %v, want []", v["taints"])
+	}
+}
+
 // poolSpecEqual compares two PoolSpecs by value, since maps/slices/pointers
 // prevent a plain ==.
 func poolSpecEqual(a, b PoolSpec) bool {

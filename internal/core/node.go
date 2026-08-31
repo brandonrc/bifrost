@@ -1,5 +1,7 @@
 package core
 
+import "encoding/json"
+
 // Kubernetes-sourced node view for the cluster nodes tab (api-v1.md §5.3).
 //
 // Observability only (decision D2): there is no per-node mutation anywhere
@@ -62,6 +64,20 @@ type WorkerGroupNodes struct {
 	Nodes []NodeView `json:"nodes"`
 }
 
+// workerGroupNodesAlias breaks the recursion MarshalJSON would otherwise
+// cause by re-entering WorkerGroupNodes' own MarshalJSON.
+type workerGroupNodesAlias WorkerGroupNodes
+
+// MarshalJSON substitutes an empty slice for a nil Nodes, mirroring
+// Rust's Vec::default(), which serde always writes as `[]`, never `null`.
+func (w WorkerGroupNodes) MarshalJSON() ([]byte, error) {
+	a := workerGroupNodesAlias(w)
+	if a.Nodes == nil {
+		a.Nodes = []NodeView{}
+	}
+	return json.Marshal(a)
+}
+
 // ClusterNodes is the head + per-worker-group node breakdown for one
 // cluster (api-v1.md §5.3), the body of GET /api/v1/clusters/{id}/nodes.
 type ClusterNodes struct {
@@ -73,4 +89,19 @@ type ClusterNodes struct {
 	// WorkerGroups has one entry per worker group, in the RayCluster
 	// spec's order.
 	WorkerGroups []WorkerGroupNodes `json:"worker_groups"`
+}
+
+// clusterNodesAlias breaks the recursion MarshalJSON would otherwise
+// cause by re-entering ClusterNodes' own MarshalJSON.
+type clusterNodesAlias ClusterNodes
+
+// MarshalJSON substitutes an empty slice for a nil WorkerGroups,
+// mirroring Rust's Vec::default(), which serde always writes as `[]`,
+// never `null`.
+func (c ClusterNodes) MarshalJSON() ([]byte, error) {
+	a := clusterNodesAlias(c)
+	if a.WorkerGroups == nil {
+		a.WorkerGroups = []WorkerGroupNodes{}
+	}
+	return json.Marshal(a)
 }

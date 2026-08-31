@@ -70,6 +70,20 @@ type ClusterRegistry struct {
 	Clusters []ClusterEndpoint `json:"clusters"`
 }
 
+// clusterRegistryAlias breaks the recursion MarshalJSON would otherwise
+// cause by re-entering ClusterRegistry's own MarshalJSON.
+type clusterRegistryAlias ClusterRegistry
+
+// MarshalJSON substitutes an empty slice for a nil Clusters, mirroring
+// Rust's Vec::default(), which serde always writes as `[]`, never `null`.
+func (r ClusterRegistry) MarshalJSON() ([]byte, error) {
+	a := clusterRegistryAlias(r)
+	if a.Clusters == nil {
+		a.Clusters = []ClusterEndpoint{}
+	}
+	return json.Marshal(a)
+}
+
 // String redacts every entry's auth token (see ClusterEndpoint.String).
 func (r ClusterRegistry) String() string {
 	parts := make([]string, len(r.Clusters))

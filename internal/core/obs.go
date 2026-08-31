@@ -1,5 +1,7 @@
 package core
 
+import "encoding/json"
+
 // Provider-agnostic wire types for the cluster drill-down observability
 // tabs (api-v1.md §5.3/§5.6/§5.8, Milestone C) that are NOT the node
 // breakdown (that lives in node.go):
@@ -61,6 +63,20 @@ type ClusterEvents struct {
 	// Events are the normalized events, most-recent-first, capped (see
 	// the endpoint's cap).
 	Events []ClusterEvent `json:"events"`
+}
+
+// clusterEventsAlias breaks the recursion MarshalJSON would otherwise
+// cause by re-entering ClusterEvents' own MarshalJSON.
+type clusterEventsAlias ClusterEvents
+
+// MarshalJSON substitutes an empty slice for a nil Events, mirroring
+// Rust's Vec::default(), which serde always writes as `[]`, never `null`.
+func (c ClusterEvents) MarshalJSON() ([]byte, error) {
+	a := clusterEventsAlias(c)
+	if a.Events == nil {
+		a.Events = []ClusterEvent{}
+	}
+	return json.Marshal(a)
 }
 
 // ---------------------------------------------------------------------------
@@ -129,4 +145,22 @@ type ClusterLogs struct {
 	// Truncated is true when the tail was filled (there may be older
 	// lines beyond it).
 	Truncated bool `json:"truncated"`
+}
+
+// clusterLogsAlias breaks the recursion MarshalJSON would otherwise cause
+// by re-entering ClusterLogs' own MarshalJSON.
+type clusterLogsAlias ClusterLogs
+
+// MarshalJSON substitutes an empty slice for a nil Pods or Lines,
+// mirroring Rust's Vec::default(), which serde always writes as `[]`,
+// never `null`.
+func (c ClusterLogs) MarshalJSON() ([]byte, error) {
+	a := clusterLogsAlias(c)
+	if a.Pods == nil {
+		a.Pods = []string{}
+	}
+	if a.Lines == nil {
+		a.Lines = []string{}
+	}
+	return json.Marshal(a)
 }

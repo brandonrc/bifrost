@@ -71,3 +71,40 @@ func TestClusterLogsRoundTrip(t *testing.T) {
 		t.Fatalf("round trip mismatch: got %#v", round)
 	}
 }
+
+// Added (not ported from Rust): fix round 1 (review finding M3). A
+// zero-value ClusterEvents/ClusterLogs (nil Events/Pods/Lines) must still
+// marshal each as `[]`, not the Go zero value `null`, matching Rust's
+// Vec::default() serde behavior.
+func TestClusterEventsMarshalsNilEventsAsEmpty(t *testing.T) {
+	var e ClusterEvents
+	b, err := json.Marshal(e)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var v map[string]any
+	if err := json.Unmarshal(b, &v); err != nil {
+		t.Fatalf("unmarshal to map: %v", err)
+	}
+	if events, ok := v["events"].([]any); !ok || len(events) != 0 {
+		t.Fatalf("events = %v, want []", v["events"])
+	}
+}
+
+func TestClusterLogsMarshalsNilCollectionsAsEmpty(t *testing.T) {
+	var l ClusterLogs
+	b, err := json.Marshal(l)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var v map[string]any
+	if err := json.Unmarshal(b, &v); err != nil {
+		t.Fatalf("unmarshal to map: %v", err)
+	}
+	if pods, ok := v["pods"].([]any); !ok || len(pods) != 0 {
+		t.Fatalf("pods = %v, want []", v["pods"])
+	}
+	if lines, ok := v["lines"].([]any); !ok || len(lines) != 0 {
+		t.Fatalf("lines = %v, want []", v["lines"])
+	}
+}
