@@ -132,8 +132,8 @@ type ClusterSpec struct {
 	Owner *string `json:"owner"`
 }
 
-// clusterSpecAlias breaks the recursion UnmarshalJSON would otherwise cause
-// by re-entering ClusterSpec's own UnmarshalJSON.
+// clusterSpecAlias breaks the recursion Unmarshal/MarshalJSON would
+// otherwise cause by re-entering ClusterSpec's own methods.
 type clusterSpecAlias ClusterSpec
 
 // UnmarshalJSON applies Engine's #[serde(default)] behavior: a ClusterSpec
@@ -148,6 +148,24 @@ func (c *ClusterSpec) UnmarshalJSON(data []byte) error {
 		aux.Engine = DefaultEngine
 	}
 	return nil
+}
+
+// MarshalJSON is UnmarshalJSON's symmetric counterpart: a zero-value
+// Engine (a ClusterSpec built as a Go struct literal without setting
+// Engine, never having round-tripped through UnmarshalJSON) would
+// otherwise marshal as `"engine":""`, which the frozen OpenAPI contract's
+// Engine enum schema rejects. WorkerGroups gets the same "nil is not a
+// valid Vec" treatment as AuditEvent.GrantedRoles (nil -> `[]`, never
+// `null`).
+func (c ClusterSpec) MarshalJSON() ([]byte, error) {
+	a := clusterSpecAlias(c)
+	if a.Engine == "" {
+		a.Engine = DefaultEngine
+	}
+	if a.WorkerGroups == nil {
+		a.WorkerGroups = []WorkerGroup{}
+	}
+	return json.Marshal(a)
 }
 
 // WorkerGroup is a homogeneous group of Ray worker nodes.

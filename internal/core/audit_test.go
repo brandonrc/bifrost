@@ -127,3 +127,22 @@ func TestMatchesAppliesEachCondition(t *testing.T) {
 		t.Fatal("subject filter should not match an event with no subject")
 	}
 }
+
+// Added (not ported from Rust): fix round 1 (review finding M2). A
+// zero-value AuditEvent (built as a Go struct literal without setting
+// Decision) must still marshal Decision as the documented Rust default
+// (#[default] Allow), not the Go zero value "".
+func TestAuditEventMarshalsZeroValueDecisionAsDefault(t *testing.T) {
+	var event AuditEvent
+	b, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var v map[string]any
+	if err := json.Unmarshal(b, &v); err != nil {
+		t.Fatalf("unmarshal to map: %v", err)
+	}
+	if v["decision"] != string(AuditDecisionAllow) {
+		t.Fatalf("decision = %v, want %q", v["decision"], AuditDecisionAllow)
+	}
+}

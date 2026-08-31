@@ -80,3 +80,28 @@ func TestClusterSpecEngineDefaultsToRayWhenOmitted(t *testing.T) {
 		t.Fatalf("engine = %q, want %q", spec.Engine, EngineRay)
 	}
 }
+
+// Added (not ported from Rust): fix round 1 (review finding M2). A
+// zero-value ClusterSpec (built as a Go struct literal without setting
+// Engine — there is no Rust equivalent gap, since #[serde(default)] is a
+// deserialize-only construct there too, but Rust struct literals always
+// require every field explicitly) must still marshal Engine as the
+// documented default, not the Go zero value "".
+func TestClusterSpecMarshalsZeroValueEngineAsDefault(t *testing.T) {
+	var spec ClusterSpec
+	b, err := json.Marshal(spec)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var v map[string]any
+	if err := json.Unmarshal(b, &v); err != nil {
+		t.Fatalf("unmarshal to map: %v", err)
+	}
+	if v["engine"] != string(EngineRay) {
+		t.Fatalf("engine = %v, want %q", v["engine"], EngineRay)
+	}
+	workerGroups, ok := v["worker_groups"].([]any)
+	if !ok || len(workerGroups) != 0 {
+		t.Fatalf("worker_groups = %v, want []", v["worker_groups"])
+	}
+}

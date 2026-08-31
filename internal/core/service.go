@@ -70,8 +70,8 @@ type ServiceSpec struct {
 	Upgrade        UpgradeStrategy `json:"upgrade"`
 }
 
-// serviceSpecAlias breaks the recursion UnmarshalJSON would otherwise
-// cause by re-entering ServiceSpec's own UnmarshalJSON.
+// serviceSpecAlias breaks the recursion Unmarshal/MarshalJSON would
+// otherwise cause by re-entering ServiceSpec's own methods.
 type serviceSpecAlias ServiceSpec
 
 // UnmarshalJSON applies Upgrade's #[serde(default = "default_upgrade")]
@@ -87,4 +87,16 @@ func (s *ServiceSpec) UnmarshalJSON(data []byte) error {
 		aux.Upgrade = DefaultUpgradeStrategy
 	}
 	return nil
+}
+
+// MarshalJSON is UnmarshalJSON's symmetric counterpart: a zero-value
+// Upgrade (a ServiceSpec built as a Go struct literal without setting
+// Upgrade) would otherwise marshal as `"upgrade":""`, which the frozen
+// OpenAPI contract's UpgradeStrategy enum schema rejects.
+func (s ServiceSpec) MarshalJSON() ([]byte, error) {
+	a := serviceSpecAlias(s)
+	if a.Upgrade == "" {
+		a.Upgrade = DefaultUpgradeStrategy
+	}
+	return json.Marshal(a)
 }

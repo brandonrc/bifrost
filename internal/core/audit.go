@@ -124,11 +124,18 @@ type auditEventAlias AuditEvent
 // MarshalJSON ensures GrantedRoles serializes as `[]`, never `null`,
 // mirroring Vec<String>'s #[serde(default)] behavior in the Rust
 // reference (Vec::default() is an empty vec, which serde always writes as
-// `[]`).
+// `[]`). It also fills a zero-value Decision (an AuditEvent built as a Go
+// struct literal without setting Decision) with the documented Rust
+// default (#[default] Allow) — otherwise it would marshal as
+// `"decision":""`, which the frozen OpenAPI contract's AuditDecision enum
+// schema rejects.
 func (e AuditEvent) MarshalJSON() ([]byte, error) {
 	a := auditEventAlias(e)
 	if a.GrantedRoles == nil {
 		a.GrantedRoles = []string{}
+	}
+	if a.Decision == "" {
+		a.Decision = DefaultAuditDecision
 	}
 	return json.Marshal(a)
 }

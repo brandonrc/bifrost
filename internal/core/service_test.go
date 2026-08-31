@@ -48,3 +48,22 @@ func TestUpgradeRoundTripsSnakeCase(t *testing.T) {
 		t.Fatalf("got %v, want %v", got, UpgradeStrategyCanary)
 	}
 }
+
+// Added (not ported from Rust): fix round 1 (review finding M2). A
+// zero-value ServiceSpec (built as a Go struct literal without setting
+// Upgrade) must still marshal Upgrade as the documented default, not the
+// Go zero value "".
+func TestServiceSpecMarshalsZeroValueUpgradeAsDefault(t *testing.T) {
+	var spec ServiceSpec
+	b, err := json.Marshal(spec)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var v map[string]any
+	if err := json.Unmarshal(b, &v); err != nil {
+		t.Fatalf("unmarshal to map: %v", err)
+	}
+	if v["upgrade"] != string(UpgradeStrategyCanary) {
+		t.Fatalf("upgrade = %v, want %q", v["upgrade"], UpgradeStrategyCanary)
+	}
+}
