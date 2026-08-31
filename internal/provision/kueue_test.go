@@ -2,7 +2,10 @@ package provision
 
 import (
 	"encoding/json"
+	"math"
 	"testing"
+
+	kueuev1beta2 "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 
 	"github.com/brandonrc/bifrost/internal/core"
 )
@@ -86,6 +89,27 @@ func TestCohortIsNamedAndEmpty(t *testing.T) {
 	}
 	if string(b) != "{}" {
 		t.Fatalf("spec must marshal empty, got %s", b)
+	}
+}
+
+// Status-block guard (fix round 1, MEDIUM 2): CohortFor must never
+// populate .status — it is server-owned. Unlike RayCluster/RayService
+// (whose status structs carry resource.Quantity fields that round-trip
+// with non-nil-but-zero internal state, see TestRayClusterForNeverPopulatesStatus's
+// doc comment), CohortStatus is a single pointer field, so a plain
+// zero-value comparison is exact here.
+func TestCohortForNeverPopulatesStatus(t *testing.T) {
+	c := CohortFor(testPool())
+	b, err := json.Marshal(c)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded kueuev1beta2.Cohort
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if decoded.Status.FairSharing != nil {
+		t.Fatalf("status.fairSharing = %+v, want nil", decoded.Status.FairSharing)
 	}
 }
 
@@ -256,5 +280,18 @@ func TestClusterQueueForRejectsUnparseableQuota(t *testing.T) {
 	p.Flavors[0].Resources["cpu"] = "not-a-quantity"
 	if _, err := ClusterQueueFor(p); err == nil {
 		t.Fatalf("expected an error for an unparseable quota string")
+	}
+}
+
+// Error-path coverage (fix round 1, MEDIUM 1): a non-finite
+// fair_sharing_weight (NaN/Inf) formats to a string ("NaN"/"+Inf")
+// resource.ParseQuantity rejects, and that rejection must surface as an
+// error from ClusterQueueFor rather than panicking or silently zeroing
+// the weight.
+func TestClusterQueueForRejectsNonFiniteFairSharingWeight(t *testing.T) {
+	p := testPool()
+	p.FairSharingWeight = math.NaN()
+	if _, err := ClusterQueueFor(p); err == nil {
+		t.Fatalf("expected an error for a non-finite fair_sharing_weight")
 	}
 }

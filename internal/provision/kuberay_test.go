@@ -189,6 +189,30 @@ func TestGPUWorkersGetResourceLimits(t *testing.T) {
 	}
 }
 
+// Error-path coverage (fix round 1, MEDIUM 1): an unparseable head
+// quantity must surface as an error from RayClusterFor (through
+// headGroupSpec -> podTemplate), not be silently passed through.
+func TestRayClusterForRejectsUnparseableHeadQuantity(t *testing.T) {
+	spec := testSpec(t, wg("cpu", 0, 4, 2))
+	spec.HeadCpu = "not-a-quantity"
+	if _, err := RayClusterFor("demo", spec, false, 1, nil); err == nil {
+		t.Fatalf("expected an error for an unparseable head cpu quantity")
+	}
+}
+
+// Error-path coverage (fix round 1, MEDIUM 1): an unparseable worker
+// quantity (cpu/memory/gpu) must surface as an error from RayClusterFor
+// (through workerGroupSpec -> podTemplate).
+func TestRayClusterForRejectsUnparseableWorkerQuantity(t *testing.T) {
+	g := wg("gpu", 0, 2, 1)
+	bad := "not-a-quantity"
+	g.Gpu = &bad
+	spec := testSpec(t, g)
+	if _, err := RayClusterFor("demo", spec, false, 1, nil); err == nil {
+		t.Fatalf("expected an error for an unparseable worker gpu quantity")
+	}
+}
+
 // kuberay.rs: to_raycluster_sets_suspend_false
 func TestRayClusterSetsSuspendFalse(t *testing.T) {
 	spec := testSpec(t, wg("cpu", 0, 4, 2))
@@ -198,6 +222,53 @@ func TestRayClusterSetsSuspendFalse(t *testing.T) {
 	}
 	if rc.Spec.Suspend == nil || *rc.Spec.Suspend != false {
 		t.Fatalf("suspend = %v", rc.Spec.Suspend)
+	}
+}
+
+// Status-block guard (fix round 1, MEDIUM 2): RayClusterFor must never
+// populate .status — it is server-owned (observation-first, see
+// StatusToState's doc comment). Marshals the manifest and decodes it back
+// into a fresh typed RayCluster to check the meaningful status fields
+// round-trip as zero/empty. Not a whole-struct reflect.DeepEqual against
+// RayClusterStatus{}: RayClusterStatus.DesiredCPU/Memory/GPU/TPU
+// (resource.Quantity, non-pointer, "omitempty" that can't omit a
+// non-pointer struct — see item 6 of task-5-report.md's impedance list)
+// and .Head (also a non-pointer struct) round-trip with a non-nil-but-zero
+// internal representation that isn't byte-identical to the Go zero value,
+// even though they decode back to numerically/structurally zero.
+func TestRayClusterForNeverPopulatesStatus(t *testing.T) {
+	spec := testSpec(t, wg("cpu", 0, 4, 2))
+	rc, err := RayClusterFor("demo", spec, false, 1, nil)
+	if err != nil {
+		t.Fatalf("RayClusterFor: %v", err)
+	}
+	b, err := json.Marshal(rc)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded rayv1.RayCluster
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	s := decoded.Status
+	state := s.State //nolint:staticcheck // SA1019: asserting the deprecated field stays unpopulated, same fidelity rationale as StatusToState
+	if state != "" {
+		t.Fatalf("status.state = %q, want empty", state)
+	}
+	if len(s.Conditions) != 0 {
+		t.Fatalf("status.conditions = %v, want empty", s.Conditions)
+	}
+	if s.ObservedGeneration != 0 {
+		t.Fatalf("status.observedGeneration = %d, want 0", s.ObservedGeneration)
+	}
+	if s.ReadyWorkerReplicas != 0 || s.AvailableWorkerReplicas != 0 || s.DesiredWorkerReplicas != 0 {
+		t.Fatalf("status worker replica counts must be zero, got %+v", s)
+	}
+	if s.Head != (rayv1.HeadInfo{}) {
+		t.Fatalf("status.head = %+v, want zero", s.Head)
+	}
+	if !s.DesiredCPU.IsZero() || !s.DesiredMemory.IsZero() || !s.DesiredGPU.IsZero() {
+		t.Fatalf("status desired-resource quantities must be zero, got %+v", s)
 	}
 }
 
@@ -229,19 +300,45 @@ func TestSuspendPatchFlipsOnlyTheSuspendField(t *testing.T) {
 	}
 }
 
-// kuberay.rs: owned_fingerprint_round_trips_through_the_manifest
+// kuberay.rs: owned_fingerprint_round_trips_through_the_manifest — extended
+// (fix round 1, CRITICAL) with non-canonical quantity strings. A user may
+// legally spell a quantity in a form resource.Quantity normalizes on
+// read-back ("0.5" cores == "500m", "1024Mi" == "1Gi", "2000m" == "2"); the
+// desired-side fingerprint must canonicalize the same way the manifest
+// read-back does, or these specs would show permanent, un-reconcilable
+// drift.
 func TestOwnedFingerprintRoundTripsThroughTheManifest(t *testing.T) {
-	spec := testSpec(t, wg("cpu", 0, 4, 2))
-	rc, err := RayClusterFor("demo", spec, false, 1, nil)
-	if err != nil {
-		t.Fatalf("RayClusterFor: %v", err)
+	cases := []struct {
+		name             string
+		headCpu, headMem string
+		wCpu, wMem       string
+	}{
+		{"canonical", "1", "2Gi", "1", "2Gi"},
+		{"fractional-cpu-and-binary-memory", "0.5", "1Gi", "0.5", "1Gi"},
+		{"milli-cpu-and-decimal-memory", "2000m", "1024Mi", "2000m", "1024Mi"},
+		{"fractional-cpu-1.5-and-decimal-memory", "1.5", "2048Mi", "1.5", "2048Mi"},
 	}
-	fromCR, ok := FingerprintFromRayCluster(&rc.Spec)
-	if !ok {
-		t.Fatalf("FingerprintFromRayCluster: not ok")
-	}
-	if want := OwnedSpecFingerprint(spec); want != fromCR {
-		t.Fatalf("fingerprint mismatch:\nwant %s\ngot  %s", want, fromCR)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			spec := &core.ClusterSpec{
+				Name: "demo", Project: "p", RayVersion: "2.57.0", Image: "rayproject/ray:2.57.0",
+				HeadCpu: c.headCpu, HeadMemory: c.headMem,
+				WorkerGroups: []core.WorkerGroup{
+					{Name: "cpu", Cpu: c.wCpu, Memory: c.wMem, MinReplicas: 0, MaxReplicas: 4, Replicas: 2},
+				},
+			}
+			rc, err := RayClusterFor("demo", spec, false, 1, nil)
+			if err != nil {
+				t.Fatalf("RayClusterFor: %v", err)
+			}
+			fromCR, ok := FingerprintFromRayCluster(&rc.Spec)
+			if !ok {
+				t.Fatalf("FingerprintFromRayCluster: not ok")
+			}
+			if want := OwnedSpecFingerprint(spec); want != fromCR {
+				t.Fatalf("fingerprint mismatch:\nwant %s\ngot  %s", want, fromCR)
+			}
+		})
 	}
 }
 
@@ -413,6 +510,66 @@ func TestRayServiceCanaryVsInplaceUpgradeStrategy(t *testing.T) {
 	}
 	if *inplace.Spec.UpgradeStrategy.Type != rayv1.RayServiceUpgradeNone {
 		t.Fatalf("upgrade type = %q", *inplace.Spec.UpgradeStrategy.Type)
+	}
+}
+
+// Error-path coverage (fix round 1, MEDIUM 1): an unparseable quantity
+// (head or worker) must surface as an error from RayServiceFor.
+func TestRayServiceForRejectsUnparseableQuantity(t *testing.T) {
+	svc := testServiceSpec(core.UpgradeStrategyCanary)
+	svc.WorkerCpu = "not-a-quantity"
+	if _, err := RayServiceFor("svc", svc); err == nil {
+		t.Fatalf("expected an error for an unparseable worker cpu quantity")
+	}
+}
+
+// Error-path coverage (fix round 1, MEDIUM 1): an UpgradeStrategy outside
+// the two known variants must surface as an error rather than silently
+// producing a manifest with a nil/zero upgrade type. Reachable only via a
+// Go struct literal (core.UpgradeStrategy's own UnmarshalJSON already
+// rejects unknown wire values), but RayServiceFor must still guard it,
+// since ServiceSpec values can be constructed directly in-process.
+func TestRayServiceForRejectsUnknownUpgradeStrategy(t *testing.T) {
+	svc := testServiceSpec(core.UpgradeStrategy("bogus"))
+	if _, err := RayServiceFor("svc", svc); err == nil {
+		t.Fatalf("expected an error for an unknown upgrade strategy")
+	}
+}
+
+// Status-block guard (fix round 1, MEDIUM 2): RayServiceFor must never
+// populate .status — it is server-owned. See
+// TestRayClusterForNeverPopulatesStatus's doc comment for why this checks
+// individual meaningful fields rather than a whole-struct comparison
+// against the Go zero value.
+func TestRayServiceForNeverPopulatesStatus(t *testing.T) {
+	rs, err := RayServiceFor("svc", testServiceSpec(core.UpgradeStrategyCanary))
+	if err != nil {
+		t.Fatalf("RayServiceFor: %v", err)
+	}
+	b, err := json.Marshal(rs)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded rayv1.RayService
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	s := decoded.Status
+	serviceStatus := s.ServiceStatus //nolint:staticcheck // SA1019: asserting the deprecated field stays unpopulated, same fidelity rationale as ServiceStatusToState
+	if serviceStatus != "" {
+		t.Fatalf("status.serviceStatus = %q, want empty", serviceStatus)
+	}
+	if len(s.Conditions) != 0 {
+		t.Fatalf("status.conditions = %v, want empty", s.Conditions)
+	}
+	if s.ObservedGeneration != 0 {
+		t.Fatalf("status.observedGeneration = %d, want 0", s.ObservedGeneration)
+	}
+	if s.NumServeEndpoints != 0 {
+		t.Fatalf("status.numServeEndpoints = %d, want 0", s.NumServeEndpoints)
+	}
+	if s.ActiveServiceStatus.RayClusterName != "" || s.PendingServiceStatus.RayClusterName != "" {
+		t.Fatalf("status active/pending rayClusterName must be empty, got %+v", s)
 	}
 }
 

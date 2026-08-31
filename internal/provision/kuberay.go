@@ -195,19 +195,31 @@ type fingerprintSpec struct {
 // [FingerprintFromRayCluster] project the same shape, so an out-of-band
 // edit of an owned field changes the result. Ported from
 // kuberay.rs:149-168.
+//
+// Quantity fields (Cpu/Memory/Gpu) are canonicalized through
+// [canonicalQuantity] before hashing. This is NOT in the Rust reference
+// (which hashes the raw strings, since Rust's Value passes them through
+// unparsed everywhere) — it is required here because
+// [FingerprintFromRayCluster] reads the *live* manifest back through
+// resource.Quantity.String(), which normalizes the wire form ("0.5" ->
+// "500m", "1024Mi" -> "1Gi", "2000m" -> "2"). Without canonicalizing this
+// side the same way, any spec whose author wrote a non-canonical quantity
+// string would never match its own freshly-applied manifest, and the
+// reconcile loop would treat it as permanently drifted, forever
+// re-applying (fixed in fix round 1, see task-5-report.md).
 func OwnedSpecFingerprint(spec *core.ClusterSpec) string {
 	workers := make([]fingerprintWorker, len(spec.WorkerGroups))
 	for i, g := range spec.WorkerGroups {
 		workers[i] = fingerprintWorker{
-			Name: g.Name, Cpu: g.Cpu, Memory: g.Memory, Gpu: g.Gpu,
+			Name: g.Name, Cpu: canonicalQuantity(g.Cpu), Memory: canonicalQuantity(g.Memory), Gpu: canonicalQuantityPtr(g.Gpu),
 			Min: g.MinReplicas, Max: g.MaxReplicas,
 		}
 	}
 	b, err := json.Marshal(fingerprintSpec{
 		RayVersion: spec.RayVersion,
 		Image:      spec.Image,
-		HeadCpu:    spec.HeadCpu,
-		HeadMemory: spec.HeadMemory,
+		HeadCpu:    canonicalQuantity(spec.HeadCpu),
+		HeadMemory: canonicalQuantity(spec.HeadMemory),
 		Workers:    workers,
 	})
 	if err != nil {
@@ -216,6 +228,33 @@ func OwnedSpecFingerprint(spec *core.ClusterSpec) string {
 		panic(fmt.Sprintf("provision: marshaling fingerprint: %v", err))
 	}
 	return string(b)
+}
+
+// canonicalQuantity parses s as a Kubernetes resource.Quantity and returns
+// its canonical string form (matching what resource.Quantity.String()
+// produces when read back off a live manifest, see [containerResources]).
+// Falls back to s unchanged when it doesn't parse as a quantity —
+// deliberately no error return: this is a hashing input, not a validated
+// construction path (that validation already happened, or will fail
+// loudly, in [podTemplate]/[RayClusterFor]), so a fingerprint over the raw
+// string is still well-defined and simply won't match a canonicalized
+// live read-back for that one malformed field.
+func canonicalQuantity(s string) string {
+	q, err := resource.ParseQuantity(s)
+	if err != nil {
+		return s
+	}
+	return q.String()
+}
+
+// canonicalQuantityPtr is [canonicalQuantity] lifted over the optional GPU
+// quantity string.
+func canonicalQuantityPtr(s *string) *string {
+	if s == nil {
+		return nil
+	}
+	c := canonicalQuantity(*s)
+	return &c
 }
 
 // FingerprintFromRayCluster recomputes the owned-field fingerprint from a
