@@ -22,3 +22,8 @@ linters:
               desc: "core/policy are I/O-free"
             - pkg: "database/sql"
               desc: "core/policy are I/O-free"
+        apitest-test-only:
+          files: ["!$test"]
+          deny:
+            - pkg: "github.com/brandonrc/bifrost/internal/api/apitest"
+              desc: "apitest is a dev-mode auth bypass (mobula-api #45); import it only from _test.go files"
