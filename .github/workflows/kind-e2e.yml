@@ -1,0 +1,55 @@
+name: kind-e2e
+
+# Provisions a real RayCluster through Bifrost's live Kubernetes client
+# (internal/provision/live) on a kind cluster with the KubeRay operator
+# installed. Heavy (image pulls) and needs a real cluster, so it is
+# disabled by default: workflow_dispatch only, plus a weekly schedule —
+# mirrors mobula's kuberay-e2e.yml weekly job. Deliberately does NOT
+# trigger on push or pull_request (Wave 1 Task 6: no live-cluster CI in
+# this wave).
+on:
+  schedule:
+    - cron: "37 6 * * 1" # Mondays 06:37 UTC
+  workflow_dispatch:
+
+env:
+  CGO_ENABLED: "1"
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: bifrost-e2e
+
+      - name: Install the KubeRay operator
+        run: |
+          helm repo add kuberay https://ray-project.github.io/kuberay-helm/
+          helm repo update
+          helm install kuberay-operator kuberay/kuberay-operator \
+            --version 1.4.0 --wait --timeout 5m
+          kubectl wait --for=condition=Available deploy/kuberay-operator --timeout=180s
+
+      - name: Provision -> observe -> terminate through Bifrost's live client
+        env:
+          BIFROST_E2E_NAMESPACE: default
+        run: go test -tags=e2e -run TestE2E -v -timeout 15m ./internal/provision/live/...
+
+      - name: Diagnostics
+        if: always()
+        run: |
+          kubectl get rayclusters -o wide || true
+          kubectl get pods -o wide || true
+          kubectl describe rayclusters || true
+          echo "=== head pod describe ==="
+          kubectl describe pod -l ray.io/node-type=head || true
+          echo "=== head pod logs (current) ==="
+          kubectl logs -l ray.io/node-type=head --tail=100 || true
+          echo "=== head pod logs (previous, if crashed) ==="
+          kubectl logs -l ray.io/node-type=head --previous --tail=100 || true
