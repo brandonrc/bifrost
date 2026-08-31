@@ -207,6 +207,25 @@ func cloneApiTokenRecord(t core.ApiTokenRecord) core.ApiTokenRecord {
 	return t
 }
 
+// cloneJobRecord deep-copies a core.JobRecord's DurationSecs pointer.
+func cloneJobRecord(j core.JobRecord) core.JobRecord {
+	j.DurationSecs = clonePtr(j.DurationSecs)
+	return j
+}
+
+// cloneIntentRecord deep-copies an IntentRecord's ResponseJSON/CompletedAt
+// pointers. Note: CompleteIntent itself needs no ingress clone — it takes
+// responseJSON by value (string) and computes CompletedAt from a local
+// NowUnix() call, so the pointers it stores are already self-owned, never
+// aliasing a caller's memory. This clone exists for GetIntent's egress
+// side: the map lookup there returns a shallow copy whose ResponseJSON/
+// CompletedAt pointers still alias the stored record's.
+func cloneIntentRecord(r IntentRecord) IntentRecord {
+	r.ResponseJSON = clonePtr(r.ResponseJSON)
+	r.CompletedAt = clonePtr(r.CompletedAt)
+	return r
+}
+
 // cloneStoredCluster deep-copies a StoredCluster's Spec plus its
 // ObservedState/Condition/TerminatedAt pointers.
 func cloneStoredCluster(c StoredCluster) StoredCluster {

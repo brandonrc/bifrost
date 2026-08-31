@@ -266,6 +266,15 @@ func (s *MemoryStore) BeginIntent(_ context.Context, key, fingerprint string) (I
 	}
 }
 
+// CompleteIntent reviewed for the same aliasing class as GetIntent/
+// RecordJob/etc. (round 2): no fix needed here. responseJSON is a
+// by-value string parameter — &responseJSON takes the address of this
+// call's own local copy, not the caller's variable — and completedAt is
+// a freshly computed local. Both pointers this method stores are
+// already self-owned; nothing here can alias caller memory. (GetIntent
+// still needs cloneIntentRecord on its egress path, since its map
+// lookup returns a shallow copy of this method's already-safe pointers,
+// which then alias the *store's* copy.)
 func (s *MemoryStore) CompleteIntent(_ context.Context, key, responseJSON string) error {
 	s.intentsMu.Lock()
 	defer s.intentsMu.Unlock()
@@ -288,7 +297,9 @@ func (s *MemoryStore) GetIntent(_ context.Context, key string) (*IntentRecord, e
 	if !ok {
 		return nil, nil
 	}
-	return &rec, nil
+	// Deep-copy on egress: ResponseJSON/CompletedAt are pointers.
+	rr := cloneIntentRecord(rec)
+	return &rr, nil
 }
 
 func (s *MemoryStore) ReapIntents(_ context.Context, appliedBefore uint64) (uint64, error) {
@@ -307,6 +318,9 @@ func (s *MemoryStore) ReapIntents(_ context.Context, appliedBefore uint64) (uint
 // --- Jobs ---
 
 func (s *MemoryStore) RecordJob(_ context.Context, job core.JobRecord) error {
+	// Deep-copy on ingress: job.DurationSecs is a caller-owned pointer.
+	job = cloneJobRecord(job)
+
 	s.jobsMu.Lock()
 	defer s.jobsMu.Unlock()
 	s.jobs[job.Id] = job
@@ -318,7 +332,7 @@ func (s *MemoryStore) ListJobs(_ context.Context) ([]core.JobRecord, error) {
 	defer s.jobsMu.Unlock()
 	out := make([]core.JobRecord, 0, len(s.jobs))
 	for _, j := range s.jobs {
-		out = append(out, j)
+		out = append(out, cloneJobRecord(j))
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		return out[i].SubmittedAt > out[j].SubmittedAt
@@ -599,8 +613,9 @@ func (s *MemoryStore) CreateLocalUser(_ context.Context, username string, email 
 		return storeErrorf("local user %s already exists", username)
 	}
 	s.localUsers[username] = core.LocalUserRecord{
-		Username:     username,
-		Email:        email,
+		Username: username,
+		// Deep-copy on ingress: email is a caller-owned pointer.
+		Email:        clonePtr(email),
 		PasswordHash: passwordHash,
 		Role:         role,
 		CreatedAt:    NowUnix(),
@@ -677,7 +692,8 @@ func (s *MemoryStore) SetLoginLockout(_ context.Context, username string, failed
 		return storeErrorf("no such local user %s", username)
 	}
 	u.FailedLogins = failedLogins
-	u.LockedUntil = lockedUntil
+	// Deep-copy on ingress: lockedUntil is a caller-owned pointer.
+	u.LockedUntil = clonePtr(lockedUntil)
 	s.localUsers[username] = u
 	return nil
 }
@@ -712,7 +728,8 @@ func (s *MemoryStore) CreateApiToken(_ context.Context, record core.ApiTokenReco
 	if _, ok := s.apiTokens[record.Prefix]; ok {
 		return storeErrorf("api token prefix %s already exists", record.Prefix)
 	}
-	s.apiTokens[record.Prefix] = record
+	// Deep-copy on ingress: record.LastUsedAt is a caller-owned pointer.
+	s.apiTokens[record.Prefix] = cloneApiTokenRecord(record)
 	return nil
 }
 
