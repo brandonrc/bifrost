@@ -18,27 +18,36 @@
 // subtest — see the task report's parity table for the full Rust name
 // -> Go subtest mapping.
 //
-// Three scenarios in store.rs are deliberately NOT ported here:
-//   - sqlite_audit_chain_backfills_pre_migration_rows /
-//     postgres_audit_chain_backfills_pre_migration_rows: legacy-chain
-//     migration tests. ADR-0004's ruling is that no legacy Bifrost audit
-//     chains exist, so there is no migration path to test.
-//   - concurrent_distinct_upserts_do_not_collapse_generation /
-//     postgres_concurrent_distinct_upserts_do_not_collapse_generation:
+// Six scenarios in store.rs are deliberately NOT ported here, in four
+// groups (see the task report's table for the authoritative list):
+//   - Legacy-chain migration backfill
+//     (sqlite_audit_chain_backfills_pre_migration_rows,
+//     postgres_audit_chain_backfills_pre_migration_rows): ADR-0004's
+//     ruling is that no legacy Bifrost audit chains exist, so there is
+//     no migration path to test.
+//   - Concurrent-distinct-upserts generation collapse
+//     (concurrent_distinct_upserts_do_not_collapse_generation,
+//     postgres_concurrent_distinct_upserts_do_not_collapse_generation):
 //     exercise a specific backend's transaction-serialization strategy
 //     (SQLite's BEGIN IMMEDIATE / Postgres's advisory lock), not
 //     Store-interface-level behavior — the Rust reference's own comment
 //     notes its in-memory store "can't race" here (max_connections=1).
-//     These belong in Tasks 3-4's own backend-specific test files.
-//   - sqlite_persists_across_reopen: durability-across-process-restart is
-//     meaningless for an in-memory store; also a backend-specific test
-//     for Tasks 3-4.
+//   - Concurrent audit-chain appends
+//     (postgres_concurrent_audit_appends_keep_one_chain): same class,
+//     Postgres's advisory-lock serialization of concurrent record_audit
+//     calls specifically.
+//   - SQLite persistence across reopen (sqlite_persists_across_reopen):
+//     durability-across-process-restart is meaningless for an in-memory
+//     store.
+//
+// All six belong in Tasks 3-4's own backend-specific test files.
 package storetest
 
 import (
 	"context"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/brandonrc/bifrost/internal/controller"
@@ -534,6 +543,9 @@ func runPoolConformance(t *testing.T, store controller.Store) {
 		if err == nil {
 			t.Fatal("expected an error deleting a missing pool")
 		}
+		if !strings.Contains(err.Error(), "no such pool ghost") {
+			t.Fatalf("error = %q, want it to contain %q", err.Error(), "no such pool ghost")
+		}
 	})
 
 	t.Run("AllocationUpsertListDeleteScopedPerPool", func(t *testing.T) {
@@ -584,8 +596,12 @@ func runPoolConformance(t *testing.T, store controller.Store) {
 		if len(remaining) != 1 || remaining[0].Project != "proj-b" {
 			t.Fatalf("remaining = %+v, want one row proj-b", remaining)
 		}
-		if err := store.DeleteAllocation(ctx, "gpu", "proj-a"); err == nil {
+		err = store.DeleteAllocation(ctx, "gpu", "proj-a")
+		if err == nil {
 			t.Fatal("expected an error deleting an already-deleted allocation")
+		}
+		if !strings.Contains(err.Error(), "no such allocation gpu/proj-a") {
+			t.Fatalf("error = %q, want it to contain %q", err.Error(), "no such allocation gpu/proj-a")
 		}
 	})
 
@@ -1251,8 +1267,12 @@ func runAssignmentConformance(t *testing.T, store controller.Store) {
 		if err != nil || len(alice) != 1 {
 			t.Fatalf("list alice after delete: len=%d err=%v, want 1, nil", len(alice), err)
 		}
-		if err := store.DeleteRoleAssignment(ctx, "alice", "viewer", "*"); err == nil {
+		err = store.DeleteRoleAssignment(ctx, "alice", "viewer", "*")
+		if err == nil {
 			t.Fatal("expected an error deleting an already-deleted assignment")
+		}
+		if !strings.Contains(err.Error(), "no such assignment alice/viewer/*") {
+			t.Fatalf("error = %q, want it to contain %q", err.Error(), "no such assignment alice/viewer/*")
 		}
 	})
 }
