@@ -102,9 +102,9 @@ func ParseQuantity(s string) (float64, error) {
 	case strings.HasSuffix(s, "Ki"):
 		num, mult = strings.TrimSuffix(s, "Ki"), ki
 	case strings.HasSuffix(s, "Mi"):
-		num, mult = strings.TrimSuffix(s, "Mi"), math.Pow(ki, 2)
+		num, mult = strings.TrimSuffix(s, "Mi"), ki*ki
 	case strings.HasSuffix(s, "Gi"):
-		num, mult = strings.TrimSuffix(s, "Gi"), math.Pow(ki, 3)
+		num, mult = strings.TrimSuffix(s, "Gi"), ki*ki*ki
 	case strings.HasSuffix(s, "Ti"):
 		num, mult = strings.TrimSuffix(s, "Ti"), math.Pow(ki, 4)
 	case strings.HasSuffix(s, "Pi"):
