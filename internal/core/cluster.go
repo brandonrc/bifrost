@@ -269,14 +269,48 @@ func (d *DriftCondition) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// TransitionError reports an illegal cluster state transition.
+// TransitionError reports an illegal cluster state transition. A value
+// type, like the package's other nine error types (mirrors Rust's
+// thiserror struct-error, which is Copy/Eq over plain fields, not a
+// pointer).
 type TransitionError struct {
 	From ClusterState
 	To   ClusterState
 }
 
-func (e *TransitionError) Error() string {
-	return fmt.Sprintf("invalid cluster state transition: %s -> %s", e.From, e.To)
+// clusterStateRustDebug renders a ClusterState the way Rust's derived
+// Debug renders the enum: the PascalCase variant name (Pending, Running,
+// …), not the snake_case wire value ClusterState.String() returns.
+// TransitionError's Rust Display impl is `{from:?} -> {to:?}`, i.e. Debug
+// formatting of the enum, so message fidelity requires this instead of the
+// wire form.
+func clusterStateRustDebug(s ClusterState) string {
+	switch s {
+	case ClusterStatePending:
+		return "Pending"
+	case ClusterStateProvisioning:
+		return "Provisioning"
+	case ClusterStateRunning:
+		return "Running"
+	case ClusterStateDegraded:
+		return "Degraded"
+	case ClusterStateUpdating:
+		return "Updating"
+	case ClusterStateSuspending:
+		return "Suspending"
+	case ClusterStateSuspended:
+		return "Suspended"
+	case ClusterStateTerminating:
+		return "Terminating"
+	case ClusterStateTerminated:
+		return "Terminated"
+	}
+	return string(s)
+}
+
+func (e TransitionError) Error() string {
+	return fmt.Sprintf("invalid cluster state transition: %s -> %s",
+		clusterStateRustDebug(e.From), clusterStateRustDebug(e.To))
 }
 
 // CanTransitionTo reports whether self -> next is a legal transition for a
@@ -356,7 +390,7 @@ func (s ClusterState) Transition(to ClusterState) (ClusterState, error) {
 	if s.CanTransitionTo(to) {
 		return to, nil
 	}
-	return s, &TransitionError{From: s, To: to}
+	return s, TransitionError{From: s, To: to}
 }
 
 // IsTerminal reports whether the state never leaves via reconciliation.

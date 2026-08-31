@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 )
 
@@ -99,6 +100,60 @@ func TestFlavorErrorsCarryFlavorContext(t *testing.T) {
 	}
 	if got := p.Validate(); got != want {
 		t.Fatalf("got %#v, want %#v", got, want)
+	}
+}
+
+// C7: PoolSpecError.Unwrap() must expose the wrapped FlavorSpecError so
+// errors.As reaches it, mirroring Rust's thiserror #[source] chain
+// (mobula-core/src/pool.rs).
+func TestPoolSpecErrorUnwrapReachesFlavorSpecError(t *testing.T) {
+	p := testPool()
+	p.Flavors[0].Name = "BAD_NAME"
+	err := p.Validate()
+	var fse FlavorSpecError
+	if !errors.As(err, &fse) {
+		t.Fatalf("errors.As(%v, &FlavorSpecError{}) = false, want true", err)
+	}
+	if fse.Kind != FlavorSpecErrInvalidName || fse.Name != "BAD_NAME" {
+		t.Fatalf("unwrapped FlavorSpecError = %#v, want InvalidName(%q)", fse, "BAD_NAME")
+	}
+}
+
+// C7: FlavorSpecError.Unwrap() must expose the wrapped TaintSpecError, and
+// the chain must reach all the way from PoolSpecError through
+// FlavorSpecError to TaintSpecError via errors.As.
+func TestPoolSpecErrorUnwrapReachesTaintSpecError(t *testing.T) {
+	p := testPool()
+	p.Flavors[0].Taints = append(p.Flavors[0].Taints, TaintSpec{
+		Key:    "nvidia.com/gpu",
+		Value:  "present",
+		Effect: "",
+	})
+	err := p.Validate()
+
+	var fse FlavorSpecError
+	if !errors.As(err, &fse) {
+		t.Fatalf("errors.As(%v, &FlavorSpecError{}) = false, want true", err)
+	}
+	if fse.Kind != FlavorSpecErrTaint {
+		t.Fatalf("unwrapped FlavorSpecError.Kind = %v, want FlavorSpecErrTaint", fse.Kind)
+	}
+
+	var tse TaintSpecError
+	if !errors.As(err, &tse) {
+		t.Fatalf("errors.As(%v, &TaintSpecError{}) = false, want true (full PoolSpecError -> FlavorSpecError -> TaintSpecError chain)", err)
+	}
+	if tse != ErrTaintEmptyEffect {
+		t.Fatalf("unwrapped TaintSpecError = %v, want %v", tse, ErrTaintEmptyEffect)
+	}
+}
+
+// C7: PoolSpecError variants other than Flavor carry no source and must
+// not unwrap to a bogus zero-value FlavorSpecError.
+func TestPoolSpecErrorUnwrapNilForNonFlavorVariant(t *testing.T) {
+	err := PoolSpecError{Kind: PoolSpecErrNoFlavors}
+	if unwrapped := err.Unwrap(); unwrapped != nil {
+		t.Fatalf("Unwrap() = %v, want nil", unwrapped)
 	}
 }
 

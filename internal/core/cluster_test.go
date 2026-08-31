@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 )
 
@@ -42,9 +43,9 @@ func TestTerminatedIsTerminal(t *testing.T) {
 		ClusterStateTerminating,
 	} {
 		_, err := ClusterStateTerminated.Transition(target)
-		want := &TransitionError{From: ClusterStateTerminated, To: target}
-		got, ok := err.(*TransitionError)
-		if !ok || *got != *want {
+		want := TransitionError{From: ClusterStateTerminated, To: target}
+		got, ok := err.(TransitionError)
+		if !ok || got != want {
 			t.Fatalf("Terminated.Transition(%s) = %v, want %v", target, err, want)
 		}
 	}
@@ -58,6 +59,29 @@ func TestNoResumeWithoutReprovision(t *testing.T) {
 	}
 	if !ClusterStateSuspended.CanTransitionTo(ClusterStateProvisioning) {
 		t.Fatal("Suspended must be able to transition to Provisioning")
+	}
+}
+
+// C7/D: TransitionError.Error() must match Rust's Display impl exactly —
+// `#[error("invalid cluster state transition: {from:?} -> {to:?}")]` uses
+// Debug formatting of the ClusterState enum, i.e. its PascalCase variant
+// name (Terminated, Pending, …), not the snake_case wire value.
+func TestTransitionErrorMessageMatchesRustDisplay(t *testing.T) {
+	err := TransitionError{From: ClusterStateTerminated, To: ClusterStatePending}
+	want := "invalid cluster state transition: Terminated -> Pending"
+	if got := err.Error(); got != want {
+		t.Fatalf("Error() = %q, want %q", got, want)
+	}
+}
+
+// TransitionError is a value type (like the package's other nine error
+// types), not a pointer — errors.As must bind to TransitionError, not
+// *TransitionError.
+func TestTransitionErrorIsValueType(t *testing.T) {
+	_, err := ClusterStateTerminated.Transition(ClusterStatePending)
+	var te TransitionError
+	if !errors.As(err, &te) {
+		t.Fatalf("errors.As(%v, &TransitionError{}) = false, want true", err)
 	}
 }
 

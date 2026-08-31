@@ -167,6 +167,17 @@ func (e PoolSpecError) Error() string {
 	return "pool spec error"
 }
 
+// Unwrap exposes the wrapped FlavorSpecError for the Flavor variant, so
+// errors.As/errors.Is can reach it — mirroring Rust's thiserror
+// `#[source]` field on PoolSpecError::Flavor (mobula-core/src/pool.rs).
+// Every other variant carries no source and unwraps to nil.
+func (e PoolSpecError) Unwrap() error {
+	if e.Kind != PoolSpecErrFlavor {
+		return nil
+	}
+	return e.Source
+}
+
 // Validate checks a PoolSpec's shape: names, flavor uniqueness, and the
 // fair-sharing weight. It never validates quantity syntax (that is the
 // policy package's job).
@@ -263,6 +274,17 @@ func (e FlavorSpecError) Error() string {
 		return fmt.Sprintf("taint %q: %s", e.Key, e.TaintSource.Error())
 	}
 	return "flavor spec error"
+}
+
+// Unwrap exposes the wrapped TaintSpecError for the Taint variant, so
+// errors.As/errors.Is can reach it — mirroring Rust's thiserror
+// `#[source]` field on FlavorSpecError::Taint (mobula-core/src/pool.rs).
+// Every other variant carries no source and unwraps to nil.
+func (e FlavorSpecError) Unwrap() error {
+	if e.Kind != FlavorSpecErrTaint {
+		return nil
+	}
+	return e.TaintSource
 }
 
 // Validate checks a FlavorSpec's shape.
