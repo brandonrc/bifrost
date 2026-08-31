@@ -114,14 +114,25 @@ func TestPostgresStoreConformance(t *testing.T) {
 // (tests/store.rs:1385-1407), one of the two scenarios storetest excludes
 // because it is Postgres's own advisory-lock transaction-serialization
 // strategy under test, not Store-interface behavior: #42's Postgres side —
-// two concurrent upserts of DIFFERENT specs on the same cluster id must
-// produce two distinct generation bumps (1 -> 3), never collapse into one
-// (both transactions reading the pre-bump generation before either
-// commits). The pg_advisory_xact_lock(hashtext($1)) in
-// PostgresStore.UpsertDesired (store_postgres.go) is what this test
+// N concurrent upserts of N PAIRWISE DISTINCT specs on the same cluster id
+// must each produce their own generation bump (1 -> 1+N), never collapse
+// two of them into one (two transactions reading the same pre-bump
+// generation before either commits). The pg_advisory_xact_lock(hashtext($1))
+// in PostgresStore.UpsertDesired (store_postgres.go) is what this test
 // exercises: it serializes across connections, unlike SqliteStore's
 // single-process BEGIN IMMEDIATE, so this is the property that actually
 // matters for a multi-replica Bifrost deployment.
+//
+// N=20 with a close(start)-channel barrier (not just "launch 2 goroutines
+// and wg.Wait") so every upsert actually lands in the microseconds-wide
+// contention window: a 2-goroutine version can pass even with the
+// advisory lock removed entirely, because the two Begin/Lock/Read calls
+// rarely interleave tightly enough to race — fix-round-1 review measured
+// the lockless build only collapsing at ~20-way contention. Every one of
+// the N specs differs from the seed and from every other (replicas
+// 2..N+1), so the final generation is deterministically 1+N regardless of
+// commit order — no flake window in the assertion itself, only in whether
+// the lock does its job.
 func TestPostgresConcurrentDistinctUpsertsDoNotCollapseGeneration(t *testing.T) {
 	url := postgresTestURL(t)
 	store := newTestPostgresStore(t, url)
@@ -132,17 +143,20 @@ func TestPostgresConcurrentDistinctUpsertsDoNotCollapseGeneration(t *testing.T) 
 		t.Fatalf("seed upsert (gen 1): %v", err)
 	}
 
+	const n = 20
+	start := make(chan struct{})
 	var wg sync.WaitGroup
-	errs := make([]error, 2)
-	replicas := []uint32{2, 5}
-	for i := range 2 {
+	errs := make([]error, n)
+	for i := range n {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_, err := store.UpsertDesired(ctx, id, postgresSpecFixture(replicas[i]))
+			<-start
+			_, err := store.UpsertDesired(ctx, id, postgresSpecFixture(uint32(i+2)))
 			errs[i] = err
 		}(i)
 	}
+	close(start) // release all N goroutines at once, maximizing contention
 	wg.Wait()
 
 	for i, err := range errs {
@@ -155,8 +169,9 @@ func TestPostgresConcurrentDistinctUpsertsDoNotCollapseGeneration(t *testing.T) 
 	if err != nil || got == nil {
 		t.Fatalf("get: %v %v", got, err)
 	}
-	if got.Generation != 3 {
-		t.Fatalf("Generation = %d, want 3 (two distinct concurrent spec changes must yield two generation bumps, not a collapse)", got.Generation)
+	want := uint64(1 + n)
+	if got.Generation != want {
+		t.Fatalf("Generation = %d, want %d (every distinct concurrent spec change must yield its own generation bump, not a collapse)", got.Generation, want)
 	}
 }
 
