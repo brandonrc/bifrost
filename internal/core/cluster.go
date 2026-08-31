@@ -274,50 +274,58 @@ func (s ClusterState) CanTransitionTo(next ClusterState) bool {
 		switch next {
 		case ClusterStateProvisioning, ClusterStateTerminating:
 			return true
+		default: // membership test; the outer switch is the exhaustive state guard
+			return false
 		}
-		return false
 	case ClusterStateProvisioning:
 		switch next {
 		case ClusterStateRunning, ClusterStateDegraded, ClusterStateTerminating:
 			return true
+		default: // membership test; the outer switch is the exhaustive state guard
+			return false
 		}
-		return false
 	case ClusterStateRunning:
 		switch next {
 		case ClusterStateDegraded, ClusterStateUpdating, ClusterStateSuspending, ClusterStateTerminating:
 			return true
+		default: // membership test; the outer switch is the exhaustive state guard
+			return false
 		}
-		return false
 	case ClusterStateDegraded:
 		switch next {
 		case ClusterStateRunning, ClusterStateTerminating:
 			return true
+		default: // membership test; the outer switch is the exhaustive state guard
+			return false
 		}
-		return false
 	case ClusterStateUpdating:
 		switch next {
 		case ClusterStateRunning, ClusterStateDegraded:
 			return true
+		default: // membership test; the outer switch is the exhaustive state guard
+			return false
 		}
-		return false
 	case ClusterStateSuspending:
 		switch next {
 		case ClusterStateSuspended:
 			return true
+		default: // membership test; the outer switch is the exhaustive state guard
+			return false
 		}
-		return false
 	case ClusterStateSuspended:
 		switch next {
 		case ClusterStateProvisioning, ClusterStateTerminating:
 			return true
+		default: // membership test; the outer switch is the exhaustive state guard
+			return false
 		}
-		return false
 	case ClusterStateTerminating:
 		switch next {
 		case ClusterStateTerminated:
 			return true
+		default: // membership test; the outer switch is the exhaustive state guard
+			return false
 		}
-		return false
 	case ClusterStateTerminated:
 		return false
 	}

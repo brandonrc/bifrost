@@ -170,7 +170,10 @@ func (p *PoolSpec) Validate() error {
 	}
 	for i, f := range p.Flavors {
 		if err := f.Validate(); err != nil {
-			fse := err.(FlavorSpecError)
+			fse, ok := err.(FlavorSpecError)
+			if !ok {
+				return fmt.Errorf("core: unexpected error type from FlavorSpec.Validate: %w", err)
+			}
 			return PoolSpecError{Kind: PoolSpecErrFlavor, Flavor: f.Name, Source: fse}
 		}
 		for _, o := range p.Flavors[:i] {
@@ -238,7 +241,11 @@ func (f *FlavorSpec) Validate() error {
 	}
 	for _, t := range f.Taints {
 		if err := t.Validate(); err != nil {
-			return FlavorSpecError{Kind: FlavorSpecErrTaint, Key: t.Key, TaintSource: err.(TaintSpecError)}
+			tse, ok := err.(TaintSpecError)
+			if !ok {
+				return fmt.Errorf("core: unexpected error type from TaintSpec.Validate: %w", err)
+			}
+			return FlavorSpecError{Kind: FlavorSpecErrTaint, Key: t.Key, TaintSource: tse}
 		}
 	}
 	return nil
