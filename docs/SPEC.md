@@ -101,12 +101,17 @@ out the info block and identity strings before diffing.
   switches), `depguard` (import boundaries: core/policy ban k8s+DB imports),
   `govet`, `staticcheck`. nilaway if integration is practical.
 - Coverage gate: a ratcheting `scripts/coverage-gate.sh` floor (`COVERAGE_THRESHOLD`,
-  currently 75%, raised as coverage grows) targeting 90% (mobula's bar) as
+  currently 80%, raised as coverage grows) targeting 90% (mobula's bar) as
   the eventual steady state. `COVERAGE_EXCLUDE` drops `cmd/` main wiring and
   `internal/provision/live` (the future k8s client wrappers) from the total
   before the gate is computed — same exclusions as mobula's llvm-cov config,
   applied here as a coverprofile filter rather than an instrumentation-time
-  exclude.
+  exclude. `internal/controller/storetest` (test-support code whose coverage
+  worsens as the conformance suite gets more thorough — a T2 review finding)
+  and `internal/api/zz_generated_api.go` (oapi-codegen output, regenerated
+  verbatim from the frozen contract and never hand-edited; the CI spec-diff
+  step is its correctness gate, not this one) are excluded for the same
+  reason: none of the three is meaningfully unit-testable hand-written logic.
 - Spec-diff check against the frozen contract (once `internal/api` exists).
 - `govulncheck` in CI.
 - No cgo in shipped binaries (`CGO_ENABLED=0 go build ./...` enforced as an
