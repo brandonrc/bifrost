@@ -180,8 +180,9 @@ func ValidScope(scope string) bool {
 		return false
 	}
 	for _, c := range name {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
-			c == '-' || c == '_' || c == '.' || c == '/') {
+		allowed := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
+			c == '-' || c == '_' || c == '.' || c == '/'
+		if !allowed {
 			return false
 		}
 	}

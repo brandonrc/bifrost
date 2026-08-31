@@ -21,7 +21,7 @@ func testMappings() RoleMappings {
 // Port of role_permission_sets_by_target (lib.rs:721-770).
 func TestRolePermissionSetsByTarget(t *testing.T) {
 	// Admin: everything.
-	if !(RoleAdmin.Grants(Admin, TargetCluster) && RoleAdmin.Grants(Write, TargetJob)) {
+	if !RoleAdmin.Grants(Admin, TargetCluster) || !RoleAdmin.Grants(Write, TargetJob) {
 		t.Fatal("admin should grant everything")
 	}
 	if !RoleAdmin.Grants(Read, TargetAudit) {
@@ -70,7 +70,7 @@ func TestRolePermissionSetsByTarget(t *testing.T) {
 	if RoleOperator.Grants(Delete, TargetPool) {
 		t.Fatal("operator should not delete pools")
 	}
-	if !(RoleAdmin.Grants(Write, TargetPool) && RoleAdmin.Grants(Delete, TargetPool)) {
+	if !RoleAdmin.Grants(Write, TargetPool) || !RoleAdmin.Grants(Delete, TargetPool) {
 		t.Fatal("admin should write and delete pools")
 	}
 	if !RoleViewer.Grants(Read, TargetPool) {
