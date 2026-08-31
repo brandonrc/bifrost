@@ -30,7 +30,7 @@ func IsK8sName(s string) bool {
 	}
 	for i := 0; i < len(s); i++ {
 		b := s[i]
-		if !(b >= 'a' && b <= 'z' || b >= '0' && b <= '9' || b == '-' || b == '.') {
+		if (b < 'a' || b > 'z') && (b < '0' || b > '9') && b != '-' && b != '.' {
 			return false
 		}
 	}

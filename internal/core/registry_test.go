@@ -2,7 +2,6 @@ package core
 
 import (
 	"encoding/json"
-	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -217,11 +216,10 @@ func TestAuthTokenEnvSerializesButTokenNeverDoes(t *testing.T) {
 	e.AuthTokenEnv = strPtr("DEMO_RAY_TOKEN")
 	r := ClusterRegistry{Clusters: []ClusterEndpoint{e}}
 
-	os.Setenv("DEMO_RAY_TOKEN", "env-secret")
+	t.Setenv("DEMO_RAY_TOKEN", "env-secret")
 	if err := r.ResolveAuthTokens(); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	os.Unsetenv("DEMO_RAY_TOKEN")
 
 	b, err := json.Marshal(r)
 	if err != nil {
@@ -244,11 +242,10 @@ func TestResolveAuthTokensReadsEnvIntoAuthToken(t *testing.T) {
 	e.AuthTokenEnv = strPtr("MOBULA_CORE_TEST_TOKEN_OK")
 	r := ClusterRegistry{Clusters: []ClusterEndpoint{e}}
 
-	os.Setenv("MOBULA_CORE_TEST_TOKEN_OK", "resolved-secret")
+	t.Setenv("MOBULA_CORE_TEST_TOKEN_OK", "resolved-secret")
 	if err := r.ResolveAuthTokens(); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	os.Unsetenv("MOBULA_CORE_TEST_TOKEN_OK")
 
 	// In-memory shape is unchanged: the gateway reads the resolved token
 	// from AuthToken; the env name stays as provenance.
@@ -267,12 +264,9 @@ func TestResolveAuthTokensFailsFastOnMissingOrEmptyEnv(t *testing.T) {
 		r := ClusterRegistry{Clusters: []ClusterEndpoint{e}}
 
 		if value != nil {
-			os.Setenv("MOBULA_CORE_TEST_TOKEN_MISSING", *value)
-		} else {
-			os.Unsetenv("MOBULA_CORE_TEST_TOKEN_MISSING")
+			t.Setenv("MOBULA_CORE_TEST_TOKEN_MISSING", *value)
 		}
 		err := r.ResolveAuthTokens()
-		os.Unsetenv("MOBULA_CORE_TEST_TOKEN_MISSING")
 
 		got, ok := err.(RegistryError)
 		want := RegistryError{Kind: RegistryErrMissingTokenEnv, Id: "demo", Var: "MOBULA_CORE_TEST_TOKEN_MISSING"}

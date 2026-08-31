@@ -9,8 +9,6 @@ import (
 
 func strPtr(s string) *string { return &s }
 
-func u64Ptr(v uint64) *uint64 { return &v }
-
 func u16Ptr(v uint16) *uint16 { return &v }
 
 func TestDecisionRoundTripsSnakeCase(t *testing.T) {
