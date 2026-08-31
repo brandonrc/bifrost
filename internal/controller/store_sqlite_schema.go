@@ -93,6 +93,15 @@ CREATE INDEX IF NOT EXISTS usage_samples_project_ts ON usage_samples (project, t
 -- pagination cursor (rows are read newest-first). chain_hash is the
 -- tamper-evidence chain: sha256 over (previous row's chain_hash ‖ this
 -- row's canonical JSON); genesis chains from 64 zeros (AuditGenesisHash).
+-- Deliberately NOT NULL with no DEFAULT '', unlike the Rust reference's
+-- chain_hash TEXT NOT NULL DEFAULT '': that default existed there only
+-- so the pre-chain backfill pass (rows written before the column existed)
+-- had a sentinel to find and fill in. No such backfill exists here (ADR-
+-- 0004: no legacy chains), so every row this schema ever writes carries a
+-- real hash from RecordAudit — a row that somehow lacked one should fail
+-- the INSERT loudly (a NOT NULL constraint violation), not silently
+-- accept an empty-string chain_hash that VerifyAuditChain would then have
+-- to special-case as "unchained" rather than treat as a genuine break.
 CREATE TABLE IF NOT EXISTS audit_events (
     seq           INTEGER PRIMARY KEY AUTOINCREMENT,
     ts            INTEGER NOT NULL,

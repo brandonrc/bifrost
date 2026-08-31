@@ -296,7 +296,7 @@ func (s *SqliteStore) List(ctx context.Context) ([]StoredCluster, error) {
 
 func (s *SqliteStore) SetDesired(ctx context.Context, id core.ClusterId, desired DesiredState) error {
 	if !desired.isValid() {
-		return storeErrorf("bad desired state %q", string(desired))
+		return errBadDesiredState(string(desired))
 	}
 	isTerminated := desired == DesiredTerminated
 	res, err := s.db.ExecContext(ctx,
@@ -312,7 +312,7 @@ func (s *SqliteStore) SetDesired(ctx context.Context, id core.ClusterId, desired
 		return storeErrorf("set desired: %v", err)
 	}
 	if n == 0 {
-		return storeErrorf("no such cluster %s", id)
+		return errNoSuchCluster(string(id))
 	}
 	return nil
 }
@@ -677,7 +677,7 @@ func (s *SqliteStore) DeletePool(ctx context.Context, name string) error {
 		return storeErrorf("delete pool: %v", err)
 	}
 	if n == 0 {
-		return storeErrorf("no such pool %s", name)
+		return errNoSuchPool(name)
 	}
 	return nil
 }
@@ -745,7 +745,7 @@ func (s *SqliteStore) DeleteAllocation(ctx context.Context, pool, project string
 		return storeErrorf("delete allocation: %v", err)
 	}
 	if n == 0 {
-		return storeErrorf("no such allocation %s/%s", pool, project)
+		return errNoSuchAllocation(pool, project)
 	}
 	return nil
 }
@@ -909,7 +909,7 @@ func scanAuditRow(row rowScanner, withChainHash bool) (uint64, core.AuditEvent, 
 
 	decision, ok := core.ParseAuditDecision(decisionStr)
 	if !ok {
-		return 0, core.AuditEvent{}, "", storeErrorf("bad audit decision")
+		return 0, core.AuditEvent{}, "", errBadAuditDecision()
 	}
 	var required *core.AuditRequired
 	if requiredJSON != nil {
@@ -1144,7 +1144,7 @@ func scanLocalUser(row rowScanner) (core.LocalUserRecord, error) {
 	}
 	role, ok := core.ParseLocalRole(roleStr)
 	if !ok {
-		return core.LocalUserRecord{}, storeErrorf("bad local role %q", roleStr)
+		return core.LocalUserRecord{}, errBadLocalRole(roleStr)
 	}
 	return core.LocalUserRecord{
 		Username:     username,
@@ -1173,7 +1173,7 @@ func (s *SqliteStore) CreateLocalUser(ctx context.Context, username string, emai
 	case err == nil:
 		return nil
 	case isUniqueViolation(err):
-		return storeErrorf("local user %s already exists", username)
+		return errLocalUserAlreadyExists(username)
 	default:
 		return storeErrorf("create local user: %v", err)
 	}
@@ -1222,7 +1222,7 @@ func (s *SqliteStore) SetLocalUserPassword(ctx context.Context, username, passwo
 		return storeErrorf("set local user password: %v", err)
 	}
 	if n == 0 {
-		return storeErrorf("no such local user %s", username)
+		return errNoSuchLocalUser(username)
 	}
 	return nil
 }
@@ -1237,7 +1237,7 @@ func (s *SqliteStore) SetLocalUserRole(ctx context.Context, username string, rol
 		return storeErrorf("set local user role: %v", err)
 	}
 	if n == 0 {
-		return storeErrorf("no such local user %s", username)
+		return errNoSuchLocalUser(username)
 	}
 	return nil
 }
@@ -1256,7 +1256,7 @@ func (s *SqliteStore) SetLocalUserDisabled(ctx context.Context, username string,
 		return storeErrorf("set local user disabled: %v", err)
 	}
 	if n == 0 {
-		return storeErrorf("no such local user %s", username)
+		return errNoSuchLocalUser(username)
 	}
 	return nil
 }
@@ -1278,7 +1278,7 @@ func (s *SqliteStore) SetLoginLockout(ctx context.Context, username string, fail
 		return storeErrorf("set login lockout: %v", err)
 	}
 	if n == 0 {
-		return storeErrorf("no such local user %s", username)
+		return errNoSuchLocalUser(username)
 	}
 	return nil
 }
@@ -1294,7 +1294,7 @@ func (s *SqliteStore) RecordLoginFailure(ctx context.Context, username string) e
 		return err
 	}
 	if user == nil {
-		return storeErrorf("no such local user %s", username)
+		return errNoSuchLocalUser(username)
 	}
 	failed, locked := NextLoginFailureState(user.FailedLogins, NowUnix())
 	return s.SetLoginLockout(ctx, username, failed, locked)
@@ -1340,7 +1340,7 @@ func (s *SqliteStore) CreateApiToken(ctx context.Context, record core.ApiTokenRe
 	case err == nil:
 		return nil
 	case isUniqueViolation(err):
-		return storeErrorf("api token prefix %s already exists", record.Prefix)
+		return errApiTokenAlreadyExists(record.Prefix)
 	default:
 		return storeErrorf("create api token: %v", err)
 	}
@@ -1394,7 +1394,7 @@ func (s *SqliteStore) RevokeApiToken(ctx context.Context, prefix, username strin
 		return storeErrorf("revoke api token: %v", err)
 	}
 	if n == 0 {
-		return storeErrorf("no such api token %s", prefix)
+		return errNoSuchApiToken(prefix)
 	}
 	return nil
 }
@@ -1461,7 +1461,7 @@ func (s *SqliteStore) DeleteRoleAssignment(ctx context.Context, principal, role,
 		return storeErrorf("delete role assignment: %v", err)
 	}
 	if n == 0 {
-		return storeErrorf("no such assignment %s/%s/%s", principal, role, scope)
+		return errNoSuchAssignment(principal, role, scope)
 	}
 	return nil
 }

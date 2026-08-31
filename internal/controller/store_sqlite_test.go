@@ -210,6 +210,66 @@ func TestSqliteConcurrentWritersNoBusyLeak(t *testing.T) {
 	}
 }
 
+// TestSqliteConcurrentAuditAppendsKeepOneChain exercises auditMu directly
+// (store_sqlite.go's audit_lock equivalent): N concurrent RecordAudit
+// calls must never interleave their read-newest-hash/compute/insert
+// sequence — a regression there wouldn't fail loudly, it would silently
+// fork the chain (two rows both computed from the same "newest" hash) or
+// skip a seq, which VerifyAuditChain would only catch if something later
+// happened to check it. This test is that tripwire: seqs must come back
+// gapless (1..N, in some order) and the whole window must verify.
+func TestSqliteConcurrentAuditAppendsKeepOneChain(t *testing.T) {
+	ctx := context.Background()
+	store := newTestSqliteStore(t, filepath.Join(t.TempDir(), "audit-race.db"))
+
+	const n = 40
+	var wg sync.WaitGroup
+	seqs := make([]uint64, n)
+	errs := make([]error, n)
+	for i := range n {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			seq, err := store.RecordAudit(ctx, &core.AuditEvent{
+				Ts: uint64(i), Decision: core.AuditDecisionAllow,
+			})
+			seqs[i] = seq
+			errs[i] = err
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("record audit %d: %v", i, err)
+		}
+	}
+
+	seen := make(map[uint64]bool, n)
+	for _, seq := range seqs {
+		if seen[seq] {
+			t.Fatalf("duplicate seq %d among concurrent RecordAudit calls (chain fork)", seq)
+		}
+		seen[seq] = true
+	}
+	for want := uint64(1); want <= n; want++ {
+		if !seen[want] {
+			t.Fatalf("seq %d missing: seqs must be gapless 1..%d, got %v", want, n, seqs)
+		}
+	}
+
+	window, err := store.AuditChain(ctx, nil, n+1)
+	if err != nil {
+		t.Fatalf("audit chain: %v", err)
+	}
+	if len(window.Rows) != n {
+		t.Fatalf("len(window.Rows) = %d, want %d", len(window.Rows), n)
+	}
+	if v := controller.VerifyAuditChain(window.Head, window.Rows); !v.OK() {
+		t.Fatalf("chain does not verify after concurrent appends: %+v", v)
+	}
+}
+
 func clusterIdForIndex(i int) string {
 	const letters = "abcdefghijklmnopqrstuvwxyz"
 	return "writer-" + string(letters[i%len(letters)]) + string(letters[(i/len(letters))%len(letters)])
