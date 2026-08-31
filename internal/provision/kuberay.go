@@ -264,6 +264,13 @@ func canonicalQuantityPtr(s *string) *string {
 // are read from the first container of each group's pod template, matching
 // [podTemplate]. Ported from kuberay.rs:175-208.
 func FingerprintFromRayCluster(spec *rayv1.RayClusterSpec) (fingerprint string, ok bool) {
+	if spec == nil {
+		// Nothing to compare against — same "not comparable" outcome as a
+		// spec missing the owned fields (review follow-up, task-6-brief.md
+		// ledger item 3: guard against a nil live-read spec rather than
+		// panicking on spec.HeadGroupSpec).
+		return "", false
+	}
 	headCPU, headMemory, headOK := containerResources(&spec.HeadGroupSpec.Template)
 	if !headOK {
 		return "", false
