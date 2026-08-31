@@ -1,0 +1,802 @@
+package provision
+
+import (
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strconv"
+
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/ptr"
+
+	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
+
+	"github.com/brandonrc/bifrost/internal/core"
+)
+
+// KubeRay backend: translate a Bifrost [core.ClusterSpec] into a typed
+// RayCluster custom resource, and map RayCluster status back to a
+// [core.ClusterState]. Ported from mobula-provision/src/kuberay.rs.
+//
+// This file is pure (no Kubernetes client) so the ADR-0007-equivalent
+// field-ownership rule is exhaustively testable: when Ray's in-tree
+// autoscaler is enabled, Bifrost owns MinReplicas/MaxReplicas only and must
+// NEVER write Replicas or ScaleStrategy — the autoscaler sidecar owns
+// those, and writing them causes the stuck-instance conflicts documented
+// upstream. The live client wiring (server-side apply, observe, delete) is
+// added on top of these functions in internal/provision/live (Task 6).
+
+// QueueAssignment is the Kueue queue a RayCluster is admitted through
+// (ADR-0010-equivalent): the allocation's LocalQueue name, plus whether the
+// pool allows elastic resizing. Derived at apply time from the
+// project->allocation lookup (not user input), so it is a parameter of
+// [RayClusterFor], never part of ClusterSpec's serialized form
+// (kuberay.rs:20-33).
+type QueueAssignment struct {
+	// QueueName is the LocalQueue name (= the allocation's project name).
+	QueueName string
+	// Elastic pools stamp [ElasticJobAnnotation] and force the in-tree
+	// autoscaler on — elastic mode (KEP-77 Workload Slices) requires it.
+	Elastic bool
+}
+
+const (
+	APIVersion  = "ray.io/v1"
+	Kind        = "RayCluster"
+	ServiceKind = "RayService"
+
+	// FieldManager is the server-side-apply field manager identifying
+	// Bifrost's owned fields, so drift is attributable and `replicas` can
+	// be left unmanaged (ADR-0007-equivalent). Actual client.FieldOwner
+	// wiring is Task 6; this is the manifest-visible label value.
+	FieldManager = "bifrost"
+
+	ManagedByLabel = "app.kubernetes.io/managed-by"
+	ClusterIDLabel = "bifrost.dev/cluster-id"
+	// OwnerLabel is stamped on the RayCluster and its head/worker pods
+	// recording the cluster's authenticated owner (tier-2 owned session
+	// clusters). Value is core.ClusterSpec.Owner. Frozen-contract label
+	// key (see bifrost-api openapi.json ClusterSpec.owner description).
+	OwnerLabel = "bifrost.dev/owner"
+	// NotebookNamespace is the namespace the interactive notebooks
+	// (JupyterHub singleuser pods) run in — the only namespace the
+	// per-owner Ray-client ingress rule admits from.
+	NotebookNamespace = "jupyter"
+	// GenerationAnnotation carries the Bifrost spec generation this
+	// resource reflects (ADR-0006-equivalent). Stamped on the RayCluster
+	// metadata (so Observe can read back the generation the cluster
+	// actually carries) *and* on the pod templates (so a generation bump
+	// changes the pod-template hash and KubeRay rolls the pods).
+	GenerationAnnotation = "bifrost.dev/generation"
+
+	// QueueLabel nominates the Kueue LocalQueue a workload is admitted
+	// through.
+	QueueLabel = "kueue.x-k8s.io/queue-name"
+	// ElasticJobAnnotation marks a RayCluster/RayJob as elastic (Workload
+	// Slices, KEP-77).
+	ElasticJobAnnotation = "kueue.x-k8s.io/elastic-job"
+)
+
+// RayClusterFor builds the RayCluster manifest for spec at generation.
+// autoscaling selects the field-ownership regime (ADR-0007-equivalent).
+// queue nominates the Kueue LocalQueue (ADR-0010-equivalent): nil (the
+// default) produces a manifest equivalent to the queue-free form; non-nil
+// stamps the [QueueLabel] label, and an elastic assignment also stamps the
+// [ElasticJobAnnotation] annotation and forces the in-tree autoscaler on
+// regardless of autoscaling (KEP-77 requires it). Ported from
+// kuberay.rs:69-140.
+//
+// Resource quantities (cpu/memory/gpu strings on spec) are parsed into
+// typed [resource.Quantity] fields — the one place this port's typed-API
+// requirement diverges from the Rust reference's untyped
+// serde_json::Value, which passed the strings through unchecked and let
+// the API server reject malformed ones. A parse failure here is returned
+// as an error instead.
+func RayClusterFor(id core.ClusterId, spec *core.ClusterSpec, autoscaling bool, generation uint64, queue *QueueAssignment) (*rayv1.RayCluster, error) {
+	// Elastic pools are always in-tree-autoscaled (elastic mode requires
+	// the autoscaler; a non-elastic queue leaves the flag as the operator
+	// set it). ADR-0007 still holds: with autoscaling on we never write
+	// replicas.
+	autoscaling = autoscaling || (queue != nil && queue.Elastic)
+
+	workerSpecs := make([]rayv1.WorkerGroupSpec, 0, len(spec.WorkerGroups))
+	for i := range spec.WorkerGroups {
+		g := spec.WorkerGroups[i]
+		ws, err := workerGroupSpec(string(id), &g, spec.Image, autoscaling, &generation, spec.Owner)
+		if err != nil {
+			return nil, fmt.Errorf("provision: worker group %q: %w", g.Name, err)
+		}
+		workerSpecs = append(workerSpecs, ws)
+	}
+
+	labels := map[string]string{
+		ManagedByLabel: FieldManager,
+		ClusterIDLabel: string(id),
+	}
+	// Stamp the owner (tier-2 owned session clusters) for attribution and
+	// so the per-owner ingress policy has a label to key on. Only when
+	// set — ownerless clusters (admin/service paths) carry no owner
+	// label.
+	if spec.Owner != nil {
+		labels[OwnerLabel] = *spec.Owner
+	}
+	annotations := map[string]string{
+		GenerationAnnotation: strconv.FormatUint(generation, 10),
+	}
+	if queue != nil {
+		labels[QueueLabel] = queue.QueueName
+		if queue.Elastic {
+			annotations[ElasticJobAnnotation] = "true"
+		}
+	}
+
+	head, err := headGroupSpec(string(id), spec, &generation)
+	if err != nil {
+		return nil, fmt.Errorf("provision: head group: %w", err)
+	}
+
+	return &rayv1.RayCluster{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: APIVersion,
+			Kind:       Kind,
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        string(id),
+			Labels:      labels,
+			Annotations: annotations,
+		},
+		Spec: rayv1.RayClusterSpec{
+			RayVersion:              spec.RayVersion,
+			EnableInTreeAutoscaling: ptr.To(autoscaling),
+			// Bifrost owns `suspend` (SSA field manager) so a force
+			// re-apply clears an out-of-band `suspend: true` and resumes
+			// the cluster. Without this, our field manager never owns
+			// the field and a Suspended cluster could never be repaired
+			// by re-applying. Kueue also drives `suspend` for admission
+			// (gang scheduling), but Bifrost's desired false never
+			// fights it — an admitted cluster converges to running
+			// pods.
+			Suspend:          ptr.To(false),
+			HeadGroupSpec:    head,
+			WorkerGroupSpecs: workerSpecs,
+		},
+	}, nil
+}
+
+// owned_spec_fingerprint's worker-group projection.
+type fingerprintWorker struct {
+	Name   string  `json:"name"`
+	Cpu    string  `json:"cpu"`
+	Memory string  `json:"memory"`
+	Gpu    *string `json:"gpu"`
+	Min    uint32  `json:"min"`
+	Max    uint32  `json:"max"`
+}
+
+// owned_spec_fingerprint / fingerprint_from_cr's shared projection shape.
+type fingerprintSpec struct {
+	RayVersion string              `json:"ray_version"`
+	Image      string              `json:"image"`
+	HeadCpu    string              `json:"head_cpu"`
+	HeadMemory string              `json:"head_memory"`
+	Workers    []fingerprintWorker `json:"workers"`
+}
+
+// OwnedSpecFingerprint is the fingerprint of the Bifrost-owned,
+// drift-relevant fields (ADR-0004-equivalent drift detection). Deliberately
+// EXCLUDES Replicas: that is the autoscaler's when in-tree autoscaling is
+// on (ADR-0007), and even off it converges on its own, so a replica count
+// is never treated as drift. Name/Project/TTL are control-plane metadata,
+// not on the CR. Both [RayClusterFor] (implicitly) and
+// [FingerprintFromRayCluster] project the same shape, so an out-of-band
+// edit of an owned field changes the result. Ported from
+// kuberay.rs:149-168.
+//
+// Quantity fields (Cpu/Memory/Gpu) are canonicalized through
+// [canonicalQuantity] before hashing. This is NOT in the Rust reference
+// (which hashes the raw strings, since Rust's Value passes them through
+// unparsed everywhere) — it is required here because
+// [FingerprintFromRayCluster] reads the *live* manifest back through
+// resource.Quantity.String(), which normalizes the wire form ("0.5" ->
+// "500m", "1024Mi" -> "1Gi", "2000m" -> "2"). Without canonicalizing this
+// side the same way, any spec whose author wrote a non-canonical quantity
+// string would never match its own freshly-applied manifest, and the
+// reconcile loop would treat it as permanently drifted, forever
+// re-applying (fixed in fix round 1, see task-5-report.md).
+func OwnedSpecFingerprint(spec *core.ClusterSpec) string {
+	workers := make([]fingerprintWorker, len(spec.WorkerGroups))
+	for i, g := range spec.WorkerGroups {
+		workers[i] = fingerprintWorker{
+			Name: g.Name, Cpu: canonicalQuantity(g.Cpu), Memory: canonicalQuantity(g.Memory), Gpu: canonicalQuantityPtr(g.Gpu),
+			Min: g.MinReplicas, Max: g.MaxReplicas,
+		}
+	}
+	b, err := json.Marshal(fingerprintSpec{
+		RayVersion: spec.RayVersion,
+		Image:      spec.Image,
+		HeadCpu:    canonicalQuantity(spec.HeadCpu),
+		HeadMemory: canonicalQuantity(spec.HeadMemory),
+		Workers:    workers,
+	})
+	if err != nil {
+		// fingerprintSpec is built entirely from strings/uint32s: only a
+		// pathological allocation failure could make this fail.
+		panic(fmt.Sprintf("provision: marshaling fingerprint: %v", err))
+	}
+	return string(b)
+}
+
+// canonicalQuantity parses s as a Kubernetes resource.Quantity and returns
+// its canonical string form (matching what resource.Quantity.String()
+// produces when read back off a live manifest, see [containerResources]).
+// Falls back to s unchanged when it doesn't parse as a quantity —
+// deliberately no error return: this is a hashing input, not a validated
+// construction path (that validation already happened, or will fail
+// loudly, in [podTemplate]/[RayClusterFor]), so a fingerprint over the raw
+// string is still well-defined and simply won't match a canonicalized
+// live read-back for that one malformed field.
+func canonicalQuantity(s string) string {
+	q, err := resource.ParseQuantity(s)
+	if err != nil {
+		return s
+	}
+	return q.String()
+}
+
+// canonicalQuantityPtr is [canonicalQuantity] lifted over the optional GPU
+// quantity string.
+func canonicalQuantityPtr(s *string) *string {
+	if s == nil {
+		return nil
+	}
+	c := canonicalQuantity(*s)
+	return &c
+}
+
+// FingerprintFromRayCluster recomputes the owned-field fingerprint from a
+// *live* RayCluster spec (the inverse projection of [RayClusterFor]), so
+// Observe can detect out-of-band edits. Returns ok=false if the manifest is
+// missing the fields Bifrost owns (nothing to compare). Container resources
+// are read from the first container of each group's pod template, matching
+// [podTemplate]. Ported from kuberay.rs:175-208.
+func FingerprintFromRayCluster(spec *rayv1.RayClusterSpec) (fingerprint string, ok bool) {
+	headCPU, headMemory, headOK := containerResources(&spec.HeadGroupSpec.Template)
+	if !headOK {
+		return "", false
+	}
+	workers := make([]fingerprintWorker, 0, len(spec.WorkerGroupSpecs))
+	for _, g := range spec.WorkerGroupSpecs {
+		cpu, memory, gOK := containerResources(&g.Template)
+		if !gOK {
+			continue
+		}
+		var min, max uint32
+		if g.MinReplicas != nil && *g.MinReplicas > 0 {
+			min = uint32(*g.MinReplicas)
+		}
+		if g.MaxReplicas != nil && *g.MaxReplicas > 0 {
+			max = uint32(*g.MaxReplicas)
+		}
+		workers = append(workers, fingerprintWorker{
+			Name: g.GroupName, Cpu: cpu, Memory: memory, Gpu: containerGPU(&g.Template),
+			Min: min, Max: max,
+		})
+	}
+	image, _ := containerImage(&spec.HeadGroupSpec.Template)
+	b, err := json.Marshal(fingerprintSpec{
+		RayVersion: spec.RayVersion,
+		Image:      image,
+		HeadCpu:    headCPU,
+		HeadMemory: headMemory,
+		Workers:    workers,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("provision: marshaling fingerprint: %v", err))
+	}
+	return string(b), true
+}
+
+// firstContainer returns the first container of a pod template's spec
+// (`template.spec.containers[0]`), and whether one exists.
+func firstContainer(tmpl *corev1.PodTemplateSpec) (*corev1.Container, bool) {
+	if tmpl == nil || len(tmpl.Spec.Containers) == 0 {
+		return nil, false
+	}
+	return &tmpl.Spec.Containers[0], true
+}
+
+func containerResources(tmpl *corev1.PodTemplateSpec) (cpu, memory string, ok bool) {
+	c, found := firstContainer(tmpl)
+	if !found {
+		return "", "", false
+	}
+	cpuQ, cpuOK := c.Resources.Requests[corev1.ResourceCPU]
+	memQ, memOK := c.Resources.Requests[corev1.ResourceMemory]
+	if !cpuOK || !memOK {
+		return "", "", false
+	}
+	return cpuQ.String(), memQ.String(), true
+}
+
+func containerGPU(tmpl *corev1.PodTemplateSpec) *string {
+	c, found := firstContainer(tmpl)
+	if !found {
+		return nil
+	}
+	q, ok := c.Resources.Requests[corev1.ResourceName("nvidia.com/gpu")]
+	if !ok {
+		return nil
+	}
+	s := q.String()
+	return &s
+}
+
+func containerImage(tmpl *corev1.PodTemplateSpec) (string, bool) {
+	c, found := firstContainer(tmpl)
+	if !found {
+		return "", false
+	}
+	return c.Image, true
+}
+
+func headGroupSpec(id string, spec *core.ClusterSpec, generation *uint64) (rayv1.HeadGroupSpec, error) {
+	tmpl, err := podTemplate(id, "ray-head", spec.Image, spec.HeadCpu, spec.HeadMemory, nil, generation, spec.Owner)
+	if err != nil {
+		return rayv1.HeadGroupSpec{}, err
+	}
+	return rayv1.HeadGroupSpec{
+		RayStartParams: map[string]string{"dashboard-host": "0.0.0.0"},
+		Template:       tmpl,
+	}, nil
+}
+
+func workerGroupSpec(id string, g *core.WorkerGroup, image string, autoscaling bool, generation *uint64, owner *string) (rayv1.WorkerGroupSpec, error) {
+	// Workers run the cluster image (Kubernetes requires an image on
+	// every container; KubeRay does NOT copy the head image onto worker
+	// groups, so an empty image would be rejected).
+	tmpl, err := podTemplate(id, "ray-worker", image, g.Cpu, g.Memory, g.Gpu, generation, owner)
+	if err != nil {
+		return rayv1.WorkerGroupSpec{}, err
+	}
+	ws := rayv1.WorkerGroupSpec{
+		GroupName:      g.Name,
+		MinReplicas:    ptr.To(int32(g.MinReplicas)),
+		MaxReplicas:    ptr.To(int32(g.MaxReplicas)),
+		RayStartParams: map[string]string{},
+		Template:       tmpl,
+	}
+	// ADR-0007: only set Replicas when we own it (autoscaling off). With
+	// the in-tree autoscaler on, the sidecar owns replicas + scaleStrategy;
+	// writing them here would fight it.
+	if !autoscaling {
+		ws.Replicas = ptr.To(int32(g.Replicas))
+	}
+	return ws, nil
+}
+
+func podTemplate(clusterID, containerName, image, cpu, memory string, gpu *string, generation *uint64, owner *string) (corev1.PodTemplateSpec, error) {
+	cpuQ, err := resource.ParseQuantity(cpu)
+	if err != nil {
+		return corev1.PodTemplateSpec{}, fmt.Errorf("provision: invalid cpu quantity %q: %w", cpu, err)
+	}
+	memQ, err := resource.ParseQuantity(memory)
+	if err != nil {
+		return corev1.PodTemplateSpec{}, fmt.Errorf("provision: invalid memory quantity %q: %w", memory, err)
+	}
+	limits := corev1.ResourceList{corev1.ResourceCPU: cpuQ, corev1.ResourceMemory: memQ}
+	requests := corev1.ResourceList{corev1.ResourceCPU: cpuQ, corev1.ResourceMemory: memQ}
+	if gpu != nil {
+		gpuQ, err := resource.ParseQuantity(*gpu)
+		if err != nil {
+			return corev1.PodTemplateSpec{}, fmt.Errorf("provision: invalid gpu quantity %q: %w", *gpu, err)
+		}
+		limits[corev1.ResourceName("nvidia.com/gpu")] = gpuQ
+		requests[corev1.ResourceName("nvidia.com/gpu")] = gpuQ
+	}
+	container := corev1.Container{
+		Name:      containerName,
+		Resources: corev1.ResourceRequirements{Limits: limits, Requests: requests},
+	}
+	// Both head and workers carry the cluster image; only omitted if a
+	// caller passes empty (KubeRay then applies its default).
+	if image != "" {
+		container.Image = image
+	}
+	// Every tenant pod carries the cluster-id label: it is what the
+	// scoped NetworkPolicies select on — the default-deny/tenant-allow
+	// pair matches pods with the label at all, and the per-cluster allow
+	// matches this exact value, keeping tenant clusters isolated from
+	// each other. KubeRay merges its own ray.io/* labels alongside it.
+	podLabels := map[string]string{ClusterIDLabel: clusterID}
+	// Stamp the owner onto every pod (tier-2 attribution). The per-owner
+	// ingress policy keys on the notebook pod's owner label, not this
+	// one — this label makes the cluster's pods self-describe who owns
+	// them.
+	if owner != nil {
+		podLabels[OwnerLabel] = *owner
+	}
+	tmpl := corev1.PodTemplateSpec{
+		ObjectMeta: metav1.ObjectMeta{Labels: podLabels},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{container}},
+	}
+	// Stamp the generation into the pod template so a spec bump changes
+	// the template hash and KubeRay rolls the pods. Services pass nil —
+	// KubeRay's RayService controller owns their rollout, not Bifrost.
+	if generation != nil {
+		tmpl.Annotations = map[string]string{GenerationAnnotation: strconv.FormatUint(*generation, 10)}
+	}
+	return tmpl, nil
+}
+
+// SuspendPatch is the partial manifest a suspend/resume call actuates: a
+// JSON merge patch flipping only spec.suspend. Deliberately NOT a
+// server-side apply: a partial SSA apply with Bifrost's field manager is
+// fully-specified intent and would drop every other Bifrost-owned field
+// from the applied set. Bifrost already owns spec.suspend via the full
+// apply ([RayClusterFor] always writes it), so a merge patch flips the
+// value while single-writer ownership (ADR-0007-equivalent) stays with the
+// FieldManager. Ported from kuberay.rs:637-639.
+func SuspendPatch(suspend bool) []byte {
+	type patch struct {
+		Spec struct {
+			Suspend bool `json:"suspend"`
+		} `json:"spec"`
+	}
+	var p patch
+	p.Spec.Suspend = suspend
+	b, err := json.Marshal(p)
+	if err != nil {
+		panic(fmt.Sprintf("provision: marshaling suspend patch: %v", err))
+	}
+	return b
+}
+
+// RayServiceFor builds the RayService manifest for a Serve service. The
+// ServeConfigV2 is passed through verbatim; the upgrade strategy selects
+// canary (NewCluster — zero-downtime with safe rollback) vs in-place
+// (None). Ported from kuberay.rs:644-683.
+func RayServiceFor(name string, spec *core.ServiceSpec) (*rayv1.RayService, error) {
+	var upgradeType rayv1.RayServiceUpgradeType
+	switch spec.Upgrade {
+	case core.UpgradeStrategyCanary:
+		upgradeType = rayv1.RayServiceNewCluster
+	case core.UpgradeStrategyInPlace:
+		upgradeType = rayv1.RayServiceUpgradeNone
+	default:
+		return nil, fmt.Errorf("provision: unknown upgrade strategy %q", spec.Upgrade)
+	}
+
+	worker := core.WorkerGroup{
+		Name: "worker", Cpu: spec.WorkerCpu, Memory: spec.WorkerMemory, Gpu: nil,
+		MinReplicas: spec.WorkerReplicas, MaxReplicas: spec.WorkerReplicas, Replicas: spec.WorkerReplicas,
+	}
+	// Serve worker replicas are fixed here (autoscaling=false); Serve
+	// autoscaling is Ray Serve's own concern (deployment num_replicas).
+	workerSpec, err := workerGroupSpec(name, &worker, spec.Image, false, nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("provision: service worker group: %w", err)
+	}
+	headTmpl, err := podTemplate(name, "ray-head", spec.Image, spec.HeadCpu, spec.HeadMemory, nil, nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("provision: service head group: %w", err)
+	}
+
+	return &rayv1.RayService{
+		TypeMeta: metav1.TypeMeta{APIVersion: APIVersion, Kind: ServiceKind},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+			Labels: map[string]string{
+				ManagedByLabel: FieldManager,
+				ClusterIDLabel: name,
+			},
+		},
+		Spec: rayv1.RayServiceSpec{
+			ServeConfigV2:   spec.ServeConfigV2,
+			UpgradeStrategy: &rayv1.RayServiceUpgradeStrategy{Type: &upgradeType},
+			RayClusterSpec: rayv1.RayClusterSpec{
+				RayVersion: spec.RayVersion,
+				HeadGroupSpec: rayv1.HeadGroupSpec{
+					RayStartParams: map[string]string{"dashboard-host": "0.0.0.0"},
+					Template:       headTmpl,
+				},
+				WorkerGroupSpecs: []rayv1.WorkerGroupSpec{workerSpec},
+			},
+		},
+	}, nil
+}
+
+// ServiceStatusToState maps a RayService status to a [core.ClusterState].
+// KubeRay reports "Running" once the Serve app is healthy and serving.
+// Ported from kuberay.rs:687-695.
+//
+// ServiceStatus is deprecated upstream (KubeRay v1.3.0+) in favor of
+// Conditions, but it is what the Rust reference oracle reads and what this
+// port's pinned KubeRay version (v1.7.0, ADR-0003) still populates for
+// back-compat — a Conditions-based rewrite is a deliberate follow-up, not
+// this port's job (fidelity to the oracle, not improvement).
+func ServiceStatusToState(status rayv1.RayServiceStatuses) core.ClusterState {
+	switch string(status.ServiceStatus) { //nolint:staticcheck // SA1019: ported fidelity, see doc comment
+	case "Running":
+		return core.ClusterStateRunning
+	// A new version is being rolled out / health-checked.
+	case "Restarting", "UpgradingCluster":
+		return core.ClusterStateUpdating
+	default:
+		return core.ClusterStateProvisioning
+	}
+}
+
+// StatusToState maps a RayCluster status to a [core.ClusterState]
+// (observation-first — derived from observed reality, never a stored
+// phase). KubeRay reports `.status.state` as "ready"/"unhealthy"/
+// "suspended". Ported from kuberay.rs:701-709.
+//
+// State is deprecated upstream in favor of Conditions (see
+// [ServiceStatusToState]'s doc comment for the same fidelity-over-rewrite
+// rationale).
+func StatusToState(status rayv1.RayClusterStatus) core.ClusterState {
+	switch string(status.State) { //nolint:staticcheck // SA1019: ported fidelity, see doc comment
+	case "ready":
+		return core.ClusterStateRunning
+	case "suspended":
+		return core.ClusterStateSuspended
+	case "unhealthy":
+		return core.ClusterStateDegraded
+	default:
+		// No state yet -> still coming up.
+		return core.ClusterStateProvisioning
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Namespace security posture: default-deny + explicit allows (tenant
+// network isolation) and Pod Security Standards labels. These are
+// per-namespace objects — one set covers every RayCluster Bifrost applies
+// into the namespace — translated here (pure) and applied by the live
+// client's EnsureNamespacePosture (Task 6). Ported from kuberay.rs:344-628.
+// ---------------------------------------------------------------------------
+
+const (
+	NetworkPolicyAPIVersion = "networking.k8s.io/v1"
+	NetworkPolicyKind       = "NetworkPolicy"
+	// DefaultDenyPolicyName is the default-deny policy Bifrost ensures.
+	// Distinct name so an admin's own default-deny is detectable
+	// (check-then-apply never overwrites it).
+	DefaultDenyPolicyName = "bifrost-default-deny"
+	// TenantAllowPolicyName is the explicit-allow policy paired with the
+	// default-deny.
+	TenantAllowPolicyName = "bifrost-tenant-allow"
+	// ClusterAllowPolicyPrefix is the name prefix of the per-cluster
+	// intra-tenant allow policy ([ClusterAllowNetworkPolicy]); the suffix
+	// is the cluster id.
+	ClusterAllowPolicyPrefix = "bifrost-cluster-"
+	// ControlPlaneNamespaceLabel marks the namespace(s) the Bifrost
+	// control plane (API / reconciler / job gateway) runs in.
+	ControlPlaneNamespaceLabel = "bifrost.dev/control-plane"
+	// ControlPlanePodLabel marks the Bifrost control-plane pods
+	// themselves: the tenant allow policy admits ingress from pods
+	// carrying this label, never from a whole namespace.
+	ControlPlanePodLabel = "bifrost.dev/control-plane"
+
+	pssEnforceLabel = "pod-security.kubernetes.io/enforce"
+	pssWarnLabel    = "pod-security.kubernetes.io/warn"
+	pssAuditLabel   = "pod-security.kubernetes.io/audit"
+)
+
+// tenantPodSelector is the pod selector every Bifrost tenant policy scopes
+// to: only pods Bifrost itself provisioned, recognized by [ClusterIDLabel].
+// NEVER an empty (namespace-wide) selector: the kuberay namespace can be —
+// and often is — Bifrost's own namespace, and a namespace-wide default-deny
+// locks the control plane, the UI, and the gateway's upstreams out of it.
+func tenantPodSelector() metav1.LabelSelector {
+	return metav1.LabelSelector{
+		MatchExpressions: []metav1.LabelSelectorRequirement{
+			{Key: ClusterIDLabel, Operator: metav1.LabelSelectorOpExists},
+		},
+	}
+}
+
+// ClusterAllowPolicyName is the name of the per-cluster allow policy for
+// cluster id.
+func ClusterAllowPolicyName(id string) string {
+	return ClusterAllowPolicyPrefix + id
+}
+
+func tcpPort(port int) networkingv1.NetworkPolicyPort {
+	p := intstr.FromInt32(int32(port))
+	return networkingv1.NetworkPolicyPort{Protocol: ptr.To(corev1.ProtocolTCP), Port: &p}
+}
+
+func udpPort(port int) networkingv1.NetworkPolicyPort {
+	p := intstr.FromInt32(int32(port))
+	return networkingv1.NetworkPolicyPort{Protocol: ptr.To(corev1.ProtocolUDP), Port: &p}
+}
+
+// DefaultDenyNetworkPolicy is the default-deny NetworkPolicy (the
+// single highest-impact isolation fix): select every Bifrost-provisioned
+// tenant pod ([tenantPodSelector], never every pod in the namespace), deny
+// all ingress and egress. NetworkPolicies are additive (union of allows),
+// so pairing this with [TenantAllowNetworkPolicy] + the per-cluster
+// [ClusterAllowNetworkPolicy] yields exactly the allow rules and nothing
+// else — and non-tenant pods in the namespace are untouched. Ported from
+// kuberay.rs:405-418.
+func DefaultDenyNetworkPolicy() *networkingv1.NetworkPolicy {
+	return &networkingv1.NetworkPolicy{
+		TypeMeta: metav1.TypeMeta{APIVersion: NetworkPolicyAPIVersion, Kind: NetworkPolicyKind},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   DefaultDenyPolicyName,
+			Labels: map[string]string{ManagedByLabel: FieldManager},
+		},
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: tenantPodSelector(),
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress},
+		},
+	}
+}
+
+// TenantAllowNetworkPolicy is the allows every Bifrost tenant pod needs
+// under the default-deny, scoped to [tenantPodSelector]. Intra-cluster
+// traffic is NOT here — it is per-cluster ([ClusterAllowNetworkPolicy]) so
+// tenant clusters stay isolated from each other. This policy carries only
+// the cross-cutting allows: control-plane ingress to the head's
+// dashboard/client ports, KubeRay-operator ingress, and kube-dns egress.
+// Ported from kuberay.rs:444-516.
+func TenantAllowNetworkPolicy() *networkingv1.NetworkPolicy {
+	return &networkingv1.NetworkPolicy{
+		TypeMeta: metav1.TypeMeta{APIVersion: NetworkPolicyAPIVersion, Kind: NetworkPolicyKind},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   TenantAllowPolicyName,
+			Labels: map[string]string{ManagedByLabel: FieldManager},
+		},
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: tenantPodSelector(),
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress},
+			Ingress: []networkingv1.NetworkPolicyIngressRule{
+				{
+					// The Bifrost control plane -> Ray head
+					// dashboard/client. Pod-labeled peers only:
+					// same-namespace control-plane pods, and
+					// control-plane pods in a labeled namespace. Never a
+					// bare namespaceSelector: that would admit colocated
+					// tenant pods.
+					From: []networkingv1.NetworkPolicyPeer{
+						{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{ControlPlanePodLabel: "true"}}},
+						{
+							NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{ControlPlaneNamespaceLabel: "true"}},
+							PodSelector:       &metav1.LabelSelector{MatchLabels: map[string]string{ControlPlanePodLabel: "true"}},
+						},
+					},
+					Ports: []networkingv1.NetworkPolicyPort{tcpPort(8265), tcpPort(10001)},
+				},
+				{
+					// The KubeRay operator (wherever it runs) -> dashboard,
+					// dashboard agent, serve.
+					From: []networkingv1.NetworkPolicyPeer{
+						{
+							NamespaceSelector: &metav1.LabelSelector{},
+							PodSelector:       &metav1.LabelSelector{MatchLabels: map[string]string{"app.kubernetes.io/name": "kuberay-operator"}},
+						},
+					},
+					Ports: []networkingv1.NetworkPolicyPort{tcpPort(8265), tcpPort(52365), tcpPort(8000)},
+				},
+			},
+			Egress: []networkingv1.NetworkPolicyEgressRule{
+				{
+					// kube-dns only: default-deny otherwise breaks DNS.
+					To: []networkingv1.NetworkPolicyPeer{
+						{
+							NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": "kube-system"}},
+							PodSelector:       &metav1.LabelSelector{MatchLabels: map[string]string{"k8s-app": "kube-dns"}},
+						},
+					},
+					Ports: []networkingv1.NetworkPolicyPort{udpPort(53), tcpPort(53)},
+				},
+			},
+		},
+	}
+}
+
+// ClusterAllowNetworkPolicy is the per-cluster intra-tenant allow
+// (preserving tenant-vs-tenant isolation): pods of cluster id (matched by
+// the exact [ClusterIDLabel] value) may talk to each other on every port —
+// Ray head<->workers use GCS 6379, dashboard 8265, client 10001 plus the
+// raylet's dynamic ports, too many to enumerate — and to nothing else.
+// Applied with the cluster's RayCluster/RayService and deleted with it.
+//
+// Tier-2 per-owner Ray-client pin: when owner is non-nil, a second ingress
+// rule admits the owner's notebook — pods in [NotebookNamespace] carrying
+// bifrost.dev/owner=<owner> (the label the hub stamps on that user's
+// singleuser pod) — to the Ray client (:10001) and dashboard (:8265) ports,
+// and to nothing else. When owner is nil (ownerless clusters) only the
+// intra-cluster allow is emitted. Ported from kuberay.rs:536-582.
+func ClusterAllowNetworkPolicy(id string, owner *string) *networkingv1.NetworkPolicy {
+	sameCluster := &metav1.LabelSelector{MatchLabels: map[string]string{ClusterIDLabel: id}}
+	ingress := []networkingv1.NetworkPolicyIngressRule{
+		{From: []networkingv1.NetworkPolicyPeer{{PodSelector: sameCluster}}},
+	}
+	if owner != nil {
+		// The owner's notebook pod -> Ray client + dashboard only.
+		// Scoped to the notebook namespace AND the owner pod-label
+		// together (a peer block ANDs its selectors), so only that
+		// user's notebook in that namespace matches.
+		ingress = append(ingress, networkingv1.NetworkPolicyIngressRule{
+			From: []networkingv1.NetworkPolicyPeer{
+				{
+					NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": NotebookNamespace}},
+					PodSelector:       &metav1.LabelSelector{MatchLabels: map[string]string{OwnerLabel: *owner}},
+				},
+			},
+			Ports: []networkingv1.NetworkPolicyPort{tcpPort(10001), tcpPort(8265)},
+		})
+	}
+	return &networkingv1.NetworkPolicy{
+		TypeMeta: metav1.TypeMeta{APIVersion: NetworkPolicyAPIVersion, Kind: NetworkPolicyKind},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: ClusterAllowPolicyName(id),
+			Labels: map[string]string{
+				ManagedByLabel: FieldManager,
+				ClusterIDLabel: id,
+			},
+		},
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: *sameCluster,
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress},
+			Ingress:     ingress,
+			Egress: []networkingv1.NetworkPolicyEgressRule{
+				{To: []networkingv1.NetworkPolicyPeer{{PodSelector: sameCluster}}},
+			},
+		},
+	}
+}
+
+// NamespacePSSLabels are the Pod Security Standards namespace labels.
+// Enforce is baseline, not restricted: KubeRay-generated Ray pods do not
+// carry the full restricted securityContext (runAsNonRoot, seccomp,
+// drop-all capabilities), so enforcing restricted would reject every Ray
+// pod Bifrost provisions. Warn/audit at restricted still surface the gap
+// without breaking workloads. Ported from kuberay.rs:596-602.
+func NamespacePSSLabels() map[string]string {
+	return map[string]string{
+		pssEnforceLabel: "baseline",
+		pssWarnLabel:    "restricted",
+		pssAuditLabel:   "restricted",
+	}
+}
+
+// IsDefaultDeny is a structural check for check-then-apply: does this
+// NetworkPolicy deny all ingress+egress for every pod in the namespace?
+// Used to detect an admin-managed default-deny Bifrost must not touch.
+// Ported from kuberay.rs:609-628.
+func IsDefaultDeny(policy *networkingv1.NetworkPolicy) bool {
+	if policy == nil {
+		return false
+	}
+	spec := &policy.Spec
+	selectsAll := len(spec.PodSelector.MatchLabels) == 0 && len(spec.PodSelector.MatchExpressions) == 0
+	var hasIngress, hasEgress bool
+	for _, t := range spec.PolicyTypes {
+		switch t {
+		case networkingv1.PolicyTypeIngress:
+			hasIngress = true
+		case networkingv1.PolicyTypeEgress:
+			hasEgress = true
+		}
+	}
+	return selectsAll && hasIngress && hasEgress && len(spec.Ingress) == 0 && len(spec.Egress) == 0
+}
+
+// sortedKeys returns the sorted keys of m — used wherever a Go map (whose
+// iteration order is undefined) must project as a deterministic, sorted
+// sequence the way Rust's BTreeMap iterates in the reference.
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
