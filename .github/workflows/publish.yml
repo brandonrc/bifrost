@@ -1,0 +1,116 @@
+name: Publish
+
+# Publishes ghcr.io/<owner>/bifrost from the multi-stage Dockerfile.
+#
+# WHY THIS EXISTS: until now the repo had a Dockerfile and nothing that pushed
+# it, so the only images that existed were hand-built on somebody's terminal.
+# The grace deployment ran `localhost:32000/bifrost:sha-c7b0003` — an artifact
+# with no automated path that produces it, and therefore not reproducible by
+# anyone who was not at that terminal. That is the same shape as a fix landing
+# in the Dockerfile CI does not build: the thing that runs and the thing the
+# pipeline makes are different objects.
+#
+# TAGGING: `sha-<short>` is the identifier to deploy. `latest` is published
+# too, for convenience, but treat it as a pointer rather than a version —
+# `latest` plus `pullPolicy: Always` is exactly how a broken bifrost-ui image
+# came back on the next pod restart after the fix had supposedly landed. A
+# chart that pins a SHA tag redeploys deliberately; one that tracks `latest`
+# redeploys whenever a pod happens to restart.
+#
+# The build needs no registry auth of its own: the Dockerfile is self-contained
+# (Go modules from proxy.golang.org, bases from Docker Hub and the Red Hat
+# registry, both digest-pinned in the Dockerfile itself). Single-arch amd64,
+# matching where this is deployed.
+#
+# WHAT THE PULL-BACK BELOW DOES AND DOESN'T PROVE. It proves the push
+# succeeded, the tag resolves on the registry, and auth works. It does NOT
+# prove byte-level fidelity to a separate build: `docker rmi` only untags, and
+# the layers are still present locally under the co-tagged `:latest`, so the
+# pull resolves instantly with no layer fetch. That is fine here — one
+# Dockerfile feeds both tags in one invocation, so there is no wrong-artifact
+# class for it to hide — but it is not a content check, and calling it one
+# would be the same overclaim this workflow exists to avoid.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One publish at a time, and cancel nothing in flight: two overlapping runs
+# can land `:latest` from the older commit after the newer `sha-*`, leaving
+# the mutable tag pointing behind the immutable ones.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/bifrost
+
+jobs:
+  publish:
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image (amd64)
+        run: |
+          SHORT=${GITHUB_SHA::7}
+          # VERSION is stamped into the binary via -ldflags (see the
+          # Dockerfile), so `bifrost --version` identifies the commit it was
+          # built from rather than reporting the in-source default.
+          docker build \
+            --build-arg VERSION="0.0.1-${SHORT}" \
+            -t "$IMAGE:sha-${SHORT}" \
+            -t "$IMAGE:latest" .
+          docker push "$IMAGE:sha-${SHORT}"
+          docker push "$IMAGE:latest"
+
+      # A push that publishes a non-starting binary is worse than no push: it
+      # looks like success. So run the image, and assert the two properties the
+      # UBI9-micro runtime stage is supposed to guarantee rather than trusting
+      # the base.
+      #
+      # NO grep/sed/awk BELOW, DELIBERATELY. ubi9-micro ships `cut`, `id`,
+      # `ldd`, `cat` and `tr` — and no grep. The first version of this step was
+      # `id -u | grep -qv '^0$' || fail`, which reports `FAIL: running as root`
+      # on an image running as 1001, because a MISSING grep and a NON-MATCHING
+      # pattern both leave a non-zero status. It would have been red forever,
+      # and the red would have read as "the image is broken" rather than "the
+      # test is broken" — sending someone to debug a correct artifact.
+      #
+      # Hence: no external tools, and each assertion first checks it actually
+      # got a value. `[ "$(id -u)" != "0" ]` alone has the same defect
+      # inverted — if `id` vanished, the empty string is != "0" and the check
+      # passes silently.
+      - name: The published image runs
+        run: |
+          SHORT=${GITHUB_SHA::7}
+          docker rmi "$IMAGE:sha-${SHORT}" >/dev/null 2>&1 || true
+          docker pull "$IMAGE:sha-${SHORT}"
+          docker run --rm "$IMAGE:sha-${SHORT}" --version
+          docker run --rm --entrypoint=/bin/sh "$IMAGE:sha-${SHORT}" -c '
+            uid="$(id -u)"
+            [ -n "$uid" ] || { echo "FAIL: could not read uid (is id missing?)"; exit 1; }
+            [ "$uid" != "0" ] || { echo "FAIL: running as root"; exit 1; }
+
+            linkage="$(ldd /usr/local/bin/bifrost 2>&1)"
+            [ -n "$linkage" ] || { echo "FAIL: ldd produced nothing"; exit 1; }
+            case "$linkage" in
+              *"not a dynamic executable"*) : ;;
+              *) echo "FAIL: dynamically linked: $linkage"; exit 1 ;;
+            esac
+
+            echo "ok: uid=$uid, statically linked"
+          '
