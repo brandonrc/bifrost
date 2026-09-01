@@ -3,3 +3,4 @@
 coverage.txt
 dist/
 .superpowers/
+.claude/worktrees/
