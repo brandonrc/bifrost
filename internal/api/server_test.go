@@ -9,6 +9,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/brandonrc/bifrost/internal/auth"
+	"github.com/brandonrc/bifrost/internal/controller"
 )
 
 func devHandler() http.Handler {
@@ -65,13 +68,21 @@ func TestSpecIsServedAtDocumentedPath(t *testing.T) {
 	}
 }
 
-// TestUnimplementedOperationsReturn501 spot-checks a representative
-// sample of the still-unported strict-server operations (Wave 1
-// T11/T12 burn these down) for the canonical 501 envelope. The full
-// count (45 = 47 spec operations minus healthz/version) is asserted
-// directly against the interface in TestNotImplementedCount.
-func TestUnimplementedOperationsReturn501(t *testing.T) {
-	h := devHandler()
+// TestOperationsAreNoLongerUnimplemented is TestUnimplementedOperationsReturn501's
+// T12 successor: T11's version of this test spot-checked a representative
+// sample of still-unported operations for the canonical 501 envelope. T12
+// ported the last of them (pools/services/cluster_obs/usage/audit/
+// local_auth), so the same five routes now must NOT 501 — this asserts the
+// burn-down actually happened at the wire level, not just that some other
+// status was returned.
+func TestOperationsAreNoLongerUnimplemented(t *testing.T) {
+	// Unlike devHandler() (a bare NewServer(), nil Store), these routes now
+	// have real logic that touches s.Store — a fully-wired Server is
+	// required or ListPools/UsageReport/Login panic on the nil dependency
+	// before this test gets to assert anything about their status code.
+	store := controller.NewMemoryStore()
+	s := &Server{Store: store, Local: auth.NewLocalAuthenticator(store, 3600, 90)}
+	h := NewHandler(s, HandlerOptions{AllowUnauthenticated: true})
 	for _, req := range []struct {
 		method, path, body string
 	}{
@@ -87,122 +98,106 @@ func TestUnimplementedOperationsReturn501(t *testing.T) {
 		}
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(req.method, req.path, body))
-		if rec.Code != http.StatusNotImplemented {
-			t.Errorf("%s %s: status = %d, want 501, body=%s", req.method, req.path, rec.Code, rec.Body.String())
-			continue
+		if rec.Code == http.StatusNotImplemented {
+			t.Errorf("%s %s: still 501 (body=%s)", req.method, req.path, rec.Body.String())
 		}
-		assertErrorBody(t, rec, "not_implemented")
 	}
 }
 
-// TestNotImplementedCount asserts the exact burn-down count of the
-// operations THIS test still has no dependencies to safely invoke: every
-// StrictServerInterface method other than Healthz/Version and Wave 1 T11's
-// 15 ported operations (clusters ListClusters/CreateCluster/DeleteCluster/
-// GetCluster/ResumeCluster/SuspendCluster/ListJobs, registry ListRegistry,
-// settings GetPolicy/UpdatePolicy, access ListAssignments/DeleteAssignment/
-// UpsertAssignment/ListRoles/Identity) returns ErrNotImplemented.
-//
-// T11's 15 operations are deliberately NOT invoked here: a bare NewServer()
-// has a nil Store, and every one of them now touches it — calling them
-// through this zero-dependency harness would panic instead of asserting
-// anything useful. Their real behavior (including the "not 501 anymore"
-// property) is covered by clusters_test.go/registry_test.go/settings_test.go/
-// access_test.go against a real store. 47 spec operations - 2 (Healthz/
-// Version) - 15 (T11) = 30 still-unported operations, all T12 scope.
-func TestNotImplementedCount(t *testing.T) {
-	s := NewServer()
+// TestAllOperationsImplemented is TestNotImplementedCount's T12 successor:
+// with every operation now ported, the burn-down invariant flips from
+// "exactly 30 unported" to "exactly zero". Unlike T11's version, this
+// wires a FULLY-dependency-injected Server (a real memory store, fake
+// Provisioner/ServiceProvisioner, a local authenticator) so every one of
+// the 47 operations can be safely invoked with a zero-value request object
+// instead of skipping the ones that would panic on a bare NewServer() —
+// every handler in this package nil-checks its dependencies/req.Body
+// before touching them, so a zero-value request against a real Server
+// answers with a graceful error (400/401/403/404/...) or a real success,
+// NEVER ErrNotImplemented and never a panic. A recover() per call turns an
+// accidental panic into a normal test failure naming the operation,
+// instead of aborting the whole suite.
+func TestAllOperationsImplemented(t *testing.T) {
+	store := controller.NewMemoryStore()
+	s := &Server{
+		Store:              store,
+		Provisioner:        fakeProvisioner{},
+		ServiceProvisioner: fakeServiceProvisioner{},
+		Local:              auth.NewLocalAuthenticator(store, 3600, 90),
+	}
 	ctx := context.Background()
-	implemented := 0
-	notImplemented := 0
 
-	check := func(name string, resp any, err error) {
+	notImplemented := 0
+	panicked := 0
+	call := func(name string, fn func() (any, error)) {
 		t.Helper()
+		defer func() {
+			if r := recover(); r != nil {
+				panicked++
+				t.Errorf("%s: panicked: %v", name, r)
+			}
+		}()
+		_, err := fn()
 		if err == ErrNotImplemented {
 			notImplemented++
-			if resp != nil {
-				t.Errorf("%s: expected nil response alongside ErrNotImplemented, got %#v", name, resp)
-			}
-			return
+			t.Errorf("%s: still returns ErrNotImplemented", name)
 		}
-		if err != nil {
-			t.Errorf("%s: unexpected error %v", name, err)
-			return
-		}
-		implemented++
 	}
 
-	r1, e1 := s.Healthz(ctx, HealthzRequestObject{})
-	check("Healthz", r1, e1)
-	r2, e2 := s.Version(ctx, VersionRequestObject{})
-	check("Version", r2, e2)
+	call("Healthz", func() (any, error) { return s.Healthz(ctx, HealthzRequestObject{}) })
+	call("Version", func() (any, error) { return s.Version(ctx, VersionRequestObject{}) })
+	call("ListClusters", func() (any, error) { return s.ListClusters(ctx, ListClustersRequestObject{}) })
+	call("CreateCluster", func() (any, error) { return s.CreateCluster(ctx, CreateClusterRequestObject{}) })
+	call("DeleteCluster", func() (any, error) { return s.DeleteCluster(ctx, DeleteClusterRequestObject{}) })
+	call("GetCluster", func() (any, error) { return s.GetCluster(ctx, GetClusterRequestObject{}) })
+	call("ResumeCluster", func() (any, error) { return s.ResumeCluster(ctx, ResumeClusterRequestObject{}) })
+	call("SuspendCluster", func() (any, error) { return s.SuspendCluster(ctx, SuspendClusterRequestObject{}) })
+	call("ListJobs", func() (any, error) { return s.ListJobs(ctx, ListJobsRequestObject{}) })
+	call("ListRegistry", func() (any, error) { return s.ListRegistry(ctx, ListRegistryRequestObject{}) })
+	call("GetPolicy", func() (any, error) { return s.GetPolicy(ctx, GetPolicyRequestObject{}) })
+	call("UpdatePolicy", func() (any, error) { return s.UpdatePolicy(ctx, UpdatePolicyRequestObject{}) })
+	call("ListAssignments", func() (any, error) { return s.ListAssignments(ctx, ListAssignmentsRequestObject{}) })
+	call("DeleteAssignment", func() (any, error) { return s.DeleteAssignment(ctx, DeleteAssignmentRequestObject{}) })
+	call("UpsertAssignment", func() (any, error) { return s.UpsertAssignment(ctx, UpsertAssignmentRequestObject{}) })
+	call("ListRoles", func() (any, error) { return s.ListRoles(ctx, ListRolesRequestObject{}) })
+	call("Identity", func() (any, error) { return s.Identity(ctx, IdentityRequestObject{}) })
 
-	r6, e6 := s.ListAuditEvents(ctx, ListAuditEventsRequestObject{})
-	check("ListAuditEvents", r6, e6)
-	r7, e7 := s.VerifyAuditTrail(ctx, VerifyAuditTrailRequestObject{})
-	check("VerifyAuditTrail", r7, e7)
-	r8, e8 := s.Login(ctx, LoginRequestObject{})
-	check("Login", r8, e8)
-	r9, e9 := s.Logout(ctx, LogoutRequestObject{})
-	check("Logout", r9, e9)
-	r10, e10 := s.Providers(ctx, ProvidersRequestObject{})
-	check("Providers", r10, e10)
-	r11, e11 := s.ListTokens(ctx, ListTokensRequestObject{})
-	check("ListTokens", r11, e11)
-	r12, e12 := s.CreateToken(ctx, CreateTokenRequestObject{})
-	check("CreateToken", r12, e12)
-	r13, e13 := s.RevokeToken(ctx, RevokeTokenRequestObject{})
-	check("RevokeToken", r13, e13)
-	r14, e14 := s.ListUsers(ctx, ListUsersRequestObject{})
-	check("ListUsers", r14, e14)
-	r15, e15 := s.CreateUser(ctx, CreateUserRequestObject{})
-	check("CreateUser", r15, e15)
-	r16, e16 := s.UpdateUser(ctx, UpdateUserRequestObject{})
-	check("UpdateUser", r16, e16)
-	r21, e21 := s.ClusterEvents(ctx, ClusterEventsRequestObject{})
-	check("ClusterEvents", r21, e21)
-	r22, e22 := s.ClusterJobs(ctx, ClusterJobsRequestObject{})
-	check("ClusterJobs", r22, e22)
-	r23, e23 := s.ClusterLogs(ctx, ClusterLogsRequestObject{})
-	check("ClusterLogs", r23, e23)
-	r24, e24 := s.ClusterMetrics(ctx, ClusterMetricsRequestObject{})
-	check("ClusterMetrics", r24, e24)
-	r25, e25 := s.ClusterNodes(ctx, ClusterNodesRequestObject{})
-	check("ClusterNodes", r25, e25)
-	r30, e30 := s.Metrics(ctx, MetricsRequestObject{})
-	check("Metrics", r30, e30)
-	r31, e31 := s.ListPools(ctx, ListPoolsRequestObject{})
-	check("ListPools", r31, e31)
-	r32, e32 := s.CreatePool(ctx, CreatePoolRequestObject{})
-	check("CreatePool", r32, e32)
-	r33, e33 := s.DeletePool(ctx, DeletePoolRequestObject{})
-	check("DeletePool", r33, e33)
-	r34, e34 := s.GetPool(ctx, GetPoolRequestObject{})
-	check("GetPool", r34, e34)
-	r35, e35 := s.ListAllocations(ctx, ListAllocationsRequestObject{})
-	check("ListAllocations", r35, e35)
-	r36, e36 := s.DeleteAllocation(ctx, DeleteAllocationRequestObject{})
-	check("DeleteAllocation", r36, e36)
-	r37, e37 := s.PutAllocation(ctx, PutAllocationRequestObject{})
-	check("PutAllocation", r37, e37)
-	r38, e38 := s.PoolUsage(ctx, PoolUsageRequestObject{})
-	check("PoolUsage", r38, e38)
-	r40, e40 := s.ListServices(ctx, ListServicesRequestObject{})
-	check("ListServices", r40, e40)
-	r41, e41 := s.DeployService(ctx, DeployServiceRequestObject{})
-	check("DeployService", r41, e41)
-	r42, e42 := s.DeleteService(ctx, DeleteServiceRequestObject{})
-	check("DeleteService", r42, e42)
-	r43, e43 := s.GetService(ctx, GetServiceRequestObject{})
-	check("GetService", r43, e43)
-	r46, e46 := s.UsageReport(ctx, UsageReportRequestObject{})
-	check("UsageReport", r46, e46)
+	call("ListAuditEvents", func() (any, error) { return s.ListAuditEvents(ctx, ListAuditEventsRequestObject{}) })
+	call("VerifyAuditTrail", func() (any, error) { return s.VerifyAuditTrail(ctx, VerifyAuditTrailRequestObject{}) })
+	call("Login", func() (any, error) { return s.Login(ctx, LoginRequestObject{}) })
+	call("Logout", func() (any, error) { return s.Logout(ctx, LogoutRequestObject{}) })
+	call("Providers", func() (any, error) { return s.Providers(ctx, ProvidersRequestObject{}) })
+	call("ListTokens", func() (any, error) { return s.ListTokens(ctx, ListTokensRequestObject{}) })
+	call("CreateToken", func() (any, error) { return s.CreateToken(ctx, CreateTokenRequestObject{}) })
+	call("RevokeToken", func() (any, error) { return s.RevokeToken(ctx, RevokeTokenRequestObject{}) })
+	call("ListUsers", func() (any, error) { return s.ListUsers(ctx, ListUsersRequestObject{}) })
+	call("CreateUser", func() (any, error) { return s.CreateUser(ctx, CreateUserRequestObject{}) })
+	call("UpdateUser", func() (any, error) { return s.UpdateUser(ctx, UpdateUserRequestObject{}) })
+	call("ClusterEvents", func() (any, error) { return s.ClusterEvents(ctx, ClusterEventsRequestObject{}) })
+	call("ClusterJobs", func() (any, error) { return s.ClusterJobs(ctx, ClusterJobsRequestObject{}) })
+	call("ClusterLogs", func() (any, error) { return s.ClusterLogs(ctx, ClusterLogsRequestObject{}) })
+	call("ClusterMetrics", func() (any, error) { return s.ClusterMetrics(ctx, ClusterMetricsRequestObject{}) })
+	call("ClusterNodes", func() (any, error) { return s.ClusterNodes(ctx, ClusterNodesRequestObject{}) })
+	call("Metrics", func() (any, error) { return s.Metrics(ctx, MetricsRequestObject{}) })
+	call("ListPools", func() (any, error) { return s.ListPools(ctx, ListPoolsRequestObject{}) })
+	call("CreatePool", func() (any, error) { return s.CreatePool(ctx, CreatePoolRequestObject{}) })
+	call("DeletePool", func() (any, error) { return s.DeletePool(ctx, DeletePoolRequestObject{}) })
+	call("GetPool", func() (any, error) { return s.GetPool(ctx, GetPoolRequestObject{}) })
+	call("ListAllocations", func() (any, error) { return s.ListAllocations(ctx, ListAllocationsRequestObject{}) })
+	call("DeleteAllocation", func() (any, error) { return s.DeleteAllocation(ctx, DeleteAllocationRequestObject{}) })
+	call("PutAllocation", func() (any, error) { return s.PutAllocation(ctx, PutAllocationRequestObject{}) })
+	call("PoolUsage", func() (any, error) { return s.PoolUsage(ctx, PoolUsageRequestObject{}) })
+	call("ListServices", func() (any, error) { return s.ListServices(ctx, ListServicesRequestObject{}) })
+	call("DeployService", func() (any, error) { return s.DeployService(ctx, DeployServiceRequestObject{}) })
+	call("DeleteService", func() (any, error) { return s.DeleteService(ctx, DeleteServiceRequestObject{}) })
+	call("GetService", func() (any, error) { return s.GetService(ctx, GetServiceRequestObject{}) })
+	call("UsageReport", func() (any, error) { return s.UsageReport(ctx, UsageReportRequestObject{}) })
 
-	if implemented != 2 {
-		t.Errorf("implemented count = %d, want 2 (Healthz, Version)", implemented)
+	if notImplemented != 0 {
+		t.Errorf("not-implemented count = %d, want 0 (every strict-server operation is ported)", notImplemented)
 	}
-	if notImplemented != 30 {
-		t.Errorf("not-implemented count = %d, want 30 (45 - Wave 1 T11's 15 ported operations)", notImplemented)
+	if panicked != 0 {
+		t.Errorf("%d operation(s) panicked against a fully-wired Server", panicked)
 	}
 }
 

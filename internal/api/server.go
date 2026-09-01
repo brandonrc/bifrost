@@ -5,10 +5,12 @@ import (
 	_ "embed"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/brandonrc/bifrost/internal/auth"
 	"github.com/brandonrc/bifrost/internal/controller"
 	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/brandonrc/bifrost/internal/provision"
 )
 
 // SpecPath is where the vendored OpenAPI contract is served. mobula-api's
@@ -29,18 +31,24 @@ var specJSON []byte
 // used env!("CARGO_PKG_VERSION").
 var version = "0.0.1"
 
-// Server implements StrictServerInterface. Healthz/Version and Wave 1 T11's
-// clusters/registry/settings/access operations are live; every other
-// operation returns ErrNotImplemented (501) until Wave 1 T12 ports the rest
-// behind this same generated interface — the interface compiles complete
-// from day one (ADR-0002) and burns down operation by operation from here.
+// Server implements StrictServerInterface. Every operation is live as of
+// Wave 1 T12: T11 ported clusters/registry/settings/access, T12 ported the
+// rest (pools/services/cluster_obs/usage/audit/local_auth) — the interface
+// compiled complete from day one (ADR-0002, Wave 1 T10) and has now burned
+// down to zero ErrNotImplemented stubs.
 //
-// Every field is exported and independently optional (nil/zero-value): a
-// bare Server{} (NewServer()) still satisfies StrictServerInterface — every
-// stub method still returns ErrNotImplemented — and existing tests/
-// constructors that build a Server with no dependencies keep working. A
-// caller wiring up a real deployment (or a T11/T12 handler test) sets the
-// fields its operations need directly.
+// Every field is exported and independently optional in the sense that a
+// caller wires up only what its deployment needs: Provisioner,
+// ServiceProvisioner, and Local are each nil-checked by every operation
+// that reads them, answering a graceful error (404/502/...) rather than
+// touching a nil dependency. Store is the one exception — every real
+// deployment configures it, so handlers call straight through to it
+// (matching T11's clusters.go/settings.go convention); a Server built
+// without one (e.g. a bare NewServer()) only stays safe for operations
+// that never reach the Store at all (Healthz, Version, Providers). No
+// operation anywhere in this file returns ErrNotImplemented (501)
+// anymore — the T11/T12 handler tests exercise the real behavior; a
+// caller wiring up a real deployment sets the fields its operations need.
 type Server struct {
 	// Store is the desired-state store backing clusters/pools/jobs/audit/
 	// settings/access. Every operation this wave ports requires it.
@@ -58,12 +66,50 @@ type Server struct {
 	// settings.go.
 	PolicySeed PolicyConfig
 
+	// Local is the local (IdP-free) authenticator (ADR-0011), when local
+	// auth is enabled — login.go/local_auth.go's login/tokens/logout/user-
+	// management operations need it. nil when the deployment uses OIDC
+	// only (or neither): every local_auth.go operation then answers 404
+	// "local auth is not enabled" — see requireLocal — mirroring the Rust
+	// reference's router-level absence (mobula-api mounts local_auth's
+	// router only when `--local-auth` is set; Go's single generated
+	// strict-server has no such conditional mount, so the handler enforces
+	// it instead).
+	Local *auth.LocalAuthenticator
+	// Provisioner backs the cluster observability reads (cluster_obs.go:
+	// nodes/events/logs) and the jobs/metrics southbound proxy's dashboard
+	// base-URL resolution. nil means "no cluster backend" — those routes
+	// answer 404/503 exactly as an unconfigured mobula-api deployment does.
+	Provisioner provision.Provisioner
+	// ServiceProvisioner backs services.go (the Ray Serve CRUD proxy). nil
+	// means no service backend is configured.
+	ServiceProvisioner provision.ServiceProvisioner
+	// ObsHTTPClient is the southbound HTTP client cluster_obs.go's jobs and
+	// metrics proxies use to reach a cluster's Ray dashboard/Job API. nil
+	// falls back to obsHTTPClient()'s default (timeouts + no
+	// redirects, mirroring cluster_obs.rs's client). Exists as a field so
+	// tests can point it at an httptest server without a real network.
+	ObsHTTPClient *http.Client
+
 	// admitMu guards admitLocks (issue #44's per-project admission lock —
 	// see clusters.go's withProjectAdmitLock doc comment for what this
 	// does and does NOT cover).
 	admitMu    sync.Mutex
 	admitLocks map[string]*sync.Mutex
+
+	// obsMu guards lazy-initializing obsInflight (cluster_obs.go's
+	// jobs/metrics southbound proxy concurrency cap, mirroring
+	// cluster_obs.rs's MAX_INFLIGHT semaphore).
+	obsMu       sync.Mutex
+	obsInflight chan struct{}
 }
+
+// obsConnectTimeout/obsReadTimeout mirror cluster_obs.rs's CONNECT_TIMEOUT/
+// READ_TIMEOUT: a wedged head must not hang the request.
+const (
+	obsConnectTimeout = 5 * time.Second
+	obsReadTimeout    = 30 * time.Second
+)
 
 // NewServer constructs the (currently stateless) skeleton server.
 func NewServer() *Server { return &Server{} }
@@ -147,154 +193,4 @@ func NewHandler(server StrictServerInterface, opts HandlerOptions) http.Handler 
 	}
 
 	return h
-}
-
-// ListAuditEvents is not yet implemented (Wave 1 T11/T12).
-func (s *Server) ListAuditEvents(_ context.Context, _ ListAuditEventsRequestObject) (ListAuditEventsResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// VerifyAuditTrail is not yet implemented (Wave 1 T11/T12).
-func (s *Server) VerifyAuditTrail(_ context.Context, _ VerifyAuditTrailRequestObject) (VerifyAuditTrailResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// Login is not yet implemented (Wave 1 T11/T12).
-func (s *Server) Login(_ context.Context, _ LoginRequestObject) (LoginResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// Logout is not yet implemented (Wave 1 T11/T12).
-func (s *Server) Logout(_ context.Context, _ LogoutRequestObject) (LogoutResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// Providers is not yet implemented (Wave 1 T11/T12).
-func (s *Server) Providers(_ context.Context, _ ProvidersRequestObject) (ProvidersResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// ListTokens is not yet implemented (Wave 1 T11/T12).
-func (s *Server) ListTokens(_ context.Context, _ ListTokensRequestObject) (ListTokensResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// CreateToken is not yet implemented (Wave 1 T11/T12).
-func (s *Server) CreateToken(_ context.Context, _ CreateTokenRequestObject) (CreateTokenResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// RevokeToken is not yet implemented (Wave 1 T11/T12).
-func (s *Server) RevokeToken(_ context.Context, _ RevokeTokenRequestObject) (RevokeTokenResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// ListUsers is not yet implemented (Wave 1 T11/T12).
-func (s *Server) ListUsers(_ context.Context, _ ListUsersRequestObject) (ListUsersResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// CreateUser is not yet implemented (Wave 1 T11/T12).
-func (s *Server) CreateUser(_ context.Context, _ CreateUserRequestObject) (CreateUserResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// UpdateUser is not yet implemented (Wave 1 T11/T12).
-func (s *Server) UpdateUser(_ context.Context, _ UpdateUserRequestObject) (UpdateUserResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// ClusterEvents is not yet implemented (Wave 1 T11/T12).
-func (s *Server) ClusterEvents(_ context.Context, _ ClusterEventsRequestObject) (ClusterEventsResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// ClusterJobs is not yet implemented (Wave 1 T11/T12).
-func (s *Server) ClusterJobs(_ context.Context, _ ClusterJobsRequestObject) (ClusterJobsResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// ClusterLogs is not yet implemented (Wave 1 T11/T12).
-func (s *Server) ClusterLogs(_ context.Context, _ ClusterLogsRequestObject) (ClusterLogsResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// ClusterMetrics is not yet implemented (Wave 1 T11/T12).
-func (s *Server) ClusterMetrics(_ context.Context, _ ClusterMetricsRequestObject) (ClusterMetricsResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// ClusterNodes is not yet implemented (Wave 1 T11/T12).
-func (s *Server) ClusterNodes(_ context.Context, _ ClusterNodesRequestObject) (ClusterNodesResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// Metrics is not yet implemented (Wave 1 T11/T12).
-func (s *Server) Metrics(_ context.Context, _ MetricsRequestObject) (MetricsResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// ListPools is not yet implemented (Wave 1 T11/T12).
-func (s *Server) ListPools(_ context.Context, _ ListPoolsRequestObject) (ListPoolsResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// CreatePool is not yet implemented (Wave 1 T11/T12).
-func (s *Server) CreatePool(_ context.Context, _ CreatePoolRequestObject) (CreatePoolResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// DeletePool is not yet implemented (Wave 1 T11/T12).
-func (s *Server) DeletePool(_ context.Context, _ DeletePoolRequestObject) (DeletePoolResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// GetPool is not yet implemented (Wave 1 T11/T12).
-func (s *Server) GetPool(_ context.Context, _ GetPoolRequestObject) (GetPoolResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// ListAllocations is not yet implemented (Wave 1 T11/T12).
-func (s *Server) ListAllocations(_ context.Context, _ ListAllocationsRequestObject) (ListAllocationsResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// DeleteAllocation is not yet implemented (Wave 1 T11/T12).
-func (s *Server) DeleteAllocation(_ context.Context, _ DeleteAllocationRequestObject) (DeleteAllocationResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// PutAllocation is not yet implemented (Wave 1 T11/T12).
-func (s *Server) PutAllocation(_ context.Context, _ PutAllocationRequestObject) (PutAllocationResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// PoolUsage is not yet implemented (Wave 1 T11/T12).
-func (s *Server) PoolUsage(_ context.Context, _ PoolUsageRequestObject) (PoolUsageResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// ListServices is not yet implemented (Wave 1 T11/T12).
-func (s *Server) ListServices(_ context.Context, _ ListServicesRequestObject) (ListServicesResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// DeployService is not yet implemented (Wave 1 T11/T12).
-func (s *Server) DeployService(_ context.Context, _ DeployServiceRequestObject) (DeployServiceResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// DeleteService is not yet implemented (Wave 1 T11/T12).
-func (s *Server) DeleteService(_ context.Context, _ DeleteServiceRequestObject) (DeleteServiceResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// GetService is not yet implemented (Wave 1 T11/T12).
-func (s *Server) GetService(_ context.Context, _ GetServiceRequestObject) (GetServiceResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// UsageReport is not yet implemented (Wave 1 T11/T12).
-func (s *Server) UsageReport(_ context.Context, _ UsageReportRequestObject) (UsageReportResponseObject, error) {
-	return nil, ErrNotImplemented
 }

@@ -290,19 +290,23 @@ func TestFailClosedGuardInstallationCondition(t *testing.T) {
 // fabricate an identity while doing so — a downstream authorization check
 // that finds one would be reading a credential nobody presented.
 func TestDevModeAttachesNoIdentity(t *testing.T) {
-	// /api/v1/pools (T12 scope) rather than /api/v1/clusters: T11 ported
-	// real cluster handlers behind a bare NewServer(), which have no
-	// store to call in this no-dependencies construction — this probe
-	// only cares about the auth-layer property (dev mode passes through
-	// with no identity attached), not any particular handler's body, so
-	// it targets a still-unimplemented stub instead.
-	req := httptest.NewRequest("GET", "/api/v1/pools", nil)
+	// /api/v1/version (T10 scope): always live and dependency-free (no
+	// Store needed), unlike every other route as of T12 — which finished
+	// porting every remaining 501 stub, including /api/v1/pools (T11's
+	// comment above this test named that route specifically as "a still-
+	// unimplemented stub"; it no longer is, and calling it on a bare
+	// no-dependencies NewServer() now panics on a nil Store instead of
+	// 501ing). This probe only cares about the auth-layer property (dev
+	// mode passes through with no identity attached), not any particular
+	// handler's body, so it targets the one route guaranteed to need
+	// nothing but the identity context to answer.
+	req := httptest.NewRequest("GET", "/api/v1/version", nil)
 	req.RemoteAddr = "127.0.0.1:9999"
 	rec := httptest.NewRecorder()
 	NewHandler(NewServer(), HandlerOptions{}).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusNotImplemented {
-		t.Errorf("dev mode from loopback should reach the stub, got %d", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Errorf("dev mode from loopback should reach the handler, got %d", rec.Code)
 	}
 	if id, ok := IdentityFromContext(context.Background()); ok || id != nil {
 		t.Errorf("dev mode attached an identity: %v", id)
