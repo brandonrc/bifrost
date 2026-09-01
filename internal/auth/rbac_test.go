@@ -201,6 +201,62 @@ func TestRoleWireNamesRoundTrip(t *testing.T) {
 	}
 }
 
+// TestRoleUnmarshalJSONRoundTrip covers the ingress guard T11 added
+// (Role.UnmarshalJSON) that TestRoleWireNamesRoundTrip above never
+// exercised directly (it only round-trips through AsStr/ParseRole, not
+// through encoding/json): a Role decodes correctly from its wire string,
+// and an unrecognized value fails closed rather than defaulting to
+// RoleViewer's zero value (deploy-time T12 review follow-up).
+func TestRoleUnmarshalJSONRoundTrip(t *testing.T) {
+	var r Role
+	if err := json.Unmarshal([]byte(`"operator"`), &r); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if r != RoleOperator {
+		t.Fatalf("role = %v, want RoleOperator", r)
+	}
+	encoded, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+	if string(encoded) != `"operator"` {
+		t.Fatalf("encoded = %s, want %q", encoded, `"operator"`)
+	}
+
+	var bad Role
+	if err := json.Unmarshal([]byte(`"superuser"`), &bad); err == nil {
+		t.Fatal("expected an error for an unrecognized role string (fail closed, not RoleViewer's zero value)")
+	}
+}
+
+// TestRoleScopeUnmarshalJSONRoundTrip pins down that RoleScope needs no
+// UnmarshalJSON of its own (T11's report flagged this as unverified):
+// encoding/json already dispatches to the embedded Role field's
+// UnmarshalJSON, so an invalid role string inside a RoleScope fails
+// closed exactly like a bare Role does.
+func TestRoleScopeUnmarshalJSONRoundTrip(t *testing.T) {
+	var rs RoleScope
+	if err := json.Unmarshal([]byte(`{"role":"admin","scope":"project:demo"}`), &rs); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if rs != (RoleScope{Role: RoleAdmin, Scope: "project:demo"}) {
+		t.Fatalf("role scope = %+v, want {admin project:demo}", rs)
+	}
+	encoded, err := json.Marshal(rs)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+	var rs2 RoleScope
+	if err := json.Unmarshal(encoded, &rs2); err != nil || rs2 != rs {
+		t.Fatalf("round trip failed: encoded=%s err=%v got=%+v", encoded, err, rs2)
+	}
+
+	var bad RoleScope
+	if err := json.Unmarshal([]byte(`{"role":"superuser","scope":"*"}`), &bad); err == nil {
+		t.Fatal("expected an error for an unrecognized role string embedded in a RoleScope")
+	}
+}
+
 // Nit (fix round 1): pin ParseRole's zero-value-on-failure behavior so a
 // caller that (incorrectly) drops ok can't regress this silently. Unlike
 // Rust's Option<Role>, an unchecked ParseRole result is RoleViewer's zero
