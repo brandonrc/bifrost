@@ -25,12 +25,12 @@ ALL rows ship. Priority governs **sequence**, never scope-cut.
 | 3 | RBAC for model serving and cluster access; direct Ray Serve/dashboard/Jobs/GCS access blocked | HIGH | **Built** (OIDC, deny-by-default RBAC, gateway) |
 | 4 | Serving in separate resource pool from compute clusters | CRITICAL | In flight (Kueue pools) |
 | 5 | UI runs jobs via ephemeral RayJob (cluster created per job, removed after) | CRITICAL | **Gap** |
-| 6 | Self-serve private clusters (dask-gateway UX): request RayCluster from gateway, Ray Client address back, no shared heads/workers/object store, list/stop own clusters, idle cleanup, approved options only, own-cluster dashboard access | CRITICAL | **Core built** (lifecycle controller, registry) |
+| 6 | Self-serve private clusters (dask-gateway UX): request RayCluster from gateway, Ray Client address back, no shared heads/workers/object store, list/stop own clusters, idle cleanup, approved options only, own-cluster dashboard access | CRITICAL | **Built** (lifecycle controller, registry, + Wave 2-C connect handoff & own-cluster dashboard proxy). Caveat: connect resolves the **in-cluster** head service; remote/off-cluster connect deferred (needs an owner-scoped address endpoint) |
 | 7 | Group admins control profiles, images, CPU/mem/GPU, max workers | CRITICAL | Partial (policy/quota, flavors) |
 | 8 | Automatic cleanup even after gateway failure; ownership recorded; state recovered on restart | CRITICAL | **Built** (persistent Store, observation-first reconcile) |
-| 9 | Start/stop clusters from JupyterLab (extension) | CRITICAL | **Not built** (client-side; Python SDK is the substrate) |
+| 9 | Start/stop clusters from JupyterLab (extension) | CRITICAL | **Built** (bifrost-jupyter, Wave 2-C: start/stop/suspend/resume panel, status, prod OIDC) |
 | 10 | Use nebi environments on the cluster | CRITICAL | Blocked on nebi + Artifact Keeper |
-| 11 | Pass environment variables to the cluster (JupyterLab extension) | CRITICAL | **Not built** |
+| 11 | Pass environment variables to the cluster (JupyterLab extension) | CRITICAL | **Built** (Wave 2-C: env-var editor -> Ray Job `runtime_env.env_vars`) |
 | 12 | Private storage (e.g. S3) from the cluster | CRITICAL | Needs exploration |
 | 13 | Group capacity via shared resource pools; fair queueing; admin quotas/weights | LOW | In flight (Kueue) |
 | 14 | Usage visibility: who requested what, duration, estimated cost | LOW | **Built** (metering, price sheets) |
