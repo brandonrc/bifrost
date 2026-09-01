@@ -220,6 +220,30 @@ func TestDefaultGatewayLimitsMatchRustReference(t *testing.T) {
 	}
 }
 
+// Pins the ADR-0005 fix: the southbound Transport's idle-connection pool
+// must be sized to MaxInflight (clamped to 2), not left at Go's
+// default-per-host 2 — that default starved concurrent southbound
+// requests of pooled connections and looked exactly like a GC-pause tail
+// spike under load (see docs/adr/0005-gateway-p99-evidence.md).
+func TestBuildSouthboundGatewayClientSizesConnectionPool(t *testing.T) {
+	for _, tc := range []struct {
+		maxInflight int64
+		want        int
+	}{
+		{maxInflight: 64, want: 64},
+		{maxInflight: 1, want: 2}, // clamped
+	} {
+		tr, ok := buildSouthboundGatewayClient(tc.maxInflight).Transport.(*http.Transport)
+		if !ok {
+			t.Fatalf("Transport is %T, want *http.Transport", tr)
+		}
+		if tr.MaxIdleConnsPerHost != tc.want || tr.MaxIdleConns != tc.want {
+			t.Errorf("maxInflight=%d: MaxIdleConnsPerHost=%d MaxIdleConns=%d, want %d",
+				tc.maxInflight, tr.MaxIdleConnsPerHost, tr.MaxIdleConns, tc.want)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // hostIsCluster / requiredGatewayPermission (middleware.go, T13)
 // ---------------------------------------------------------------------------
