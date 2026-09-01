@@ -28,8 +28,8 @@ Ray 2.5x / JupyterHub docs (2026).
    header; it proxies each cluster's Ray dashboard, Jobs API (HTTP 8265), and
    the WS log-tail with credential strip-and-swap. It does **not** carry Ray
    Client (`ray://:10001`, gRPC). Port 10001 is reachable only in-cluster, via a
-   per-owner NetworkPolicy that pins ingress to the pod labeled
-   `bifrost.dev/owner == <cluster owner>`. Consequence: everything #9/#11 and
+   per-owner NetworkPolicy that pins ingress on `:10001` **and** `:8265` to the
+   pod labeled `bifrost.dev/owner == <cluster owner>`. Consequence: everything #9/#11 and
    observability need goes through Bifrost over HTTP; the interactive
    `ray.init("ray://…")` path does not and is deployment-fragile.
 
@@ -105,8 +105,8 @@ token into the singleuser pod via `enable_auth_state: true` + a spawner/auth
 hook (off by default — a **deployment prerequisite**, documented, not code). The
 server extension reads that token from the pod env and forwards it to Bifrost.
 Because Bifrost stamps `ClusterSpec.owner` from the request identity
-(`preferred_username`, else `sub`) and the per-owner NetworkPolicy keys `:10001`
-on that owner, **the identity the extension presents must equal the identity
+(`preferred_username`, else `sub`) and the per-owner NetworkPolicy keys both `:8265`
+and `:10001` on that owner, **the identity the extension presents must equal the identity
 that labels the pod** — OIDC passthrough is what guarantees that.
 
 Where audiences don't line up, use Bifrost's **RFC 8693 token exchange**
@@ -137,8 +137,8 @@ It is not merely unimplemented; it cannot be made to work on the OIDC path:
   `preferred_username`" are mutually exclusive. Clusters would then carry a UUID
   `bifrost.dev/owner` label (`internal/provision/kuberay.go:64`) and the
   per-owner NetworkPolicy (`kuberay.go:719`) would stop admitting the notebook
-  pod to `:8265`/`:10001` — silently breaking Ray Client while the Jobs API
-  kept working. Group-derived project roles are lost too.
+  pod to `:8265`/`:10001` — silently breaking the ENTIRE data plane — one selector guards both
+  ports, so Ray Client, dashboard and Jobs API die together. Group-derived project roles are lost too.
 
 **What ships instead:** lifetime is handled by *refreshing the OIDC credential*
 (`grant_type=refresh_token` at the IdP, `_FILE` env forms re-read so a rotating
@@ -200,7 +200,8 @@ image/head/worker_groups). Users never see raw manifests (satisfies #6/#7's
 
 1. **Owner/label match (biggest).** OIDC `preferred_username` must equal the
    notebook pod's owner label the NetworkPolicy keys on. If Nebari's singleuser
-   pod label differs, `:10001` is silently blocked. **The spike verifies this
+   pod label differs, the whole data plane (`:8265` + `:10001`) is silently
+   blocked while the control plane keeps working — see the §4 caveat. **The spike verifies this
    end-to-end first.**
 2. **auth_state plumbing is deployment config, not code.** Needs
    `enable_auth_state` + spawner env injection in the Nebari/Hub config;
