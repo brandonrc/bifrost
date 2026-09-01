@@ -240,11 +240,11 @@ cross-checks only.
   southbound client currently trusts only system roots).
 - Job-history side-write bookkeeping, deferred alongside the metering loop
   itself (Wave 3).
-- Toolchain bump to go1.26.6+ to clear the stdlib `govulncheck` findings
-  open against go1.26.2 as of this exit (`mime`, `crypto/x509`, the
-  `net/http`/`x/net` HTTP2 and idna-adjacent findings, `net` — 12 stdlib
-  CVEs per `govulncheck ./...`; each is fixed upstream by the toolchain
-  bump, none has a code-level fix available in this repo).
+- ~~Toolchain bump to go1.26.6 to clear the stdlib `govulncheck` findings~~
+  **DONE (Wave 1 exit):** the toolchain is pinned to `go1.26.6`, clearing the
+  12 stdlib CVEs that were open against go1.26.2; `govulncheck ./...` now exits
+  0 (one uncalled `x/crypto/openpgp` module-level advisory remains, not
+  reachable from any code path).
 - `runServe`'s shutdown WaitGroup drain (`cmd/bifrost/serve.go`): SIGINT/
   SIGTERM currently stops accepting and closes the listener but does not
   wait for in-flight requests/reconcile iterations to finish draining
