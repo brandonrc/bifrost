@@ -99,6 +99,22 @@ func IdentityFromContext(ctx context.Context) (*auth.Identity, bool) {
 	return id, ok
 }
 
+type bearerTokenContextKey struct{}
+
+// BearerTokenFromContext returns the raw bearer token RequireAuth
+// authenticated the request with (T12, local_auth.go's Logout): the
+// generated LogoutRequestObject carries no fields at all, so a handler
+// that needs the presented token — to look up its PAT prefix and revoke
+// it, mirroring local_auth.rs's logout reading the Authorization header
+// straight off the request — has no other way to reach it once inside the
+// strict-server layer. Only set when RequireAuth actually authenticated
+// the request (never in dev mode, where no AuthState is configured at
+// all).
+func BearerTokenFromContext(ctx context.Context) (string, bool) {
+	tok, ok := ctx.Value(bearerTokenContextKey{}).(string)
+	return tok, ok
+}
+
 // ErrMissingBearerToken and ErrInvalidBearerToken back the 401 responses
 // RequireAuth emits; both carry the canonical envelope via WriteError.
 // Value types (see HTTPError's doc comment) — every use copies, never
@@ -164,6 +180,7 @@ func RequireAuth(state AuthState) func(http.Handler) http.Handler {
 				return
 			}
 			ctx := context.WithValue(r.Context(), identityContextKey{}, identity)
+			ctx = context.WithValue(ctx, bearerTokenContextKey{}, token)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

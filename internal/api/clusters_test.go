@@ -9,7 +9,41 @@ import (
 	"github.com/brandonrc/bifrost/internal/controller"
 	"github.com/brandonrc/bifrost/internal/core"
 	"github.com/brandonrc/bifrost/internal/policy"
+	"github.com/brandonrc/bifrost/internal/provision"
 )
+
+// fakeProvisioner is a minimal provision.Provisioner for T12 tests that
+// need one wired but never exercise its cluster-lifecycle methods (only
+// cluster_obs.go's ClusterNodes/ClusterEvents/ClusterLogs/DashboardApiBase
+// matter here) — BaseProvisioner supplies those as no-ops; this type fills
+// in the rest of the interface with trivial bodies.
+type fakeProvisioner struct {
+	provision.BaseProvisioner
+}
+
+func (fakeProvisioner) Apply(context.Context, core.ClusterId, *core.ClusterSpec, uint64, string, *provision.QueueAssignment) (provision.ApplyResponse, error) {
+	return provision.ApplyResponse{}, nil
+}
+func (fakeProvisioner) Terminate(context.Context, core.ClusterId) error { return nil }
+func (fakeProvisioner) Suspend(context.Context, core.ClusterId) error   { return nil }
+func (fakeProvisioner) Resume(context.Context, core.ClusterId) error    { return nil }
+func (fakeProvisioner) Observe(context.Context, core.ClusterId) (provision.ObservedCluster, error) {
+	return provision.ObservedCluster{}, nil
+}
+func (fakeProvisioner) List(context.Context) ([]provision.ObservedCluster, error) { return nil, nil }
+
+// fakeServiceProvisioner is a minimal provision.ServiceProvisioner for
+// services_test.go and the burn-down smoke test.
+type fakeServiceProvisioner struct{}
+
+func (fakeServiceProvisioner) Deploy(context.Context, string, *core.ServiceSpec) error { return nil }
+func (fakeServiceProvisioner) Get(context.Context, string) (*provision.ObservedService, error) {
+	return nil, nil
+}
+func (fakeServiceProvisioner) Delete(context.Context, string) error { return nil }
+func (fakeServiceProvisioner) List(context.Context) ([]provision.ObservedService, error) {
+	return nil, nil
+}
 
 // --- shared test helpers (used by clusters_test.go, registry_test.go,
 // settings_test.go, access_test.go) ---
