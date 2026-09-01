@@ -21,11 +21,27 @@ name: Publish
 # (Go modules from proxy.golang.org, bases from Docker Hub and the Red Hat
 # registry, both digest-pinned in the Dockerfile itself). Single-arch amd64,
 # matching where this is deployed.
+#
+# WHAT THE PULL-BACK BELOW DOES AND DOESN'T PROVE. It proves the push
+# succeeded, the tag resolves on the registry, and auth works. It does NOT
+# prove byte-level fidelity to a separate build: `docker rmi` only untags, and
+# the layers are still present locally under the co-tagged `:latest`, so the
+# pull resolves instantly with no layer fetch. That is fine here — one
+# Dockerfile feeds both tags in one invocation, so there is no wrong-artifact
+# class for it to hide — but it is not a content check, and calling it one
+# would be the same overclaim this workflow exists to avoid.
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
+
+# One publish at a time, and cancel nothing in flight: two overlapping runs
+# can land `:latest` from the older commit after the newer `sha-*`, leaving
+# the mutable tag pointing behind the immutable ones.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -40,7 +56,7 @@ jobs:
       packages: write
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
 
       - uses: docker/login-action@v3
         with:
@@ -61,21 +77,40 @@ jobs:
           docker push "$IMAGE:sha-${SHORT}"
           docker push "$IMAGE:latest"
 
-      # The image is useless if it cannot start, and a push that publishes a
-      # non-starting binary is worse than no push: it looks like success. This
-      # is the cheapest possible smoke test and it runs the artifact that was
-      # just pushed, not the local build cache.
+      # A push that publishes a non-starting binary is worse than no push: it
+      # looks like success. So run the image, and assert the two properties the
+      # UBI9-micro runtime stage is supposed to guarantee rather than trusting
+      # the base.
+      #
+      # NO grep/sed/awk BELOW, DELIBERATELY. ubi9-micro ships `cut`, `id`,
+      # `ldd`, `cat` and `tr` — and no grep. The first version of this step was
+      # `id -u | grep -qv '^0$' || fail`, which reports `FAIL: running as root`
+      # on an image running as 1001, because a MISSING grep and a NON-MATCHING
+      # pattern both leave a non-zero status. It would have been red forever,
+      # and the red would have read as "the image is broken" rather than "the
+      # test is broken" — sending someone to debug a correct artifact.
+      #
+      # Hence: no external tools, and each assertion first checks it actually
+      # got a value. `[ "$(id -u)" != "0" ]` alone has the same defect
+      # inverted — if `id` vanished, the empty string is != "0" and the check
+      # passes silently.
       - name: The published image runs
         run: |
           SHORT=${GITHUB_SHA::7}
           docker rmi "$IMAGE:sha-${SHORT}" >/dev/null 2>&1 || true
           docker pull "$IMAGE:sha-${SHORT}"
           docker run --rm "$IMAGE:sha-${SHORT}" --version
-          # Non-root and static are properties the UBI9-micro runtime stage is
-          # supposed to guarantee; assert them rather than trusting the base.
           docker run --rm --entrypoint=/bin/sh "$IMAGE:sha-${SHORT}" -c '
-            id -u | grep -qv "^0$" || { echo "FAIL: running as root"; exit 1; }
-            ldd /usr/local/bin/bifrost 2>&1 | grep -q "not a dynamic executable" \
-              || { echo "FAIL: binary is dynamically linked"; exit 1; }
-            echo "ok: non-root, static"
+            uid="$(id -u)"
+            [ -n "$uid" ] || { echo "FAIL: could not read uid (is id missing?)"; exit 1; }
+            [ "$uid" != "0" ] || { echo "FAIL: running as root"; exit 1; }
+
+            linkage="$(ldd /usr/local/bin/bifrost 2>&1)"
+            [ -n "$linkage" ] || { echo "FAIL: ldd produced nothing"; exit 1; }
+            case "$linkage" in
+              *"not a dynamic executable"*) : ;;
+              *) echo "FAIL: dynamically linked: $linkage"; exit 1 ;;
+            esac
+
+            echo "ok: uid=$uid, statically linked"
           '
