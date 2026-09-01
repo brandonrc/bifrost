@@ -41,11 +41,21 @@ Ray 2.5x / JupyterHub docs (2026).
   Job's `runtime_env.env_vars` at submit time. **No Bifrost backend change, no
   contract bump** — Wave 2-C is a pure client-side deliverable.
 - **#6 connect → Ray Jobs API first.** The kernel gets a
-  `JobSubmissionClient(address="https://<gateway-host>", headers={Authorization:
-  Bearer …})` — HTTP through the gateway, works remotely, auth-carried, and the
-  path Ray upstream now recommends. Ray Client (`ray://…:10001`) is offered only
-  as an "advanced, same-cluster, owner-pod-only" option with its NetworkPolicy
-  caveat printed alongside.
+  `JobSubmissionClient(address="http://<id>-head-svc.<ns>.svc:8265")` — the Ray
+  Jobs API, the path Ray upstream now recommends. Ray Client
+  (`ray://…:10001`) is offered only as an "advanced, same-cluster,
+  owner-pod-only" option with its NetworkPolicy caveat printed alongside.
+
+  **AMENDED during implementation (T3 spike, user-approved):** the address is
+  the cluster's **in-cluster head service**, resolved client-side from
+  `(id, namespace)` — *not* a Bifrost gateway host, and it carries **no auth
+  header**. The spike found that the only endpoint exposing a gateway hostname
+  (`GET /registry/clusters`) is Admin-only, so a normal user's token 403s; and
+  the per-owner NetworkPolicy already admits the owner's notebook pod to
+  `:8265`/`:10001` directly, making that reachability (not a token) the gate.
+  Consequence: connect and job-submit work for **in-cluster (Nebari) notebooks**;
+  **remote/off-cluster connect is deferred** (needs an owner-scoped address
+  endpoint + self-serve gateway registration — a tracked backend follow-up).
 
 ## 3. Architecture
 
@@ -78,8 +88,8 @@ A thin proxy that maps panel actions → Bifrost REST using the published Python
 - exposes same-origin routes under `/bifrost/*`: start (`POST /clusters`), stop
   (`DELETE /clusters/{id}`), suspend/resume, list/status
   (`GET /clusters`, `GET /clusters/{id}` + `/events` `/logs` `/metrics`
-  `/nodes`), and a `get-address` helper returning the gateway-host
-  `JobSubmissionClient` snippet.
+  `/nodes`), and a `get-address` helper returning the in-cluster
+  head-service `JobSubmissionClient` snippet (see the #6 amendment in §2).
 
 ### 3.3 Kernel-side helper (same wheel)
 `from bifrost_jupyter import connect` (thin wrapper over the Jobs API / optional
@@ -129,8 +139,8 @@ image/head/worker_groups). Users never see raw manifests (satisfies #6/#7's
 | #9 start | panel "Start" (profile + optional env for a first job) | `POST /api/v1/clusters` (owner stamped from token) → poll `GET /clusters/{id}` to `observed_state=running` |
 | #9 stop | "Stop" | `DELETE /api/v1/clusters/{id}` (202) |
 | #9 suspend/resume | buttons | `POST /clusters/{id}/suspend` \| `/resume` |
-| #6 connect | "Connect" → inject cell | server `get-address` → `JobSubmissionClient(address=gateway-host, headers=auth)`; Ray Client snippet as advanced option |
-| #11 env vars | job-submit editor | Ray `runtime_env.env_vars` at submit (through the gateway Jobs API) |
+| #6 connect | "Connect" → inject cell | server `get-address` → `JobSubmissionClient("http://<id>-head-svc.<ns>.svc:8265")`, no auth header (§2 amendment); Ray Client snippet as advanced option |
+| #11 env vars | job-submit form | server `POST /bifrost/clusters/{id}/jobs` → Ray Jobs REST `POST /api/jobs/` on the in-cluster head service with `runtime_env.env_vars` |
 | status | panel list | `GET /clusters`, `GET /clusters/{id}` + obs endpoints |
 
 ## 7. Risks (carried into the plan)
