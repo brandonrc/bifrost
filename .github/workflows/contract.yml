@@ -89,12 +89,14 @@ jobs:
           EOF
             EXTRA_FLAGS=""
           fi
-          # NOTE (T14): cmd/bifrost (Wave 1 T15) is what actually builds
-          # this binary and defines its flag surface — this step assumes
-          # it preserves the Rust CLI's flag names 1:1 (--bind, --registry,
-          # --dev-allow-unauthenticated, --allow-insecure-transport), per
-          # this wave's port-fidelity convention. If T15 lands with
-          # different flag names, this step (only) needs updating.
+          # Reconciled against cmd/bifrost (Wave 1 T15): `bifrost serve`
+          # really does take --bind/--registry/--dev-allow-unauthenticated/
+          # --allow-insecure-transport with exactly these names, and the
+          # registry file really is JSON shaped like core.ClusterEndpoint's
+          # json tags (id/hostname/api_base_url/auth_token) — see T15's
+          # task report for why JSON (not mobula's clusters.toml) is the
+          # right call. --store/--db (sqlite/postgres/memory) default to
+          # "memory", which is all this gateway-only replay needs.
           go build -o ./bifrost-bin ./cmd/bifrost
           nohup ./bifrost-bin serve --bind 0.0.0.0:8484 --registry clusters.json --dev-allow-unauthenticated $EXTRA_FLAGS \
             > bifrost.log 2>&1 &
