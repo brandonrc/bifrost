@@ -644,34 +644,7 @@ func TestGatewayEnforcesMaxInflight(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// T14 seam: a websocket upgrade to a cluster host is a clean 501, not a
-// half-implemented bridge, and never reaches the upstream cluster.
-// ---------------------------------------------------------------------------
-
-func TestWebsocketUpgradeToClusterHostAnswers501(t *testing.T) {
-	upstream, lastReq, _ := newRecordingUpstream(t, http.StatusOK, []byte("ok"), nil)
-	registry := testRegistry("ray.cluster.test", upstream.URL, "tok")
-	gw := NewGatewayState(registry, nil)
-	notGateway := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNotFound) })
-	gwSrv := httptest.NewServer(gw.HostGateway(notGateway))
-	t.Cleanup(gwSrv.Close)
-
-	req, err := http.NewRequest(http.MethodGet, gwSrv.URL+"/api/jobs/x/logs/tail", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Host = "ray.cluster.test"
-	req.Header.Set("Upgrade", "websocket")
-	resp, err := gwSrv.Client().Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusNotImplemented {
-		t.Fatalf("websocket upgrade to cluster host: status = %d, want 501", resp.StatusCode)
-	}
-	if lastReq() != nil {
-		t.Error("a websocket upgrade must not reach the upstream cluster in T13 (the bridge lands in T14)")
-	}
-}
+// T14 replaced the 501 seam (proxyUpgradeStub) with the real websocket
+// bridge (proxyUpgrade, gateway_ws.go) — see gateway_ws_test.go for its
+// tests, including the "websocket upgrade to a registered cluster host
+// reaches the upstream, not a 501" case this file used to pin.

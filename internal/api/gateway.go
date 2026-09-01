@@ -1,6 +1,6 @@
-// Federating job gateway (Wave 1 T13, ADR-0002/ADR-0003). Ported from
-// mobula-api's gateway.rs (HTTP half only — the websocket bridge is T14,
-// see proxyUpgradeStub).
+// Federating job gateway (Wave 1 T13/T14, ADR-0002/ADR-0003). Ported from
+// mobula-api's gateway.rs — the HTTP proxy lives here; the websocket
+// bridge (gateway.rs:399-597) is gateway_ws.go's proxyUpgrade.
 //
 // Requests whose Host header matches a registered cluster are proxied to
 // that cluster's native Ray dashboard/job API, with the cluster's static
@@ -40,11 +40,7 @@ import (
 // the production posture; tests shrink the values to exercise the caps
 // deterministically.
 //
-// The WS* fields are unused by this task — T13 is HTTP proxying only,
-// see HostGateway's doc comment and proxyUpgradeStub — but are carried
-// here now, at the Rust reference's exact values, so T14 (the websocket
-// bridge) is a pure behavior change, not a struct-shape change to
-// whatever already wires GatewayLimits through.
+// The WS* fields feed gateway_ws.go's proxyUpgrade/wsBridge (T14, #31).
 type GatewayLimits struct {
 	// MaxBodyBytes bounds a buffered proxied request body (#30): request
 	// bodies are buffered before forwarding, not streamed — job
@@ -52,14 +48,14 @@ type GatewayLimits struct {
 	// streaming passthrough is an acknowledged follow-up (gateway.rs's
 	// doc comment says the same). Default: 64 MiB.
 	MaxBodyBytes int64
-	// MaxInflight bounds concurrent proxied requests — HTTP today,
-	// HTTP+websocket bridges once T14 lands (#30/#31): caps peak
-	// buffered-body memory at roughly MaxInflight × MaxBodyBytes.
-	// Default: 64.
+	// MaxInflight bounds concurrent proxied requests — HTTP and websocket
+	// bridges share the same semaphore (#30/#31): caps peak buffered-body
+	// memory at roughly MaxInflight × MaxBodyBytes, and bounds how many
+	// websocket bridges can be open at once. Default: 64.
 	MaxInflight int64
 	// WSConnectTimeout, WSIdleTimeout, WSMaxFrameBytes, and
-	// WSMaxMessageBytes are T14's websocket-bridge knobs (#31); unused
-	// until then.
+	// WSMaxMessageBytes are the websocket-bridge knobs (#31) — see
+	// gateway_ws.go's proxyUpgrade/wsBridge.
 	WSConnectTimeout  time.Duration
 	WSIdleTimeout     time.Duration
 	WSMaxFrameBytes   int64
@@ -193,7 +189,7 @@ func (gw *GatewayState) HostGateway(next http.Handler) http.Handler {
 		defer release()
 
 		if isWebsocketUpgrade(r.Header) {
-			gw.proxyUpgradeStub(w, r, &cluster)
+			gw.proxyUpgrade(w, r, &cluster)
 			return
 		}
 		gw.proxy(w, r, &cluster)
@@ -204,20 +200,6 @@ func (gw *GatewayState) HostGateway(next http.Handler) http.Handler {
 // Upgrade header case-insensitively equal to "websocket".
 func isWebsocketUpgrade(h http.Header) bool {
 	return strings.EqualFold(h.Get("Upgrade"), "websocket")
-}
-
-// proxyUpgradeStub answers a websocket upgrade request to a cluster host
-// with a clean, typed 501 until T14 ports gateway.rs's `mod ws` bridge.
-// The dispatch is already structured for that seam: HostGateway has
-// already resolved the cluster and holds the inflight permit (a
-// websocket bridge holds it for the bridge's whole lifetime per #31,
-// exactly as an HTTP proxy call does today), and GatewayLimits already
-// carries the WS* knobs T14 needs — so T14 only has to replace this call
-// with the real bridge; no signature or composition change is required
-// here.
-func (gw *GatewayState) proxyUpgradeStub(w http.ResponseWriter, r *http.Request, cluster *core.ClusterEndpoint) {
-	slog.Warn("api: websocket gateway bridge not yet implemented", "cluster", cluster.Id, "path", r.URL.Path)
-	WriteError(w, r, errWSBridgeNotImplemented)
 }
 
 // proxy forwards a non-websocket request to cluster's native Ray API and
@@ -427,9 +409,5 @@ var (
 	errGatewayUpstream = HTTPError{
 		Status: http.StatusBadGateway, Code: "bad_gateway",
 		Message: "cluster unreachable",
-	}
-	errWSBridgeNotImplemented = HTTPError{
-		Status: http.StatusNotImplemented, Code: "not_implemented",
-		Message: "websocket gateway bridge is not yet implemented",
 	}
 )
