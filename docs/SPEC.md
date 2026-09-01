@@ -37,7 +37,7 @@ ALL rows ship. Priority governs **sequence**, never scope-cut.
 | 15 | Cluster health / pending-reasons without direct K8s access | LOW | **Built** (5 observability ops) |
 | 16 | Same UX across Ray and Dask (ports-and-adapters compute contract) | LOW | **Built** (EngineRouter, Dask adapter) |
 | 17 | Same UX across Kubernetes and Slurm | LOW | Not built (design must not foreclose) |
-| 18 | NIST security baseline operation + audit evidence | LOW | **Built** (audit hash chain, FIPS variant, STIG/UBI images) |
+| 18 | NIST security baseline operation + audit evidence | LOW | Partial — audit hash chain **built**; UBI9-micro container image **built** (`Dockerfile`, non-root, static, digest-pinned). FIPS variant **not built** (no `GOFIPS140`/`crypto/fips140` anywhere — see the Testing section, which already says "later"). STIG hardening **not built**. |
 
 ## Architecture (inherited from mobula, translated to Go idiom)
 
