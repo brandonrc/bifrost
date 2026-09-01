@@ -75,10 +75,9 @@ func TestUnimplementedOperationsReturn501(t *testing.T) {
 	for _, req := range []struct {
 		method, path, body string
 	}{
-		{http.MethodGet, "/api/v1/clusters", ""},
-		{http.MethodPost, "/api/v1/clusters", "{}"},
 		{http.MethodGet, "/api/v1/pools", ""},
-		{http.MethodGet, "/api/v1/identity", ""},
+		{http.MethodPost, "/api/v1/pools", "{}"},
+		{http.MethodGet, "/api/v1/services", ""},
 		{http.MethodGet, "/api/v1/usage", ""},
 		{http.MethodPost, "/api/v1/auth/login", "{}"},
 	} {
@@ -96,9 +95,21 @@ func TestUnimplementedOperationsReturn501(t *testing.T) {
 	}
 }
 
-// TestNotImplementedCount asserts the exact burn-down count: every
-// StrictServerInterface method returns ErrNotImplemented except Healthz
-// and Version. 47 spec operations - 2 implemented = 45.
+// TestNotImplementedCount asserts the exact burn-down count of the
+// operations THIS test still has no dependencies to safely invoke: every
+// StrictServerInterface method other than Healthz/Version and Wave 1 T11's
+// 15 ported operations (clusters ListClusters/CreateCluster/DeleteCluster/
+// GetCluster/ResumeCluster/SuspendCluster/ListJobs, registry ListRegistry,
+// settings GetPolicy/UpdatePolicy, access ListAssignments/DeleteAssignment/
+// UpsertAssignment/ListRoles/Identity) returns ErrNotImplemented.
+//
+// T11's 15 operations are deliberately NOT invoked here: a bare NewServer()
+// has a nil Store, and every one of them now touches it — calling them
+// through this zero-dependency harness would panic instead of asserting
+// anything useful. Their real behavior (including the "not 501 anymore"
+// property) is covered by clusters_test.go/registry_test.go/settings_test.go/
+// access_test.go against a real store. 47 spec operations - 2 (Healthz/
+// Version) - 15 (T11) = 30 still-unported operations, all T12 scope.
 func TestNotImplementedCount(t *testing.T) {
 	s := NewServer()
 	ctx := context.Background()
@@ -126,14 +137,6 @@ func TestNotImplementedCount(t *testing.T) {
 	r2, e2 := s.Version(ctx, VersionRequestObject{})
 	check("Version", r2, e2)
 
-	r, e := s.ListAssignments(ctx, ListAssignmentsRequestObject{})
-	check("ListAssignments", r, e)
-	r3, e3 := s.DeleteAssignment(ctx, DeleteAssignmentRequestObject{})
-	check("DeleteAssignment", r3, e3)
-	r4, e4 := s.UpsertAssignment(ctx, UpsertAssignmentRequestObject{})
-	check("UpsertAssignment", r4, e4)
-	r5, e5 := s.ListRoles(ctx, ListRolesRequestObject{})
-	check("ListRoles", r5, e5)
 	r6, e6 := s.ListAuditEvents(ctx, ListAuditEventsRequestObject{})
 	check("ListAuditEvents", r6, e6)
 	r7, e7 := s.VerifyAuditTrail(ctx, VerifyAuditTrailRequestObject{})
@@ -156,14 +159,6 @@ func TestNotImplementedCount(t *testing.T) {
 	check("CreateUser", r15, e15)
 	r16, e16 := s.UpdateUser(ctx, UpdateUserRequestObject{})
 	check("UpdateUser", r16, e16)
-	r17, e17 := s.ListClusters(ctx, ListClustersRequestObject{})
-	check("ListClusters", r17, e17)
-	r18, e18 := s.CreateCluster(ctx, CreateClusterRequestObject{})
-	check("CreateCluster", r18, e18)
-	r19, e19 := s.DeleteCluster(ctx, DeleteClusterRequestObject{})
-	check("DeleteCluster", r19, e19)
-	r20, e20 := s.GetCluster(ctx, GetClusterRequestObject{})
-	check("GetCluster", r20, e20)
 	r21, e21 := s.ClusterEvents(ctx, ClusterEventsRequestObject{})
 	check("ClusterEvents", r21, e21)
 	r22, e22 := s.ClusterJobs(ctx, ClusterJobsRequestObject{})
@@ -174,14 +169,6 @@ func TestNotImplementedCount(t *testing.T) {
 	check("ClusterMetrics", r24, e24)
 	r25, e25 := s.ClusterNodes(ctx, ClusterNodesRequestObject{})
 	check("ClusterNodes", r25, e25)
-	r26, e26 := s.ResumeCluster(ctx, ResumeClusterRequestObject{})
-	check("ResumeCluster", r26, e26)
-	r27, e27 := s.SuspendCluster(ctx, SuspendClusterRequestObject{})
-	check("SuspendCluster", r27, e27)
-	r28, e28 := s.Identity(ctx, IdentityRequestObject{})
-	check("Identity", r28, e28)
-	r29, e29 := s.ListJobs(ctx, ListJobsRequestObject{})
-	check("ListJobs", r29, e29)
 	r30, e30 := s.Metrics(ctx, MetricsRequestObject{})
 	check("Metrics", r30, e30)
 	r31, e31 := s.ListPools(ctx, ListPoolsRequestObject{})
@@ -200,8 +187,6 @@ func TestNotImplementedCount(t *testing.T) {
 	check("PutAllocation", r37, e37)
 	r38, e38 := s.PoolUsage(ctx, PoolUsageRequestObject{})
 	check("PoolUsage", r38, e38)
-	r39, e39 := s.ListRegistry(ctx, ListRegistryRequestObject{})
-	check("ListRegistry", r39, e39)
 	r40, e40 := s.ListServices(ctx, ListServicesRequestObject{})
 	check("ListServices", r40, e40)
 	r41, e41 := s.DeployService(ctx, DeployServiceRequestObject{})
@@ -210,18 +195,14 @@ func TestNotImplementedCount(t *testing.T) {
 	check("DeleteService", r42, e42)
 	r43, e43 := s.GetService(ctx, GetServiceRequestObject{})
 	check("GetService", r43, e43)
-	r44, e44 := s.GetPolicy(ctx, GetPolicyRequestObject{})
-	check("GetPolicy", r44, e44)
-	r45, e45 := s.UpdatePolicy(ctx, UpdatePolicyRequestObject{})
-	check("UpdatePolicy", r45, e45)
 	r46, e46 := s.UsageReport(ctx, UsageReportRequestObject{})
 	check("UsageReport", r46, e46)
 
 	if implemented != 2 {
 		t.Errorf("implemented count = %d, want 2 (Healthz, Version)", implemented)
 	}
-	if notImplemented != 45 {
-		t.Errorf("not-implemented count = %d, want 45", notImplemented)
+	if notImplemented != 30 {
+		t.Errorf("not-implemented count = %d, want 30 (45 - Wave 1 T11's 15 ported operations)", notImplemented)
 	}
 }
 
