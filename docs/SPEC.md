@@ -165,6 +165,98 @@ audit chain (decision above); FIPS variant; NIST evidence docs.
 Each wave gets its own implementation plan in `docs/superpowers/plans/`,
 argued from this spec, executed subagent-per-task with review gates.
 
+## Wave 1 exit (2026-08-31)
+
+Wave 1 (CRITICAL parity — reqs 3, 6, 7, 8) is **complete**: Tasks 1-16 of
+`docs/superpowers/plans/2026-08-31-wave-1-critical-parity.md` have landed on
+`main`.
+
+- **Store** (T1-T4): `Store` interface, in-memory/SQLite/Postgres backends,
+  the 1408-line Rust conformance suite re-expressed and green against all
+  three; audit hash chain (ADR-0004).
+- **Reconcile** (T9): level-triggered observation-first engine + pool
+  reconciler, ported with its full state-machine test suite.
+- **Provision** (T5-T6): typed KubeRay/Kueue manifest translators
+  (`internal/provision`) + the live controller-runtime client
+  (`internal/provision/live`, thin and coverage-excluded per this file's
+  governance section).
+- **Auth** (T7-T8): OIDC validator + RBAC, device-code/client-credentials/
+  token-exchange flows, local users + `mob_*` PATs.
+- **API** (T10-T12): the full strict-server surface generated from the
+  frozen contract (ADR-0002) — 47/47 operations implemented, every 501
+  stub eliminated.
+- **Gateway** (T13-T14): HTTP federating proxy + WebSocket bridge (host-
+  match-before-route dispatch, credential strip-and-swap,
+  `GatewayLimits` hardening) and the contract-replay harness.
+- **CLI** (T15): `bifrost serve|login|token|exchange` — a single static
+  binary wiring store selection, reconcilers, and the API server.
+- **Acceptance** (T16, this task): local build + `bifrost serve` smoke
+  (`/healthz`, `/api/v1/version` -> `name: "bifrost"`) verified — the full
+  Ray contract replay in `.github/workflows/contract.yml` is
+  CI-dispatch/weekly-pending (no live Ray head is available in this
+  environment; see the task report, not claimed as run); gateway p99
+  evidence recorded in `docs/adr/0005-gateway-p99-evidence.md`, which also
+  found and fixed a southbound connection-pool sizing defect
+  (`buildSouthboundGatewayClient`) surfaced by the load rig; `bifrost-ui`
+  swapped from `@brandonrc/mobula-client` to `@brandonrc/bifrost-client`
+  with the remaining legacy-string sweep; an `internal/api/openapi.json`-
+  vs-`bifrost-api` spec-sync CI gate added (`ci.yml`'s `spec-sync` job).
+
+Requirements closed: **3** (RBAC + gateway blocking direct Ray Serve/
+dashboard/Jobs/GCS access — T7/T8 auth, T10 middleware, T13/T14 gateway),
+**6** (self-serve private clusters, dask-gateway UX — T1 store, T9
+reconcile, T11 cluster handlers), **7** (group-admin profile/image/quota
+control — T11/T12 settings+access handlers, on Wave 0's `internal/policy`),
+**8** (crash-safe cleanup with recorded ownership — T1's persistent Store +
+T9's observation-first reconcile). LOW-priority rows banked as a side
+effect of T12's handler burn-down rather than dedicated Wave 1 scope: req
+15 (cluster health/pending-reasons without direct k8s access — T12's 5
+`cluster_obs` operations) and the read side of req 14 (usage/audit query
+endpoints — T12). The LOW rows that need a new engine or loop — req 13
+(Kueue fair-share pools), req 14's metering write-loop, req 16 (Dask
+adapter), req 18 (FIPS variant) — remain Wave 3 scope, unchanged from the
+original plan.
+
+Per the Wave 1 charter, the Rust reference (`mobula`) is retired from
+primary duty as of this exit: `bifrost` is the artifact of record for the
+ported surface going forward; `mobula` remains available for parity
+cross-checks only.
+
+### Deferred follow-ups carried into Wave 2/3
+
+- #44 multi-replica store transaction: T11 ported the in-process
+  per-project admission lock (`server.go`'s `admitMu`); a store-backed
+  transaction is still needed for correctness across multiple `bifrost`
+  replicas sharing one Store.
+- WebSocket close-code propagation through the gateway bridge
+  (`gateway_ws.go`) — the bridge currently lets `coder/websocket`
+  auto-close with its own code rather than propagating the peer's.
+- `UpdatePolicy` absent-vs-null field semantics (`internal/api/settings.go`)
+  need a documented, tested contract for "field omitted" vs. "field
+  explicitly cleared."
+- Southbound CA pinning for self-signed cluster TLS
+  (`GatewayLimits.southbound_ca_bundle` in the Rust reference was not
+  ported — `NewGatewayStateWithLimits`'s doc comment tracks the gap; the
+  southbound client currently trusts only system roots).
+- Job-history side-write bookkeeping, deferred alongside the metering loop
+  itself (Wave 3).
+- Toolchain bump to go1.26.6+ to clear the stdlib `govulncheck` findings
+  open against go1.26.2 as of this exit (`mime`, `crypto/x509`, the
+  `net/http`/`x/net` HTTP2 and idna-adjacent findings, `net` — 12 stdlib
+  CVEs per `govulncheck ./...`; each is fixed upstream by the toolchain
+  bump, none has a code-level fix available in this repo).
+- `runServe`'s shutdown WaitGroup drain (`cmd/bifrost/serve.go`): SIGINT/
+  SIGTERM currently stops accepting and closes the listener but does not
+  wait for in-flight requests/reconcile iterations to finish draining
+  before the process exits.
+- Coverage gate is red on `main` as of this exit (76.0% vs. the 80%
+  ratchet floor in `ci.yml`'s `COVERAGE_THRESHOLD`) — confirmed
+  pre-existing (reproduced against the tree before this task's changes,
+  which are coverage-neutral: `cmd/gateway-load` is excluded by the
+  `/cmd/` rule and `internal/api/gateway.go`'s change is exercised by
+  existing gateway tests). Needs a coverage pass early in Wave 2 before
+  the ratchet is trustworthy as a gate again.
+
 ## Out of scope for the port (tracked, not built)
 
 Slurm backend (req 17 — design keeps Provisioner interface engine-agnostic,
