@@ -9,6 +9,11 @@ tool github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen
 require modernc.org/sqlite v1.57.0
 
 require (
+	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/spf13/cobra v1.10.2 // indirect
+)
+
+require (
 	github.com/Masterminds/semver/v3 v3.5.0 // indirect
 	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
