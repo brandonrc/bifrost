@@ -4,8 +4,11 @@ import (
 	"context"
 	_ "embed"
 	"net/http"
+	"sync"
 
 	"github.com/brandonrc/bifrost/internal/auth"
+	"github.com/brandonrc/bifrost/internal/controller"
+	"github.com/brandonrc/bifrost/internal/core"
 )
 
 // SpecPath is where the vendored OpenAPI contract is served. mobula-api's
@@ -26,12 +29,41 @@ var specJSON []byte
 // used env!("CARGO_PKG_VERSION").
 var version = "0.0.1"
 
-// Server implements StrictServerInterface. Only Healthz and Version are
-// live; every other operation returns ErrNotImplemented (501) until
-// Wave 1 T11/T12 port the real handlers behind this same generated
-// interface — the interface compiles complete from day one (ADR-0002)
-// and burns down operation by operation from here.
-type Server struct{}
+// Server implements StrictServerInterface. Healthz/Version and Wave 1 T11's
+// clusters/registry/settings/access operations are live; every other
+// operation returns ErrNotImplemented (501) until Wave 1 T12 ports the rest
+// behind this same generated interface — the interface compiles complete
+// from day one (ADR-0002) and burns down operation by operation from here.
+//
+// Every field is exported and independently optional (nil/zero-value): a
+// bare Server{} (NewServer()) still satisfies StrictServerInterface — every
+// stub method still returns ErrNotImplemented — and existing tests/
+// constructors that build a Server with no dependencies keep working. A
+// caller wiring up a real deployment (or a T11/T12 handler test) sets the
+// fields its operations need directly.
+type Server struct {
+	// Store is the desired-state store backing clusters/pools/jobs/audit/
+	// settings/access. Every operation this wave ports requires it.
+	Store controller.Store
+	// Registry is the gateway's static routing table (ListRegistry only;
+	// mirrors mobula-api's RegistryApiState.registry).
+	Registry *core.ClusterRegistry
+	// Validator is the configured OIDC validator, when one exists — carries
+	// the RoleMappings ListRoles reports. nil in local-auth/dev deployments
+	// (mirrors mobula-api's AccessApiState.validator).
+	Validator *auth.Validator
+	// PolicySeed is the boot-time `--policy` default (mobula-api's
+	// ClusterApiState.policy / SettingsApiState.policy_seed): consulted
+	// only until the store holds a policy row — see effectivePolicy in
+	// settings.go.
+	PolicySeed PolicyConfig
+
+	// admitMu guards admitLocks (issue #44's per-project admission lock —
+	// see clusters.go's withProjectAdmitLock doc comment for what this
+	// does and does NOT cover).
+	admitMu    sync.Mutex
+	admitLocks map[string]*sync.Mutex
+}
 
 // NewServer constructs the (currently stateless) skeleton server.
 func NewServer() *Server { return &Server{} }
@@ -117,26 +149,6 @@ func NewHandler(server StrictServerInterface, opts HandlerOptions) http.Handler 
 	return h
 }
 
-// ListAssignments is not yet implemented (Wave 1 T11/T12).
-func (s *Server) ListAssignments(_ context.Context, _ ListAssignmentsRequestObject) (ListAssignmentsResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// DeleteAssignment is not yet implemented (Wave 1 T11/T12).
-func (s *Server) DeleteAssignment(_ context.Context, _ DeleteAssignmentRequestObject) (DeleteAssignmentResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// UpsertAssignment is not yet implemented (Wave 1 T11/T12).
-func (s *Server) UpsertAssignment(_ context.Context, _ UpsertAssignmentRequestObject) (UpsertAssignmentResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// ListRoles is not yet implemented (Wave 1 T11/T12).
-func (s *Server) ListRoles(_ context.Context, _ ListRolesRequestObject) (ListRolesResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
 // ListAuditEvents is not yet implemented (Wave 1 T11/T12).
 func (s *Server) ListAuditEvents(_ context.Context, _ ListAuditEventsRequestObject) (ListAuditEventsResponseObject, error) {
 	return nil, ErrNotImplemented
@@ -192,26 +204,6 @@ func (s *Server) UpdateUser(_ context.Context, _ UpdateUserRequestObject) (Updat
 	return nil, ErrNotImplemented
 }
 
-// ListClusters is not yet implemented (Wave 1 T11/T12).
-func (s *Server) ListClusters(_ context.Context, _ ListClustersRequestObject) (ListClustersResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// CreateCluster is not yet implemented (Wave 1 T11/T12).
-func (s *Server) CreateCluster(_ context.Context, _ CreateClusterRequestObject) (CreateClusterResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// DeleteCluster is not yet implemented (Wave 1 T11/T12).
-func (s *Server) DeleteCluster(_ context.Context, _ DeleteClusterRequestObject) (DeleteClusterResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// GetCluster is not yet implemented (Wave 1 T11/T12).
-func (s *Server) GetCluster(_ context.Context, _ GetClusterRequestObject) (GetClusterResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
 // ClusterEvents is not yet implemented (Wave 1 T11/T12).
 func (s *Server) ClusterEvents(_ context.Context, _ ClusterEventsRequestObject) (ClusterEventsResponseObject, error) {
 	return nil, ErrNotImplemented
@@ -234,26 +226,6 @@ func (s *Server) ClusterMetrics(_ context.Context, _ ClusterMetricsRequestObject
 
 // ClusterNodes is not yet implemented (Wave 1 T11/T12).
 func (s *Server) ClusterNodes(_ context.Context, _ ClusterNodesRequestObject) (ClusterNodesResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// ResumeCluster is not yet implemented (Wave 1 T11/T12).
-func (s *Server) ResumeCluster(_ context.Context, _ ResumeClusterRequestObject) (ResumeClusterResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// SuspendCluster is not yet implemented (Wave 1 T11/T12).
-func (s *Server) SuspendCluster(_ context.Context, _ SuspendClusterRequestObject) (SuspendClusterResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// Identity is not yet implemented (Wave 1 T11/T12).
-func (s *Server) Identity(_ context.Context, _ IdentityRequestObject) (IdentityResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// ListJobs is not yet implemented (Wave 1 T11/T12).
-func (s *Server) ListJobs(_ context.Context, _ ListJobsRequestObject) (ListJobsResponseObject, error) {
 	return nil, ErrNotImplemented
 }
 
@@ -302,11 +274,6 @@ func (s *Server) PoolUsage(_ context.Context, _ PoolUsageRequestObject) (PoolUsa
 	return nil, ErrNotImplemented
 }
 
-// ListRegistry is not yet implemented (Wave 1 T11/T12).
-func (s *Server) ListRegistry(_ context.Context, _ ListRegistryRequestObject) (ListRegistryResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
 // ListServices is not yet implemented (Wave 1 T11/T12).
 func (s *Server) ListServices(_ context.Context, _ ListServicesRequestObject) (ListServicesResponseObject, error) {
 	return nil, ErrNotImplemented
@@ -324,16 +291,6 @@ func (s *Server) DeleteService(_ context.Context, _ DeleteServiceRequestObject) 
 
 // GetService is not yet implemented (Wave 1 T11/T12).
 func (s *Server) GetService(_ context.Context, _ GetServiceRequestObject) (GetServiceResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// GetPolicy is not yet implemented (Wave 1 T11/T12).
-func (s *Server) GetPolicy(_ context.Context, _ GetPolicyRequestObject) (GetPolicyResponseObject, error) {
-	return nil, ErrNotImplemented
-}
-
-// UpdatePolicy is not yet implemented (Wave 1 T11/T12).
-func (s *Server) UpdatePolicy(_ context.Context, _ UpdatePolicyRequestObject) (UpdatePolicyResponseObject, error) {
 	return nil, ErrNotImplemented
 }
 
