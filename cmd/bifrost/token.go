@@ -97,7 +97,7 @@ const (
 )
 
 // storedTokenAction is the client-side expiry decision for the stored
-// token. Opaque local-auth tokens (`mob_…`) carry no exp — the server
+// token. Opaque local-auth tokens (`bfr_…`) carry no exp — the server
 // enforces their lifetime, so they pass through valid, as do undecodable
 // tokens (the server validates for real; this is display-only hygiene).
 // Ported from mobula-cli's stored_token_action.

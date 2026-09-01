@@ -88,7 +88,7 @@ func TestSecretBearingTypesNeverMarshal(t *testing.T) {
 	if _, err := json.Marshal(NewTokenExchangeParams("c", "s", "t")); err == nil {
 		t.Fatal("expected TokenExchangeParams to refuse marshal")
 	}
-	if _, err := json.Marshal(MintedToken{Token: "mob_x"}); err == nil {
+	if _, err := json.Marshal(MintedToken{Token: "bfr_x"}); err == nil {
 		t.Fatal("expected MintedToken to refuse marshal")
 	}
 }

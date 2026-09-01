@@ -81,7 +81,7 @@ func NewMemoryStore() Store
 ### Task 8: Auth — flows + local auth
 
 **Files:** `internal/auth/{flows.go,local.go}` + tests.
-**Reference:** `flows.rs` (device code RFC 8628, client credentials, token exchange RFC 8693), `local.rs` (bcrypt cost 12 off the hot goroutine, `mob_*` PAT format — RULING: keep the `mob_` prefix; it's wire/UX-compatible with existing tokens and the contract, rename is a Wave-3 decision if ever).
+**Reference:** `flows.rs` (device code RFC 8628, client credentials, token exchange RFC 8693), `local.rs` (bcrypt cost 12 off the hot goroutine, `mob_*` PAT format — RULING: keep the `mob_` prefix; it's wire/UX-compatible with existing tokens and the contract, rename is a Wave-3 decision if ever). **SUPERSEDED (sub-project A):** the rename was taken — the prefix is now `bfr_` (`auth.TokenScheme`), as a hard cutover with no compatibility window, because the deployment was rebuilt and every token reissued.
 - [ ] Port flows + local users/PATs; bcrypt via x/crypto; hashing on a worker goroutine mirroring Rust's spawn_blocking rationale.
 
 ### Task 9: Reconcile engine + pool reconciler

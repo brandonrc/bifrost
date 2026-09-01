@@ -56,8 +56,8 @@ func isPublic(path string) bool {
 }
 
 // isJWTShaped mirrors auth_layer.rs's is_jwt_shaped: three dot-delimited
-// segments. Token dispatch is unambiguous (ADR-0011) — a `mob_…` PAT
-// contains no dots and a JWT never matches the `mob_<prefix>_<hex>`
+// segments. Token dispatch is unambiguous (ADR-0011) — a `bfr_…` PAT
+// contains no dots and a JWT never matches the `bfr_<prefix>_<hex>`
 // scheme, so the two paths can coexist without misclassification.
 func isJWTShaped(token string) bool {
 	return strings.Count(token, ".") == 2

@@ -2,12 +2,16 @@
 // personal access tokens backed by the Bifrost store.
 //
 // Opaque tokens only — no JWT minting. Bifrost stores credentials, it
-// never signs them. Tokens are `mob_<8-char prefix>_<32 hex>` random
-// strings (RULING: the `mob_` prefix is kept verbatim — wire/UX
-// compatibility with existing tokens and the contract; renaming it is a
-// someday-decision, not made here), bcrypt-hashed at rest, looked up by
-// prefix. Roles are a column on the user row and resolved per request, so
-// role changes apply live.
+// never signs them. Tokens are `bfr_<8-char prefix>_<32 hex>` random
+// strings ([TokenScheme] is the one definition of that prefix),
+// bcrypt-hashed at rest, looked up by prefix. Roles are a column on the user
+// row and resolved per request, so role changes apply live.
+//
+// The prefix was `mob_` until the mobula product identity was retired from
+// the shipped surface. That earlier ruling kept it verbatim for wire/UX
+// compatibility; the rename was taken deliberately, with no compatibility
+// window, because the deployment was being rebuilt and every token reissued.
+// It is a hard cutover — see [TokenScheme] for why no migration is possible.
 //
 // Brute-force posture (mirroring artifact-keeper's local half, ported from
 // mobula-auth/src/local.rs):
@@ -58,8 +62,8 @@ import (
 // bcryptCost is the bcrypt work factor. Pinned to 12 (the Rust reference's
 // bcrypt::DEFAULT_COST — NOT golang.org/x/crypto/bcrypt.DefaultCost, which
 // is 10) so a token/password hashed by either implementation verifies
-// identically and the wire-compatibility ruling on the `mob_` prefix holds
-// all the way down to the hash cost.
+// identically — the port's wire compatibility holds all the way down to the
+// hash cost.
 //
 // Reference: mobula-auth/src/local.rs:28 (COST).
 const bcryptCost = 12
@@ -105,7 +109,7 @@ func HashPassword(password string) (string, error) {
 // Enforcing the same limit on the verify side closes that asymmetry;
 // nothing this package ever hashes legitimately exceeds it (a login
 // password is user-chosen and a bcrypt hash rejects longer at rest anyway;
-// a mob_ token is a fixed 45 bytes).
+// a PAT is a fixed 45 bytes).
 const bcryptMaxPasswordBytes = 72
 
 // VerifyPassword verifies password against a bcrypt hash. A malformed
@@ -131,6 +135,21 @@ func HashToken(token string) (string, error) { return HashPassword(token) }
 //
 // Reference: mobula-auth/src/local.rs:123-126 (verify_token).
 func VerifyToken(storedHash, presented string) bool { return VerifyPassword(presented, storedHash) }
+
+// TokenScheme is the literal every opaque Bifrost PAT starts with, and the
+// single definition of it. Minting, parsing, and the CLI's
+// JWT-vs-PAT dispatch all read this constant; nothing else should spell the
+// scheme out.
+//
+// Exported because the scheme is part of what a *user* sees — they paste
+// these into config — so callers outside this package (the CLI) must be able
+// to recognise one without re-deriving the literal.
+//
+// Changing this value invalidates every token already issued: the stored
+// bcrypt hash covers the whole plaintext, scheme included, so an old token
+// can no longer verify and cannot be rewritten (the plaintext is never
+// stored, by design). Tokens must be reissued, not migrated.
+const TokenScheme = "bfr_"
 
 // tokenPrefixLen is the length of a token's lookup prefix.
 const tokenPrefixLen = 8
@@ -161,9 +180,9 @@ func randomAlphanumeric(n int) (string, error) {
 
 // MintTokenParts mints the random parts of a token (no hashing — see
 // HashToken). Split so tests can exercise the format without paying a
-// bcrypt. The scheme is `mob_` + 8 url-safe chars + `_` + 32 hex chars (16
-// random bytes). The prefix is the store lookup key — not secret; the
-// 128-bit suffix carries the entropy.
+// bcrypt. The scheme is [TokenScheme] + 8 url-safe chars + `_` + 32 hex
+// chars (16 random bytes). The prefix is the store lookup key — not secret;
+// the 128-bit suffix carries the entropy.
 //
 // Reference: mobula-auth/src/local.rs:68-88 (TOKEN_PREFIX_LEN,
 // mint_token_parts).
@@ -176,7 +195,7 @@ func MintTokenParts() (prefix, token string, err error) {
 	if _, err := cryptorand.Read(raw); err != nil {
 		return "", "", err
 	}
-	token = "mob_" + prefix + "_" + hex.EncodeToString(raw)
+	token = TokenScheme + prefix + "_" + hex.EncodeToString(raw)
 	return prefix, token, nil
 }
 
@@ -202,7 +221,7 @@ func isASCIIHexDigit(b byte) bool {
 //
 // Reference: mobula-auth/src/local.rs:100-116 (token_prefix).
 func TokenPrefix(presented string) (prefix string, ok bool) {
-	rest, hasPrefix := strings.CutPrefix(presented, "mob_")
+	rest, hasPrefix := strings.CutPrefix(presented, TokenScheme)
 	if !hasPrefix {
 		return "", false
 	}
@@ -245,7 +264,7 @@ func nowUnix() uint64 { return uint64(time.Now().Unix()) }
 // Reference: mobula-auth/src/local.rs:56-66 (MintedToken).
 type MintedToken struct {
 	// Prefix is the 8-character lookup prefix (the `<prefix>` in
-	// `mob_<prefix>_…`).
+	// `bfr_<prefix>_…`).
 	Prefix string
 	// Token is the full plaintext token.
 	Token string

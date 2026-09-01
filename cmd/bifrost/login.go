@@ -137,7 +137,7 @@ func runLogin(ctx context.Context, issuer, clientID, scope string) error {
 }
 
 // runLoginLocal signs in against the control plane's local (IdP-free)
-// auth (ADR-0011): POST /api/v1/auth/login, store the opaque `mob_…`
+// auth (ADR-0011): POST /api/v1/auth/login, store the opaque `bfr_…`
 // token like a device-flow token (0600). Ported from mobula-cli's
 // login_local; reuses internal/api's LoginRequest/LoginResponse DTOs
 // rather than re-declaring the wire shape.
@@ -181,15 +181,15 @@ func runLoginLocal(ctx context.Context, server, username string, passwordStdin b
 }
 
 // runLogout revokes the stored token server-side when it is a local PAT
-// (`mob_…` — ADR-0011 kept the prefix for wire/UX compatibility, T8
-// ruling), best-effort, then always deletes the local credentials file.
-// OIDC JWTs are stateless — nothing to revoke server-side.
+// (recognised by auth.TokenScheme), best-effort, then always deletes the
+// local credentials file. OIDC JWTs are stateless — nothing to revoke
+// server-side.
 func runLogout(ctx context.Context) error {
 	creds, err := loadCredentialsFile()
 	if err != nil {
 		return err
 	}
-	if strings.HasPrefix(creds.AccessToken, "mob_") {
+	if strings.HasPrefix(creds.AccessToken, auth.TokenScheme) {
 		url := strings.TrimRight(creds.Issuer, "/") + "/api/v1/auth/logout"
 		if req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil); err == nil {
 			req.Header.Set("Authorization", "Bearer "+creds.AccessToken)

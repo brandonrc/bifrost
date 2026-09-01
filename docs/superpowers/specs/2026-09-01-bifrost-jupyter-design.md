@@ -152,7 +152,7 @@ owner-label target).
 Both T9 and the reviewer confirmed the above empirically with throwaway Go tests
 against `internal/api` (built, run, deleted; repo left clean).
 
-**Dev / non-Hub fallback — pasted `mob_` PAT.** Stored server-side (extension
+**Dev / non-Hub fallback — pasted `bfr_` PAT.** Stored server-side (extension
 settings), never in browser JS. Warn loudly: if the PAT's subject ≠ the pod's
 owner label, the data plane is blocked entirely.
 

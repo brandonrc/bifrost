@@ -566,7 +566,7 @@ func TestNonJWTShapedTokenReachesLocalEvenWithValidator(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/clusters", nil)
-	req.Header.Set("Authorization", "Bearer mob_abcd1234_0123456789abcdef0123456789abcdef")
+	req.Header.Set("Authorization", "Bearer bfr_abcd1234_0123456789abcdef0123456789abcdef")
 	RequireAuth(state)(okHandler()).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
