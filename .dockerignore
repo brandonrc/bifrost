@@ -1,0 +1,23 @@
+# Keep the build context to what `go build ./cmd/bifrost` actually needs.
+#
+# .claude/worktrees matters most: an abandoned agent worktree holds a full
+# second copy of the tree, and without this line every build ships it into the
+# daemon before doing anything.
+.git
+.github
+.claude
+docs
+deploy
+
+# Test and tooling artifacts
+*_test.go
+testdata
+coverage.out
+*.test
+dist
+bin
+
+# Editor / OS noise
+.DS_Store
+.idea
+.vscode
