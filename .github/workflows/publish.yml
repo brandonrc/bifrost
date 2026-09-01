@@ -1,0 +1,81 @@
+name: Publish
+
+# Publishes ghcr.io/<owner>/bifrost from the multi-stage Dockerfile.
+#
+# WHY THIS EXISTS: until now the repo had a Dockerfile and nothing that pushed
+# it, so the only images that existed were hand-built on somebody's terminal.
+# The grace deployment ran `localhost:32000/bifrost:sha-c7b0003` — an artifact
+# with no automated path that produces it, and therefore not reproducible by
+# anyone who was not at that terminal. That is the same shape as a fix landing
+# in the Dockerfile CI does not build: the thing that runs and the thing the
+# pipeline makes are different objects.
+#
+# TAGGING: `sha-<short>` is the identifier to deploy. `latest` is published
+# too, for convenience, but treat it as a pointer rather than a version —
+# `latest` plus `pullPolicy: Always` is exactly how a broken bifrost-ui image
+# came back on the next pod restart after the fix had supposedly landed. A
+# chart that pins a SHA tag redeploys deliberately; one that tracks `latest`
+# redeploys whenever a pod happens to restart.
+#
+# The build needs no registry auth of its own: the Dockerfile is self-contained
+# (Go modules from proxy.golang.org, bases from Docker Hub and the Red Hat
+# registry, both digest-pinned in the Dockerfile itself). Single-arch amd64,
+# matching where this is deployed.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/bifrost
+
+jobs:
+  publish:
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image (amd64)
+        run: |
+          SHORT=${GITHUB_SHA::7}
+          # VERSION is stamped into the binary via -ldflags (see the
+          # Dockerfile), so `bifrost --version` identifies the commit it was
+          # built from rather than reporting the in-source default.
+          docker build \
+            --build-arg VERSION="0.0.1-${SHORT}" \
+            -t "$IMAGE:sha-${SHORT}" \
+            -t "$IMAGE:latest" .
+          docker push "$IMAGE:sha-${SHORT}"
+          docker push "$IMAGE:latest"
+
+      # The image is useless if it cannot start, and a push that publishes a
+      # non-starting binary is worse than no push: it looks like success. This
+      # is the cheapest possible smoke test and it runs the artifact that was
+      # just pushed, not the local build cache.
+      - name: The published image runs
+        run: |
+          SHORT=${GITHUB_SHA::7}
+          docker rmi "$IMAGE:sha-${SHORT}" >/dev/null 2>&1 || true
+          docker pull "$IMAGE:sha-${SHORT}"
+          docker run --rm "$IMAGE:sha-${SHORT}" --version
+          # Non-root and static are properties the UBI9-micro runtime stage is
+          # supposed to guarantee; assert them rather than trusting the base.
+          docker run --rm --entrypoint=/bin/sh "$IMAGE:sha-${SHORT}" -c '
+            id -u | grep -qv "^0$" || { echo "FAIL: running as root"; exit 1; }
+            ldd /usr/local/bin/bifrost 2>&1 | grep -q "not a dynamic executable" \
+              || { echo "FAIL: binary is dynamically linked"; exit 1; }
+            echo "ok: non-root, static"
+          '
