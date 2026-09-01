@@ -68,22 +68,37 @@ var ErrNotImplemented = HTTPError{
 // the strict-server's ResponseErrorHandlerFunc (see NewHandler) and
 // reusable directly by future handlers that want to hand back a typed
 // failure.
+//
+// Matches both the value HTTPError this package now sentinels
+// (ErrNotImplemented et al.) AND a *HTTPError: HTTPError was pointer-typed
+// until shortly before this package's first review round, so a habitual
+// `&HTTPError{...}` from a handler ported against that earlier shape is
+// exactly the kind of call site T11/T12's fan-out will keep writing —
+// errors.As with only a value target would silently miss it and flatten a
+// deliberate, typed status+message into a generic 500.
 func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 	var httpErr HTTPError
-	if errors.As(err, &httpErr) {
+	var ptrErr *HTTPError
+	switch {
+	case errors.As(err, &httpErr):
+		renderHTTPError(w, httpErr)
+	case errors.As(err, &ptrErr) && ptrErr != nil:
+		renderHTTPError(w, *ptrErr)
+	default:
+		attrs := []any{"error", err}
+		if r != nil {
+			attrs = append(attrs, "method", r.Method, "path", r.URL.Path)
+		}
+		slog.Error("api: unhandled error", attrs...)
+
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(httpErr.Status)
-		_ = json.NewEncoder(w).Encode(ErrorResponse{Error: httpErr.Code, Message: httpErr.Message})
-		return
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(ErrorResponse{Error: "internal_error"})
 	}
+}
 
-	attrs := []any{"error", err}
-	if r != nil {
-		attrs = append(attrs, "method", r.Method, "path", r.URL.Path)
-	}
-	slog.Error("api: unhandled error", attrs...)
-
+func renderHTTPError(w http.ResponseWriter, httpErr HTTPError) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusInternalServerError)
-	_ = json.NewEncoder(w).Encode(ErrorResponse{Error: "internal_error"})
+	w.WriteHeader(httpErr.Status)
+	_ = json.NewEncoder(w).Encode(ErrorResponse{Error: httpErr.Code, Message: httpErr.Message})
 }
