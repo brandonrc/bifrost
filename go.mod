@@ -2,7 +2,7 @@ module github.com/brandonrc/bifrost
 
 go 1.26.0
 
-toolchain go1.26.2
+toolchain go1.26.6
 
 tool github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen
 
