@@ -340,10 +340,35 @@ func TestWSBridgeEmitsAllowAuditRow(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = conn.Close(websocket.StatusNormalClosure, "") })
 
-	rows, _, err := store.ListAudit(context.Background(), core.AuditFilter{})
-	if err != nil {
-		t.Fatal(err)
+	// The gateway persists the WS audit row synchronously in
+	// proxyUpgrade before handing the connection off to wsBridge, so the
+	// row always exists by the time dialThroughGateway's 101 response has
+	// been flushed back to this test. But that flush and the server's
+	// EmitAudit call race on independent goroutines from the test's
+	// point of view, so a single synchronous read here can occasionally
+	// beat the write. Poll with a bounded wait instead of asserting on
+	// the first read.
+	var rows []controller.AuditRow
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var err error
+		rows, _, err = store.ListAudit(context.Background(), core.AuditFilter{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var hasWS bool
+		for _, row := range rows {
+			if row.Event.Method != nil && *row.Event.Method == "WS" {
+				hasWS = true
+				break
+			}
+		}
+		if hasWS || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
+
 	var found bool
 	for _, row := range rows {
 		if row.Event.Method != nil && *row.Event.Method == "WS" {
