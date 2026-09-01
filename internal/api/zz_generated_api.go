@@ -621,7 +621,7 @@ type LoginRequest struct {
 }
 
 // LoginResponse `POST /api/v1/auth/login` success body. `token` is an opaque
-// `mob_…` bearer credential (ADR-0011: stored, never signed).
+// `bfr_…` bearer credential (ADR-0011: stored, never signed).
 type LoginResponse struct {
 	// ExpiresAt Unix seconds after which the token no longer authenticates.
 	ExpiresAt int64 `json:"expires_at"`

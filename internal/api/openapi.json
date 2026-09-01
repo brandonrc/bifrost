@@ -1099,7 +1099,7 @@
         "type": "object"
       },
       "LoginResponse": {
-        "description": "`POST /api/v1/auth/login` success body. `token` is an opaque\n`mob_…` bearer credential (ADR-0011: stored, never signed).",
+        "description": "`POST /api/v1/auth/login` success body. `token` is an opaque\n`bfr_…` bearer credential (ADR-0011: stored, never signed).",
         "properties": {
           "expires_at": {
             "description": "Unix seconds after which the token no longer authenticates.",
