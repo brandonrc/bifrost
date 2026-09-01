@@ -106,7 +106,7 @@ jobs:
 
       - name: Replay JobSubmissionClient through the gateway
         env:
-          MOBULA_ADDRESS: "http://demo.ray.test:8484"
+          BIFROST_ADDRESS: "http://demo.ray.test:8484"
         run: |
           if [ "${{ matrix.token_auth }}" = "on" ]; then
             # Stock client picks these up itself: with RAY_AUTH_MODE=token
@@ -117,7 +117,7 @@ jobs:
           fi
           echo "replay leg: ${{ matrix.ray }} token_auth=${{ matrix.token_auth }}"
           # contract/jobs_client_replay.py is copied VERBATIM from mobula
-          # (see the file's own header) — it reads MOBULA_ADDRESS, not a
+          # (see the file's own header) — it reads BIFROST_ADDRESS, not a
           # bifrost-specific env var name, by construction.
           python contract/jobs_client_replay.py
 

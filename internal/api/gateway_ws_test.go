@@ -247,7 +247,7 @@ func TestWSBridgeRelaysUnsolicitedUpstreamPush(t *testing.T) {
 	sent := make(chan struct{})
 	upstream := wsUpstream(t, wsUpstreamOpts{onAccept: func(t *testing.T, c *websocket.Conn) {
 		ctx := context.Background()
-		if err := c.Write(ctx, websocket.MessageText, []byte("mobula-contract-ok\n")); err != nil {
+		if err := c.Write(ctx, websocket.MessageText, []byte("bifrost-contract-ok\n")); err != nil {
 			return
 		}
 		close(sent)
@@ -271,7 +271,7 @@ func TestWSBridgeRelaysUnsolicitedUpstreamPush(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read unsolicited push: %v", err)
 	}
-	if string(data) != "mobula-contract-ok\n" {
+	if string(data) != "bifrost-contract-ok\n" {
 		t.Fatalf("got %q", data)
 	}
 	<-sent

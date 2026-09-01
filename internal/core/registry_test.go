@@ -265,10 +265,10 @@ func TestAuthTokenEnvSerializesButTokenNeverDoes(t *testing.T) {
 
 func TestResolveAuthTokensReadsEnvIntoAuthToken(t *testing.T) {
 	e := testEndpoint("demo")
-	e.AuthTokenEnv = strPtr("MOBULA_CORE_TEST_TOKEN_OK")
+	e.AuthTokenEnv = strPtr("BIFROST_CORE_TEST_TOKEN_OK")
 	r := ClusterRegistry{Clusters: []ClusterEndpoint{e}}
 
-	t.Setenv("MOBULA_CORE_TEST_TOKEN_OK", "resolved-secret")
+	t.Setenv("BIFROST_CORE_TEST_TOKEN_OK", "resolved-secret")
 	if err := r.ResolveAuthTokens(); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -278,29 +278,29 @@ func TestResolveAuthTokensReadsEnvIntoAuthToken(t *testing.T) {
 	if r.Clusters[0].AuthToken == nil || *r.Clusters[0].AuthToken != "resolved-secret" {
 		t.Fatalf("AuthToken = %v, want resolved-secret", r.Clusters[0].AuthToken)
 	}
-	if r.Clusters[0].AuthTokenEnv == nil || *r.Clusters[0].AuthTokenEnv != "MOBULA_CORE_TEST_TOKEN_OK" {
-		t.Fatalf("AuthTokenEnv = %v, want MOBULA_CORE_TEST_TOKEN_OK", r.Clusters[0].AuthTokenEnv)
+	if r.Clusters[0].AuthTokenEnv == nil || *r.Clusters[0].AuthTokenEnv != "BIFROST_CORE_TEST_TOKEN_OK" {
+		t.Fatalf("AuthTokenEnv = %v, want BIFROST_CORE_TEST_TOKEN_OK", r.Clusters[0].AuthTokenEnv)
 	}
 }
 
 func TestResolveAuthTokensFailsFastOnMissingOrEmptyEnv(t *testing.T) {
 	for _, value := range []*string{nil, strPtr("")} {
 		e := testEndpoint("demo")
-		e.AuthTokenEnv = strPtr("MOBULA_CORE_TEST_TOKEN_MISSING")
+		e.AuthTokenEnv = strPtr("BIFROST_CORE_TEST_TOKEN_MISSING")
 		r := ClusterRegistry{Clusters: []ClusterEndpoint{e}}
 
 		if value != nil {
-			t.Setenv("MOBULA_CORE_TEST_TOKEN_MISSING", *value)
+			t.Setenv("BIFROST_CORE_TEST_TOKEN_MISSING", *value)
 		}
 		err := r.ResolveAuthTokens()
 
 		got, ok := err.(RegistryError)
-		want := RegistryError{Kind: RegistryErrMissingTokenEnv, Id: "demo", Var: "MOBULA_CORE_TEST_TOKEN_MISSING"}
+		want := RegistryError{Kind: RegistryErrMissingTokenEnv, Id: "demo", Var: "BIFROST_CORE_TEST_TOKEN_MISSING"}
 		if !ok || got != want {
 			t.Fatalf("got %v, want %v", err, want)
 		}
 		msg := err.Error()
-		if !strings.Contains(msg, "demo") || !strings.Contains(msg, "MOBULA_CORE_TEST_TOKEN_MISSING") {
+		if !strings.Contains(msg, "demo") || !strings.Contains(msg, "BIFROST_CORE_TEST_TOKEN_MISSING") {
 			t.Fatalf("error message missing context: %s", msg)
 		}
 	}

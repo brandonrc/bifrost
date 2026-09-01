@@ -26,13 +26,13 @@ func TestRenderUsageGauge_LatestSamplePerLabelSet(t *testing.T) {
 		usageSample(200, "gpu", "proj-a", "cpu", 8.0), // newer wins
 		usageSample(150, "gpu", "", "cpu", 16.0),
 	})
-	if !strings.Contains(text, "# TYPE mobula_pool_resource_usage gauge") {
+	if !strings.Contains(text, "# TYPE bifrost_pool_resource_usage gauge") {
 		t.Errorf("missing TYPE line: %s", text)
 	}
-	if !strings.Contains(text, `mobula_pool_resource_usage{pool="gpu",project="proj-a",resource="cpu"} 8`) {
+	if !strings.Contains(text, `bifrost_pool_resource_usage{pool="gpu",project="proj-a",resource="cpu"} 8`) {
 		t.Errorf("stale sample not overwritten: %s", text)
 	}
-	if !strings.Contains(text, `mobula_pool_resource_usage{pool="gpu",project="",resource="cpu"} 16`) {
+	if !strings.Contains(text, `bifrost_pool_resource_usage{pool="gpu",project="",resource="cpu"} 16`) {
 		t.Errorf("pool-aggregate row missing: %s", text)
 	}
 	if strings.Count(text, "proj-a") != 1 {
@@ -53,7 +53,7 @@ func TestRenderUsageGauge_EmptyWhenNoSamples(t *testing.T) {
 	if !strings.Contains(text, "# HELP") {
 		t.Errorf("missing HELP line: %s", text)
 	}
-	if strings.Contains(text, "mobula_pool_resource_usage{") {
+	if strings.Contains(text, "bifrost_pool_resource_usage{") {
 		t.Errorf("should have no data rows: %s", text)
 	}
 }
@@ -67,25 +67,25 @@ func TestRenderClusterGauges_CountsByStateAndProject(t *testing.T) {
 		{ID: "c3", Spec: core.ClusterSpec{Project: "proj-b"}, ObservedState: nil},
 	}
 	text := renderClusterGauges(clusters)
-	if !strings.Contains(text, "# TYPE mobula_clusters_total gauge") {
+	if !strings.Contains(text, "# TYPE bifrost_clusters_total gauge") {
 		t.Errorf("missing TYPE line: %s", text)
 	}
-	if !strings.Contains(text, `mobula_clusters_total{state="running"} 1`) {
+	if !strings.Contains(text, `bifrost_clusters_total{state="running"} 1`) {
 		t.Errorf("running count wrong: %s", text)
 	}
-	if !strings.Contains(text, `mobula_clusters_total{state="suspended"} 1`) {
+	if !strings.Contains(text, `bifrost_clusters_total{state="suspended"} 1`) {
 		t.Errorf("suspended count wrong: %s", text)
 	}
-	if !strings.Contains(text, `mobula_clusters_total{state="unknown"} 1`) {
+	if !strings.Contains(text, `bifrost_clusters_total{state="unknown"} 1`) {
 		t.Errorf("unobserved clusters should count as unknown: %s", text)
 	}
-	if !strings.Contains(text, "# TYPE mobula_clusters_by_project gauge") {
+	if !strings.Contains(text, "# TYPE bifrost_clusters_by_project gauge") {
 		t.Errorf("missing by-project TYPE line: %s", text)
 	}
-	if !strings.Contains(text, `mobula_clusters_by_project{project="proj-a"} 2`) {
+	if !strings.Contains(text, `bifrost_clusters_by_project{project="proj-a"} 2`) {
 		t.Errorf("proj-a count wrong: %s", text)
 	}
-	if !strings.Contains(text, `mobula_clusters_by_project{project="proj-b"} 1`) {
+	if !strings.Contains(text, `bifrost_clusters_by_project{project="proj-b"} 1`) {
 		t.Errorf("proj-b count wrong: %s", text)
 	}
 }
@@ -105,10 +105,10 @@ func TestRenderPoolNominalGauge_SumsFlavorsAndOmitsUnparseable(t *testing.T) {
 		pool("gpu", map[string]string{"cpu": "64", "memory": "256Gi"}),
 		pool("bad", map[string]string{"cpu": "not-a-quantity"}),
 	})
-	if !strings.Contains(text, "# TYPE mobula_pool_nominal gauge") {
+	if !strings.Contains(text, "# TYPE bifrost_pool_nominal gauge") {
 		t.Errorf("missing TYPE line: %s", text)
 	}
-	if !strings.Contains(text, `mobula_pool_nominal{pool="gpu",resource="cpu"} 64`) {
+	if !strings.Contains(text, `bifrost_pool_nominal{pool="gpu",resource="cpu"} 64`) {
 		t.Errorf("gpu cpu total wrong: %s", text)
 	}
 	if strings.Contains(text, `pool="bad"`) {
@@ -228,7 +228,7 @@ func TestMetrics_RendersAllThreeGaugeSections(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	text := string(mustResponse[Metrics200TextResponse](t, resp))
-	for _, want := range []string{"mobula_pool_resource_usage", "mobula_clusters_total", "mobula_pool_nominal"} {
+	for _, want := range []string{"bifrost_pool_resource_usage", "bifrost_clusters_total", "bifrost_pool_nominal"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("output missing %q section: %s", want, text)
 		}
