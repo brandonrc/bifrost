@@ -1,0 +1,675 @@
+// Cluster lifecycle API (Phase 3). These are Bifrost's own routes (not the
+// proxied Ray surface), so they enforce permissions against
+// auth.TargetCluster per route (#26): reads need Read, create/terminate
+// need Write — which Operator/Admin have and Developer does not.
+//
+// Handlers only manipulate *desired* state in the Store; the reconcile
+// engine converges the actual KubeRay resources. Ported from mobula-api's
+// clusters.rs.
+package api
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"sync"
+
+	"github.com/brandonrc/bifrost/internal/auth"
+	"github.com/brandonrc/bifrost/internal/controller"
+	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/brandonrc/bifrost/internal/policy"
+)
+
+// badRequest is the shared 400 constructor every T11 handler file uses for
+// domain validation failures (invalid spec, invalid enum, ...).
+func badRequest(msg string) error {
+	return HTTPError{Status: http.StatusBadRequest, Code: "bad_request", Message: msg}
+}
+
+func notFound(msg string) error {
+	return HTTPError{Status: http.StatusNotFound, Code: "not_found", Message: msg}
+}
+
+func conflict(msg string) error {
+	return HTTPError{Status: http.StatusConflict, Code: "conflict", Message: msg}
+}
+
+// clusterSpecFromWire converts the generated wire ClusterSpec into
+// core.ClusterSpec, validating the Engine enum and worker-group replica
+// counts (the generated type's signed integers admit negatives the wire
+// contract doesn't). Owner is left unset — CreateCluster stamps it from the
+// authenticated identity, never trusting the client body (see
+// core.ClusterSpec.Owner's doc comment).
+func clusterSpecFromWire(w *ClusterSpec) (core.ClusterSpec, error) {
+	engine := core.DefaultEngine
+	if w.Engine != nil {
+		switch *w.Engine {
+		case Ray:
+			engine = core.EngineRay
+		case Dask:
+			engine = core.EngineDask
+		default:
+			return core.ClusterSpec{}, badRequest(fmt.Sprintf("invalid engine %q", string(*w.Engine)))
+		}
+	}
+	groups, err := workerGroupsFromWire(w.WorkerGroups)
+	if err != nil {
+		return core.ClusterSpec{}, err
+	}
+	var ttl, idle *uint64
+	if w.TtlSeconds != nil {
+		if *w.TtlSeconds < 0 {
+			return core.ClusterSpec{}, badRequest("ttl_seconds must be non-negative")
+		}
+		v := uint64(*w.TtlSeconds)
+		ttl = &v
+	}
+	if w.IdleTimeoutSecs != nil {
+		if *w.IdleTimeoutSecs < 0 {
+			return core.ClusterSpec{}, badRequest("idle_timeout_secs must be non-negative")
+		}
+		v := uint64(*w.IdleTimeoutSecs)
+		idle = &v
+	}
+	return core.ClusterSpec{
+		Name:            w.Name,
+		Project:         w.Project,
+		Engine:          engine,
+		RayVersion:      w.RayVersion,
+		Image:           w.Image,
+		HeadCpu:         w.HeadCpu,
+		HeadMemory:      w.HeadMemory,
+		WorkerGroups:    groups,
+		TtlSeconds:      ttl,
+		IdleTimeoutSecs: idle,
+	}, nil
+}
+
+func workerGroupsFromWire(in []WorkerGroup) ([]core.WorkerGroup, error) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+	out := make([]core.WorkerGroup, len(in))
+	for i, g := range in {
+		if g.MinReplicas < 0 || g.MaxReplicas < 0 || g.Replicas < 0 {
+			return nil, badRequest(fmt.Sprintf("worker group %s: replica counts must be non-negative", g.Name))
+		}
+		out[i] = core.WorkerGroup{
+			Name:        g.Name,
+			Cpu:         g.Cpu,
+			Memory:      g.Memory,
+			Gpu:         g.Gpu,
+			MinReplicas: uint32(g.MinReplicas),
+			MaxReplicas: uint32(g.MaxReplicas),
+			Replicas:    uint32(g.Replicas),
+		}
+	}
+	return out, nil
+}
+
+// clusterView converts a StoredCluster (+ the effective price sheet, when
+// configured) into the wire ClusterView.
+func clusterView(c *controller.StoredCluster, prices policy.PriceSheet) ClusterView {
+	view := ClusterView{
+		Id:                 c.ID.String(),
+		Generation:         int64(c.Generation),
+		Desired:            c.Desired.AsStr(),
+		ObservedGeneration: int64(c.ObservedGeneration),
+		Project:            c.Spec.Project,
+		Engine:             c.Spec.Engine.String(),
+		RayVersion:         c.Spec.RayVersion,
+	}
+	if c.ObservedState != nil {
+		v := c.ObservedState.String()
+		view.ObservedState = &v
+	}
+	if c.Condition != nil {
+		v := c.Condition.String()
+		view.Condition = &v
+	}
+	if prices != nil {
+		if est, err := prices.Estimate(&c.Spec); err == nil {
+			minV, maxV := est.MinHourly, est.MaxHourly
+			view.EstMinHourly = &minV
+			view.EstMaxHourly = &maxV
+		}
+	}
+	return view
+}
+
+// effectivePrices reads the effective policy and returns its price sheet
+// (nil when no policy or no price sheet is configured) — the small slice of
+// effectivePolicy every read-path handler in this file needs.
+func (s *Server) effectivePrices(ctx context.Context) (policy.PriceSheet, error) {
+	p, err := effectivePolicy(ctx, s.Store, &s.PolicySeed)
+	if err != nil {
+		return nil, err
+	}
+	if p == nil {
+		return nil, nil
+	}
+	return configFromStored(p).Prices, nil
+}
+
+func containsString(ss []string, v string) bool {
+	for _, s := range ss {
+		if s == v {
+			return true
+		}
+	}
+	return false
+}
+
+// readScope is the read-scoping resolution (ADR-0009 addendum, #49 read
+// side): the caller's effective scoped assignments and, when any are
+// project-scoped, the projects their cluster visibility is narrowed to. A
+// nil/empty projects slice means unrestricted visibility (dev mode, global
+// admin, or no project-scoped assignments). Ported from clusters.rs's
+// read_scope.
+//
+// Edge case, pinned down: a caller holding BOTH a global role AND
+// project-scoped assignments is narrowed to the scoped projects — the
+// presence of a scoped binding defines the projects they operate in, so
+// reads follow it. Only a global Admin role is exempt and always sees
+// every cluster.
+func readScope(ctx context.Context, store controller.Store, id *auth.Identity) (assignments []auth.RoleScope, projects []string) {
+	if id == nil {
+		return nil, nil
+	}
+	for _, r := range id.Roles {
+		if r == auth.RoleAdmin {
+			return nil, nil
+		}
+	}
+	assignments = EffectiveAssignments(ctx, store, id)
+	for _, a := range assignments {
+		if p, ok := cutPrefix(a.Scope, "project:"); ok {
+			projects = append(projects, p)
+		}
+	}
+	return assignments, projects
+}
+
+func cutPrefix(s, prefix string) (string, bool) {
+	if len(s) >= len(prefix) && s[:len(prefix)] == prefix {
+		return s[len(prefix):], true
+	}
+	return "", false
+}
+
+// ListClusters lists every cluster the caller may read (#49 scoped RBAC +
+// ADR-0009 addendum read-scoping — see readScope).
+func (s *Server) ListClusters(ctx context.Context, _ ListClustersRequestObject) (ListClustersResponseObject, error) {
+	identity, _ := IdentityFromContext(ctx)
+	assignments, narrowed := readScope(ctx, s.Store, identity)
+	if len(narrowed) == 0 && identity != nil {
+		if !identity.Permits(auth.Read, auth.TargetCluster) && len(assignments) == 0 {
+			if err := Authorize(ctx, s.Store, identity, auth.Read, auth.TargetCluster); err != nil {
+				return nil, err
+			}
+		}
+	}
+	clusters, err := s.Store.List(ctx)
+	if err != nil {
+		return nil, wrapStoreErr(err)
+	}
+	prices, err := s.effectivePrices(ctx)
+	if err != nil {
+		return nil, wrapStoreErr(err)
+	}
+	views := make([]ClusterView, 0, len(clusters))
+	for i := range clusters {
+		c := &clusters[i]
+		var visible bool
+		switch {
+		case len(narrowed) > 0:
+			visible = containsString(narrowed, c.Spec.Project)
+		case identity != nil:
+			visible = identity.PermitsScoped(auth.Read, auth.TargetCluster, assignments, c.Spec.Project)
+		default:
+			visible = true
+		}
+		if visible {
+			views = append(views, clusterView(c, prices))
+		}
+	}
+	return ListClusters200JSONResponse(views), nil
+}
+
+// GetCluster reads one cluster (#49 scoped RBAC + read-scoping): an
+// out-of-scope cluster (narrowed away by project-scoped assignments) 404s
+// rather than 403s — the list hides it, so the by-name read must not leak
+// its existence either.
+func (s *Server) GetCluster(ctx context.Context, req GetClusterRequestObject) (GetClusterResponseObject, error) {
+	identity, _ := IdentityFromContext(ctx)
+	c, err := s.Store.Get(ctx, core.ClusterId(req.Id))
+	if err != nil {
+		return nil, wrapStoreErr(err)
+	}
+	if c == nil {
+		return nil, notFound("no such cluster")
+	}
+	_, narrowed := readScope(ctx, s.Store, identity)
+	if len(narrowed) > 0 && !containsString(narrowed, c.Spec.Project) {
+		return nil, notFound("no such cluster")
+	}
+	if err := AuthorizeScoped(ctx, s.Store, identity, auth.Read, auth.TargetCluster, c.Spec.Project); err != nil {
+		return nil, err
+	}
+	prices, err := s.effectivePrices(ctx)
+	if err != nil {
+		return nil, wrapStoreErr(err)
+	}
+	return GetCluster200JSONResponse(clusterView(c, prices)), nil
+}
+
+// withProjectAdmitLock serializes concurrent same-project cluster creates
+// across the whole read-check-write quota-admission section (list -> admit
+// -> upsert), so the TOCTOU window can't over-admit (issue #44). Returns an
+// unlock func; the caller defers it so the lock stays held past the
+// upsert. Projects without a configured quota never call this — they stay
+// concurrent.
+//
+// FOLLOW-UP (multi-replica gap — ledgered, not silently shipped): this lock
+// is IN-PROCESS ONLY (a sync.Mutex keyed by project, scoped to this Server
+// instance's lifetime). It serializes concurrent requests within ONE
+// bifrost-api process. A multi-replica deployment (more than one process
+// sharing a Postgres store) is NOT protected: two replicas can still race
+// the same list->admit->upsert window against each other and both admit,
+// over-committing the quota. The correct multi-replica fix is a single
+// Store transaction wrapping the check-and-commit (a new Store method doing
+// the list+upsert under one DB transaction/row lock) — not implemented in
+// this task; tracked as a follow-up. This mirrors the Rust reference's own
+// documented limitation verbatim (clusters.rs's ClusterApiState.admit_locks
+// doc comment: "this is in-process only... tracked separately, not
+// implemented here").
+func (s *Server) withProjectAdmitLock(project string) func() {
+	s.admitMu.Lock()
+	if s.admitLocks == nil {
+		s.admitLocks = make(map[string]*sync.Mutex)
+	}
+	lock, ok := s.admitLocks[project]
+	if !ok {
+		lock = &sync.Mutex{}
+		s.admitLocks[project] = lock
+	}
+	s.admitMu.Unlock()
+	lock.Lock()
+	return lock.Unlock
+}
+
+func satSub(a, b uint64) uint64 {
+	if b > a {
+		return 0
+	}
+	return a - b
+}
+
+// windowedConsumption computes a project's cumulative resource-hours over
+// [from, to], summed across pools — the budget-admission input (#77).
+// Ported from mobula-api's usage.rs windowed_consumption.
+func (s *Server) windowedConsumption(ctx context.Context, project string, from, to uint64) (policy.ResourceMap, error) {
+	p := project
+	samples, err := s.Store.UsageSamples(ctx, &p, nil, 0, to)
+	if err != nil {
+		return nil, err
+	}
+	byPoolResource := make(map[policy.PoolResource][]policy.UsageSampleView)
+	for _, smp := range samples {
+		key := policy.PoolResource{Pool: smp.Pool, Resource: smp.Resource}
+		byPoolResource[key] = append(byPoolResource[key], policy.UsageSampleView{TS: smp.Ts, Quantity: smp.Quantity})
+	}
+	return policy.WindowedResourceHours(byPoolResource, from, to), nil
+}
+
+// CreateCluster records a cluster's desired spec (the reconciler converges
+// it). Scoped RBAC (#49): Write on Cluster, globally or via an assignment
+// covering the spec's project. Admission order mirrors clusters.rs exactly:
+// GPU tenant-isolation (#58) -> quota (#44, under the per-project lock) ->
+// time-windowed budget (#77) -> upsert.
+func (s *Server) CreateCluster(ctx context.Context, req CreateClusterRequestObject) (CreateClusterResponseObject, error) {
+	identity, _ := IdentityFromContext(ctx)
+	if req.Body == nil {
+		return nil, badRequest("missing request body")
+	}
+	body := req.Body
+	if err := AuthorizeScoped(ctx, s.Store, identity, auth.Write, auth.TargetCluster, body.Spec.Project); err != nil {
+		return nil, err
+	}
+	id := core.ClusterId(body.Id)
+	spec, err := clusterSpecFromWire(&body.Spec)
+	if err != nil {
+		return nil, err
+	}
+	// Tier-2 owned session clusters: the authenticated caller is always
+	// the recorded owner, overriding any client-supplied value — the body
+	// is untrusted (ownership is who asked, not what they claim). nil
+	// only when unauthenticated (dev mode), which leaves the cluster
+	// ownerless.
+	if identity != nil {
+		owner := identity.Owner()
+		spec.Owner = &owner
+	}
+	project := spec.Project
+
+	storedPolicy, err := effectivePolicy(ctx, s.Store, &s.PolicySeed)
+	if err != nil {
+		return nil, wrapStoreErr(err)
+	}
+	cfg := PolicyConfig{}
+	if storedPolicy != nil {
+		cfg = configFromStored(storedPolicy)
+	}
+
+	idStr := id.String()
+
+	// GPU tenant-isolation admission (#58): when the project's pool is
+	// shared by more than one project, fractional GPU requests (and
+	// admission into a pool resolving to time-slice at all) are rejected.
+	pools, err := s.Store.ListPools(ctx)
+	if err != nil {
+		return nil, wrapStoreErr(err)
+	}
+	for i := range pools {
+		p := &pools[i]
+		allocs, err := s.Store.ListAllocations(ctx, p.Name)
+		if err != nil {
+			return nil, wrapStoreErr(err)
+		}
+		matches := false
+		for _, a := range allocs {
+			if a.Project == project {
+				matches = true
+				break
+			}
+		}
+		if !matches {
+			continue
+		}
+		if verr := policy.CheckClusterGpuIsolation(&p.Spec, s.PolicySeed.EffectiveGPUDefaultSharing(), len(allocs), &spec); verr != nil {
+			s.denyCreate(ctx, identity, idStr, "gpu_tenant_isolation", http.StatusBadRequest)
+			return nil, badRequest(verr.Error())
+		}
+		break
+	}
+
+	// Quota admission (#44): only enforced for projects with a configured
+	// limit, checked against max-demand of the project's other live
+	// clusters plus this request.
+	if limit, ok := cfg.Quotas[project]; ok {
+		unlock := s.withProjectAdmitLock(project)
+		defer unlock()
+
+		_, requested, derr := policy.ClusterDemand(&spec)
+		if derr != nil {
+			return nil, badRequest("invalid spec: " + derr.Error())
+		}
+		clusters, err := s.Store.List(ctx)
+		if err != nil {
+			return nil, wrapStoreErr(err)
+		}
+		inUse := policy.ResourceMap{}
+		for i := range clusters {
+			c := &clusters[i]
+			if c.Spec.Project != project || c.ID == id || c.Desired != controller.DesiredRunning {
+				continue
+			}
+			// A stored spec that fails to parse must FAIL CLOSED —
+			// zeroing would undercount usage and admit past the limit.
+			_, m, derr := policy.ClusterDemand(&c.Spec)
+			if derr != nil {
+				slog.Error("api: unparseable stored spec blocks quota accounting", "cluster", c.ID, "error", derr)
+				return nil, HTTPError{Status: http.StatusInternalServerError, Code: "internal_error",
+					Message: "quota accounting failed: an existing cluster has an invalid spec"}
+			}
+			inUse = inUse.Add(m)
+		}
+		if aerr := policy.AdmitQuota(project, limit, inUse, requested); aerr != nil {
+			s.denyCreate(ctx, identity, idStr, "quota_exceeded", http.StatusConflict)
+			return nil, conflict(aerr.Error())
+		}
+	}
+
+	// Time-windowed budget admission (#77): distinct from quota above —
+	// caps CUMULATIVE consumption over a trailing window. No admit-lock
+	// needed: consumed is historical, persisted usage, immune to
+	// concurrent in-flight creates.
+	if budget, ok := cfg.Budgets[project]; ok {
+		to := controller.NowUnix()
+		from := satSub(to, budget.WindowSecs)
+		consumed, cerr := s.windowedConsumption(ctx, project, from, to)
+		if cerr != nil {
+			return nil, wrapStoreErr(cerr)
+		}
+		b := budget
+		if berr := policy.AdmitBudget(project, &b, consumed); berr != nil {
+			s.denyCreate(ctx, identity, idStr, "budget_exceeded", http.StatusConflict)
+			return nil, conflict(berr.Error())
+		}
+	}
+
+	generation, err := s.Store.UpsertDesired(ctx, id, spec)
+	if err != nil {
+		return nil, wrapStoreErr(err)
+	}
+	_ = generation
+	action := "create_cluster"
+	status := uint16(http.StatusCreated)
+	EmitAudit(ctx, s.Store, &core.AuditEvent{
+		Ts: controller.NowUnix(), Subject: identitySubject(identity),
+		Decision: core.AuditDecisionAllow, Action: &action, Cluster: &idStr, Status: &status,
+	})
+
+	// Pool admission (ADR-0010): resolve + audit the project's Kueue
+	// queue assignment. The reconcile loop re-derives it from the store
+	// at apply time; a project with no allocation stays queue-free.
+	if q, qerr := controller.QueueAssignmentForProject(ctx, s.Store, project); qerr != nil {
+		slog.Warn("api: queue assignment lookup failed", "cluster", idStr, "error", qerr)
+	} else if q != nil {
+		qaction := "queue_assign"
+		EmitAudit(ctx, s.Store, &core.AuditEvent{
+			Ts: controller.NowUnix(), Subject: identitySubject(identity),
+			Decision: core.AuditDecisionAllow, Action: &qaction, Cluster: &idStr,
+		})
+	}
+
+	return CreateCluster201Response{}, nil
+}
+
+func (s *Server) denyCreate(ctx context.Context, identity *auth.Identity, idStr, reason string, status int) {
+	r := reason
+	st := uint16(status)
+	action := "create_cluster"
+	EmitAudit(ctx, s.Store, &core.AuditEvent{
+		Ts: controller.NowUnix(), Subject: identitySubject(identity),
+		Decision: core.AuditDecisionDeny, Reason: &r, Action: &action, Cluster: &idStr, Status: &st,
+	})
+}
+
+// DeleteCluster marks a cluster for termination (default) or, with
+// ?purge=true, hard-deletes an already-terminated/gone tombstone row
+// (Truthful Console). Scoped RBAC (#49): fetch first (the check needs the
+// cluster's project), then require Write on Cluster scoped to it.
+func (s *Server) DeleteCluster(ctx context.Context, req DeleteClusterRequestObject) (DeleteClusterResponseObject, error) {
+	identity, _ := IdentityFromContext(ctx)
+	id := core.ClusterId(req.Id)
+	stored, err := s.Store.Get(ctx, id)
+	if err != nil {
+		return nil, wrapStoreErr(err)
+	}
+	if stored == nil {
+		return nil, notFound("no such cluster")
+	}
+	if err := AuthorizeScoped(ctx, s.Store, identity, auth.Write, auth.TargetCluster, stored.Spec.Project); err != nil {
+		return nil, err
+	}
+
+	if req.Params.Purge != nil && *req.Params.Purge {
+		return s.purgeCluster(ctx, identity, id, stored)
+	}
+
+	if err := s.Store.SetDesired(ctx, id, controller.DesiredTerminated); err != nil {
+		if storeErrContains(err, "no such cluster") {
+			return nil, notFound("no such cluster")
+		}
+		return nil, wrapStoreErr(err)
+	}
+	action := "delete_cluster"
+	status := uint16(http.StatusAccepted)
+	idStr := id.String()
+	EmitAudit(ctx, s.Store, &core.AuditEvent{
+		Ts: controller.NowUnix(), Subject: identitySubject(identity),
+		Decision: core.AuditDecisionAllow, Action: &action, Cluster: &idStr, Status: &status,
+	})
+	return DeleteCluster202Response{}, nil
+}
+
+// purgeCluster hard-deletes a terminated cluster's tombstone row. Refuses a
+// cluster that is not yet a dead tombstone — it must be desired=Terminated
+// AND observed gone (never observed, or observed Terminated) — so purge can
+// never race a teardown. The caller is already authorized (Write on
+// Cluster, scoped) by DeleteCluster.
+func (s *Server) purgeCluster(ctx context.Context, identity *auth.Identity, id core.ClusterId, stored *controller.StoredCluster) (DeleteClusterResponseObject, error) {
+	isTombstone := stored.Desired == controller.DesiredTerminated && controller.ObservedGone(stored.ObservedState)
+	if !isTombstone {
+		return nil, conflict("cannot purge a live cluster: it must be terminated and observed gone first")
+	}
+	removed, err := s.Store.RemoveCluster(ctx, id)
+	if err != nil {
+		return nil, wrapStoreErr(err)
+	}
+	if !removed {
+		// Removed between the fetch and here (concurrent purge/sweep).
+		return nil, notFound("no such cluster")
+	}
+	action := "purge_cluster"
+	status := uint16(http.StatusOK)
+	idStr := id.String()
+	EmitAudit(ctx, s.Store, &core.AuditEvent{
+		Ts: controller.NowUnix(), Subject: identitySubject(identity),
+		Decision: core.AuditDecisionAllow, Action: &action, Cluster: &idStr, Status: &status,
+	})
+	return DeleteCluster200Response{}, nil
+}
+
+// lifecycleCmd is the user-issued lifecycle command behind
+// POST .../suspend and .../resume (#51): each only flips desired state in
+// the store; the reconcile engine actuates it.
+type lifecycleCmd struct {
+	desired      controller.DesiredState
+	action       string
+	transitional core.ClusterState
+}
+
+var (
+	lifecycleSuspend = lifecycleCmd{desired: controller.DesiredSuspended, action: "suspend_cluster", transitional: core.ClusterStateSuspending}
+	lifecycleResume  = lifecycleCmd{desired: controller.DesiredRunning, action: "resume_cluster", transitional: core.ClusterStateProvisioning}
+)
+
+// lifecycleCommand is the shared implementation of the suspend/resume
+// routes: authorization (global Write on Cluster — NOT project-scoped,
+// matching clusters.rs verbatim), the Kueue queue-owned-suspend guard
+// (ADR-0010), and the observed-state transition-legality check
+// (core.ClusterState.CanTransitionTo). Returns nil on success (the desired
+// state was flipped) or an *HTTPError describing the refusal.
+func (s *Server) lifecycleCommand(ctx context.Context, identity *auth.Identity, id core.ClusterId, cmd lifecycleCmd) error {
+	if err := Authorize(ctx, s.Store, identity, auth.Write, auth.TargetCluster); err != nil {
+		return err
+	}
+	cluster, err := s.Store.Get(ctx, id)
+	if err != nil {
+		return wrapStoreErr(err)
+	}
+	if cluster == nil {
+		return notFound("no such cluster")
+	}
+	idStr := id.String()
+
+	// Kueue owns spec.suspend for queue-assigned clusters (ADR-0010): a
+	// user suspend/resume would fight the queue's own admission control.
+	q, qerr := controller.QueueAssignmentForProject(ctx, s.Store, cluster.Spec.Project)
+	if qerr != nil {
+		return wrapStoreErr(qerr)
+	}
+	if q != nil {
+		reason := "queue_owned_suspend"
+		status := uint16(http.StatusConflict)
+		action := cmd.action
+		EmitAudit(ctx, s.Store, &core.AuditEvent{
+			Ts: controller.NowUnix(), Subject: identitySubject(identity),
+			Decision: core.AuditDecisionDeny, Reason: &reason, Action: &action, Cluster: &idStr, Status: &status,
+		})
+		return conflict(fmt.Sprintf("cluster's project is admitted through queue %q — Kueue owns suspend there", q.QueueName))
+	}
+
+	legal := cluster.Desired != controller.DesiredTerminated &&
+		cluster.ObservedState != nil && cluster.ObservedState.CanTransitionTo(cmd.transitional)
+	if !legal {
+		reason := "illegal_state_transition"
+		status := uint16(http.StatusConflict)
+		action := cmd.action
+		EmitAudit(ctx, s.Store, &core.AuditEvent{
+			Ts: controller.NowUnix(), Subject: identitySubject(identity),
+			Decision: core.AuditDecisionDeny, Reason: &reason, Action: &action, Cluster: &idStr, Status: &status,
+		})
+		return conflict("illegal state transition")
+	}
+
+	if err := s.Store.SetDesired(ctx, id, cmd.desired); err != nil {
+		return wrapStoreErr(err)
+	}
+	status := uint16(http.StatusAccepted)
+	action := cmd.action
+	EmitAudit(ctx, s.Store, &core.AuditEvent{
+		Ts: controller.NowUnix(), Subject: identitySubject(identity),
+		Decision: core.AuditDecisionAllow, Action: &action, Cluster: &idStr, Status: &status,
+	})
+	return nil
+}
+
+// SuspendCluster sets a cluster's desired state to suspended; the
+// reconciler releases compute (spec.suspend=true).
+func (s *Server) SuspendCluster(ctx context.Context, req SuspendClusterRequestObject) (SuspendClusterResponseObject, error) {
+	identity, _ := IdentityFromContext(ctx)
+	if err := s.lifecycleCommand(ctx, identity, core.ClusterId(req.Id), lifecycleSuspend); err != nil {
+		return nil, err
+	}
+	return SuspendCluster202Response{}, nil
+}
+
+// ResumeCluster sets a cluster's desired state back to running; the
+// reconciler re-provisions (suspend=false).
+func (s *Server) ResumeCluster(ctx context.Context, req ResumeClusterRequestObject) (ResumeClusterResponseObject, error) {
+	identity, _ := IdentityFromContext(ctx)
+	if err := s.lifecycleCommand(ctx, identity, core.ClusterId(req.Id), lifecycleResume); err != nil {
+		return nil, err
+	}
+	return ResumeCluster202Response{}, nil
+}
+
+// ListJobs lists the persistent, cross-cluster job history, newest
+// submitted first.
+func (s *Server) ListJobs(ctx context.Context, _ ListJobsRequestObject) (ListJobsResponseObject, error) {
+	identity, _ := IdentityFromContext(ctx)
+	if err := Authorize(ctx, s.Store, identity, auth.Read, auth.TargetJob); err != nil {
+		return nil, err
+	}
+	jobs, err := s.Store.ListJobs(ctx)
+	if err != nil {
+		return nil, wrapStoreErr(err)
+	}
+	views := make([]JobView, len(jobs))
+	for i, j := range jobs {
+		var dur *int64
+		if j.DurationSecs != nil {
+			v := int64(*j.DurationSecs)
+			dur = &v
+		}
+		views[i] = JobView{
+			Id: j.Id, Cluster: j.Cluster, Submitter: j.Submitter, Status: j.Status,
+			DurationSecs: dur, SubmittedAt: int64(j.SubmittedAt),
+		}
+	}
+	return ListJobs200JSONResponse(views), nil
+}

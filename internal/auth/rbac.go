@@ -201,6 +201,26 @@ func (r Role) MarshalJSON() ([]byte, error) {
 	return json.Marshal(r.AsStr())
 }
 
+// UnmarshalJSON rejects any value other than a known Role wire string,
+// mirroring serde's strict enum deserialization and this codebase's other
+// strict-enum ingress guards (core.LocalRole.UnmarshalJSON's pattern,
+// internal/core/auth.go:70). Added so a Role — and, transitively, a
+// RoleScope embedding one — round-trips through JSON: Role already had
+// MarshalJSON (the egress guard) but no UnmarshalJSON counterpart (the
+// ingress guard) until now.
+func (r *Role) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	v, ok := ParseRole(s)
+	if !ok {
+		return fmt.Errorf("auth: invalid Role %q", s)
+	}
+	*r = v
+	return nil
+}
+
 // ParseRole is the inverse of AsStr; ok is false for anything else.
 //
 // Callers MUST check ok. Unlike Rust's Option<Role> (which makes an

@@ -290,7 +290,13 @@ func TestFailClosedGuardInstallationCondition(t *testing.T) {
 // fabricate an identity while doing so — a downstream authorization check
 // that finds one would be reading a credential nobody presented.
 func TestDevModeAttachesNoIdentity(t *testing.T) {
-	req := httptest.NewRequest("GET", "/api/v1/clusters", nil)
+	// /api/v1/pools (T12 scope) rather than /api/v1/clusters: T11 ported
+	// real cluster handlers behind a bare NewServer(), which have no
+	// store to call in this no-dependencies construction — this probe
+	// only cares about the auth-layer property (dev mode passes through
+	// with no identity attached), not any particular handler's body, so
+	// it targets a still-unimplemented stub instead.
+	req := httptest.NewRequest("GET", "/api/v1/pools", nil)
 	req.RemoteAddr = "127.0.0.1:9999"
 	rec := httptest.NewRecorder()
 	NewHandler(NewServer(), HandlerOptions{}).ServeHTTP(rec, req)
