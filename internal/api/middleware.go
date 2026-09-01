@@ -16,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -100,10 +101,35 @@ func IdentityFromContext(ctx context.Context) (*auth.Identity, bool) {
 
 // ErrMissingBearerToken and ErrInvalidBearerToken back the 401 responses
 // RequireAuth emits; both carry the canonical envelope via WriteError.
+// Value types (see HTTPError's doc comment) — every use copies, never
+// aliases, the sentinel.
 var (
-	ErrMissingBearerToken = &HTTPError{Status: http.StatusUnauthorized, Code: "missing_token", Message: "missing bearer token"}
-	ErrInvalidBearerToken = &HTTPError{Status: http.StatusUnauthorized, Code: "invalid_token", Message: "invalid token"}
+	ErrMissingBearerToken = HTTPError{Status: http.StatusUnauthorized, Code: "missing_token", Message: "missing bearer token"}
+	ErrInvalidBearerToken = HTTPError{Status: http.StatusUnauthorized, Code: "invalid_token", Message: "invalid token"}
 )
+
+// auditDenial logs a structured access-denial record — never token
+// contents — mirroring the shape mobula-api's auth_layer.rs/lib.rs emit
+// via tracing (`decision=deny reason=...`). 401s log at Info: auth_layer.rs
+// audits both 401 paths at INFO specifically so credential-stuffing /
+// token-guessing is visible in the ordinary log stream, not buried at
+// debug (#23); the fail-closed non-loopback refusal logs at Warn,
+// matching lib.rs's `tracing::warn!`.
+//
+// TODO(T11/T12): once AuthState carries a persisted audit sink (the
+// store-backed AuditEvent the Rust reference writes via
+// crate::audit::emit), route these through it too — this slog record is
+// the interim signal until that plumbing (ClusterRegistry/Store-backed
+// handlers) exists.
+func auditDenial(level slog.Level, r *http.Request, reason string) {
+	slog.LogAttrs(r.Context(), level, "api: access denied",
+		slog.String("decision", "deny"),
+		slog.String("reason", reason),
+		slog.String("method", r.Method),
+		slog.String("path", r.URL.Path),
+		slog.String("remote_addr", r.RemoteAddr),
+	)
+}
 
 // RequireAuth is the deny-by-default auth middleware (auth_layer.rs's
 // require_auth). When state carries no validator and no local
@@ -125,12 +151,14 @@ func RequireAuth(state AuthState) func(http.Handler) http.Handler {
 
 			token, ok := bearerToken(r)
 			if !ok {
+				auditDenial(slog.LevelInfo, r, "missing_token")
 				w.Header().Set("WWW-Authenticate", "Bearer")
 				WriteError(w, r, ErrMissingBearerToken)
 				return
 			}
 			identity := resolveIdentity(r.Context(), state, token)
 			if identity == nil {
+				auditDenial(slog.LevelInfo, r, "invalid_token")
 				w.Header().Set("WWW-Authenticate", "Bearer")
 				WriteError(w, r, ErrInvalidBearerToken)
 				return
@@ -179,7 +207,8 @@ func CheckBindAllowed(bindIP net.IP, authConfigured, allowUnauthenticated bool) 
 func RefuseNonLoopback(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !peerIsLoopback(r.RemoteAddr) {
-			WriteError(w, r, &HTTPError{
+			auditDenial(slog.LevelWarn, r, "unauthenticated_non_loopback")
+			WriteError(w, r, HTTPError{
 				Status:  http.StatusForbidden,
 				Code:    "unauthenticated_non_loopback",
 				Message: "no authentication is configured; non-loopback access is refused",

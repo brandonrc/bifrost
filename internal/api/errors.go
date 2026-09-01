@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 )
 
@@ -26,14 +27,18 @@ type ErrorResponse struct {
 // HTTPError is an error that knows the status code and canonical body it
 // should render as. Handlers return one (instead of writing to the
 // ResponseWriter directly) so the rendering stays centralized in
-// WriteError.
+// WriteError. It is a value type deliberately: every HTTPError in this
+// package (the sentinels below and every literal constructed inline) is
+// copied into the `error` interface at the point it's returned, so no two
+// callers — including concurrent requests hitting the same sentinel —
+// can ever alias, and therefore mutate, the same underlying struct.
 type HTTPError struct {
 	Status  int
 	Code    string
 	Message string
 }
 
-func (e *HTTPError) Error() string {
+func (e HTTPError) Error() string {
 	if e.Message != "" {
 		return e.Code + ": " + e.Message
 	}
@@ -46,29 +51,39 @@ func (e *HTTPError) Error() string {
 // interface still compiles complete (ADR-0002) and every unimplemented
 // route answers 501 with the canonical envelope rather than a bare
 // panic or an inconsistent ad hoc body.
-var ErrNotImplemented = &HTTPError{
+var ErrNotImplemented = HTTPError{
 	Status:  http.StatusNotImplemented,
 	Code:    "not_implemented",
 	Message: "this operation is not yet implemented",
 }
 
-// WriteError renders err as the canonical JSON ErrorResponse envelope.
-// A *HTTPError contributes its own status/code/message; any other error
-// renders as 500 "internal_error" with err.Error() as the message so
-// nothing is ever silently swallowed. Wired as the strict-server's
-// ResponseErrorHandlerFunc (see NewHandler) and reusable directly by
-// future handlers that want to hand back a typed failure.
-func WriteError(w http.ResponseWriter, _ *http.Request, err error) {
-	status := http.StatusInternalServerError
-	body := ErrorResponse{Error: "internal_error", Message: err.Error()}
-
-	var httpErr *HTTPError
+// WriteError renders err as the canonical JSON ErrorResponse envelope. An
+// HTTPError contributes its own status/code/message verbatim — those are
+// always fixed, developer-authored strings, safe to hand a client. Any
+// other error is NOT rendered into the response: its text may carry
+// backend detail (a DB DSN, a file path, a dependency's internal error
+// string) a client has no business seeing, so it is logged server-side
+// instead (with the request's method/path for correlation) and the
+// client gets a fixed, generic 500 body with no message at all. Wired as
+// the strict-server's ResponseErrorHandlerFunc (see NewHandler) and
+// reusable directly by future handlers that want to hand back a typed
+// failure.
+func WriteError(w http.ResponseWriter, r *http.Request, err error) {
+	var httpErr HTTPError
 	if errors.As(err, &httpErr) {
-		status = httpErr.Status
-		body = ErrorResponse{Error: httpErr.Code, Message: httpErr.Message}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(httpErr.Status)
+		_ = json.NewEncoder(w).Encode(ErrorResponse{Error: httpErr.Code, Message: httpErr.Message})
+		return
 	}
 
+	attrs := []any{"error", err}
+	if r != nil {
+		attrs = append(attrs, "method", r.Method, "path", r.URL.Path)
+	}
+	slog.Error("api: unhandled error", attrs...)
+
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
+	w.WriteHeader(http.StatusInternalServerError)
+	_ = json.NewEncoder(w).Encode(ErrorResponse{Error: "internal_error"})
 }

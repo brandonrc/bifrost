@@ -92,8 +92,11 @@ func NewHandler(server StrictServerInterface, opts HandlerOptions) http.Handler 
 	mux.Handle("GET "+SpecPath, specHandler())
 
 	strict := NewStrictHandlerWithOptions(server, opts.StrictMiddlewares, StrictHTTPServerOptions{
+		// A decode/binding error describes the CLIENT's own malformed
+		// request (e.g. bad JSON) — unlike WriteError's generic fallback,
+		// echoing it back is client-actionable, not a server-detail leak.
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
-			WriteError(w, r, &HTTPError{Status: http.StatusBadRequest, Code: "bad_request", Message: err.Error()})
+			WriteError(w, r, HTTPError{Status: http.StatusBadRequest, Code: "bad_request", Message: err.Error()})
 		},
 		ResponseErrorHandlerFunc: WriteError,
 	})

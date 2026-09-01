@@ -1,16 +1,19 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -19,6 +22,17 @@ import (
 	"github.com/brandonrc/bifrost/internal/core"
 	"github.com/golang-jwt/jwt/v5"
 )
+
+// captureLogs redirects log/slog's default logger to a buffer for the
+// duration of the test, restoring the previous default on cleanup.
+func captureLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
 
 // Port of auth_layer.rs's public_allowlist_is_narrow test: the exact
 // exemption list, nothing broader.
@@ -97,6 +111,7 @@ func TestRequireAuth_PublicPathBypassesEvenWhenConfigured(t *testing.T) {
 }
 
 func TestRequireAuth_MissingBearerIsDenied(t *testing.T) {
+	buf := captureLogs(t)
 	local := auth.NewLocalAuthenticator(newFakeUserStore(), 3600, 30)
 	h := RequireAuth(AuthState{Local: local})(okHandler())
 
@@ -110,20 +125,39 @@ func TestRequireAuth_MissingBearerIsDenied(t *testing.T) {
 		t.Error("expected WWW-Authenticate: Bearer")
 	}
 	assertErrorBody(t, rec, "missing_token")
+
+	logged := buf.String()
+	for _, want := range []string{"decision=deny", "reason=missing_token", "method=GET", "path=/api/v1/clusters"} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("log output missing %q, got: %s", want, logged)
+		}
+	}
 }
 
 func TestRequireAuth_InvalidBearerIsDenied(t *testing.T) {
+	buf := captureLogs(t)
 	local := auth.NewLocalAuthenticator(newFakeUserStore(), 3600, 30)
 	h := RequireAuth(AuthState{Local: local})(okHandler())
 
+	const badToken = "mob_totallybogus_0000000000000000000000000000"
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/clusters", nil)
-	req.Header.Set("Authorization", "Bearer mob_totallybogus_0000000000000000000000000000")
+	req.Header.Set("Authorization", "Bearer "+badToken)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", rec.Code)
 	}
 	assertErrorBody(t, rec, "invalid_token")
+
+	logged := buf.String()
+	for _, want := range []string{"decision=deny", "reason=invalid_token", "method=GET", "path=/api/v1/clusters"} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("log output missing %q, got: %s", want, logged)
+		}
+	}
+	if strings.Contains(logged, badToken) {
+		t.Errorf("log output must never contain token contents, got: %s", logged)
+	}
 }
 
 func TestRequireAuth_ValidLocalPATIsAccepted(t *testing.T) {
@@ -231,6 +265,7 @@ func TestCheckBindAllowed(t *testing.T) {
 }
 
 func TestRefuseNonLoopback(t *testing.T) {
+	buf := captureLogs(t)
 	h := RefuseNonLoopback(okHandler())
 
 	loopbackReq := httptest.NewRequest(http.MethodGet, "/anything", nil)
@@ -249,6 +284,16 @@ func TestRefuseNonLoopback(t *testing.T) {
 		t.Fatalf("remote peer: status = %d, want 403", rec.Code)
 	}
 	assertErrorBody(t, rec, "unauthenticated_non_loopback")
+
+	logged := buf.String()
+	for _, want := range []string{"level=WARN", "decision=deny", "reason=unauthenticated_non_loopback", "203.0.113.7"} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("log output missing %q, got: %s", want, logged)
+		}
+	}
+	if strings.Contains(logged, "127.0.0.1:54321") {
+		t.Errorf("the allowed loopback request should not have logged a denial, got: %s", logged)
+	}
 }
 
 // --- test helpers ---
