@@ -423,21 +423,27 @@ func TailLines(raw string, tail uint32) ([]string, bool) {
 		if strings.HasSuffix(raw, "\n") {
 			lines = lines[:len(lines)-1]
 		}
-		// A genuinely blank final line (raw ends "...\n\n") still leaves
-		// one more empty element after the drop above. kuberay.rs's
-		// tail_lines defends against a log source that emits one anyway
-		// (e.g. a doubled trailing newline) by dropping it too — same
-		// unconditional "is the last element empty" check the original
-		// Go implementation already had, just applied as a second pass
-		// after the Rust-semantics drop, not instead of it.
-		if len(lines) > 0 && lines[len(lines)-1] == "" {
-			lines = lines[:len(lines)-1]
-		}
 		// str::lines() also strips a trailing '\r' from every line (its
 		// LinesAnyMap), so \r\n-terminated logs (not just \n-terminated
-		// ones) tail cleanly.
+		// ones) tail cleanly. This MUST run before the trailing-blank-line
+		// drop below: a CRLF blank line before the final terminator (e.g.
+		// "a\r\nb\r\n\r\n") splits+drops down to a last element of "\r", not
+		// "" — trimming the \r first turns it into "" so the blank-line
+		// check below actually recognizes and drops it. (Fix round 2, T12:
+		// these two steps were previously in the opposite order, so a
+		// trailing CRLF blank line was never dropped.)
 		for i, l := range lines {
 			lines[i] = strings.TrimSuffix(l, "\r")
+		}
+		// A genuinely blank final line (raw ends "...\n\n", or a CRLF
+		// equivalent) still leaves one more empty element after the drop
+		// above. kuberay.rs's tail_lines defends against a log source that
+		// emits one anyway (e.g. a doubled trailing newline) by dropping it
+		// too — same unconditional "is the last element empty" check the
+		// original Go implementation already had, just applied as a second
+		// pass after the Rust-semantics drop, not instead of it.
+		if len(lines) > 0 && lines[len(lines)-1] == "" {
+			lines = lines[:len(lines)-1]
 		}
 	}
 	total := uint32(len(lines))

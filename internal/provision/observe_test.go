@@ -467,6 +467,14 @@ func TestTailLinesMatchesRustLinesSemantics(t *testing.T) {
 	crlf, _ := TailLines("a\r\nb\r\n", 5)
 	assertStrSlice(t, crlf, []string{"a", "b"})
 
+	// CRLF + a blank line before the final terminator (fix round 2, T12):
+	// the trailing-newline-artifact drop leaves a last element of "\r", not
+	// "" — the \r must be trimmed BEFORE the trailing-blank-line check runs,
+	// or the blank CRLF line survives as a stray "" instead of collapsing
+	// away like the \n-only case above.
+	crlfBlank, _ := TailLines("a\r\nb\r\n\r\n", 5)
+	assertStrSlice(t, crlfBlank, []string{"a", "b"})
+
 	// Same blank-line collapse as the first case, but tail=2 exactly
 	// fills from the already-collapsed 2-line result.
 	exact, exactTruncated := TailLines("a\nb\n\n", 2)
