@@ -23,6 +23,20 @@
 # So comments, ADRs, the frozen-contract parity note and superseded ruling text
 # are excluded BY CATEGORY, and the exclusions are listed below, not implied.
 #
+# STATUS: bifrost, bifrost-api and bifrost-jupyter are clean. bifrost-ui still
+# reports, deliberately, and both remainders are tracked decisions rather than
+# misses — do not allowlist them to make the exit code green:
+#
+#   - realms/mobula (DEFAULT_ISSUER and the test ISSUER constants) is a Keycloak
+#     REALM name. Renaming it needs deploy/keycloak/ changed in lockstep, so it
+#     belongs to the deployment, not to a string sweep.
+#   - SSO_CLIENT_ID / client_id=mobula is fixed on the fix/sso-client-id branch,
+#     which forks from main; it shows here only because the branches are
+#     separate.
+#
+# So this is a triage tool today, not yet a CI gate. It becomes a gate when
+# bifrost-ui reports clean.
+#
 # Usage:  scripts/legacy-identity-sweep.sh [--rev REF] [repo-root ...]
 # Exit:   0 = nothing outside the allowlist, 1 = candidates to triage,
 #         2 = the sweep's own self-test failed (a "clean" result is meaningless).
@@ -78,7 +92,15 @@ allow() {
     -e 'MOBULA_CONFIG_DIR|MOBULA_LOCAL_ADMIN_PASSWORD' \
     -e 'no_mobula_policy_selects_namespace_wide' \
     -e 'mobula ADR-0002|mobula-api #45' \
-    -e 'mobula_auth::|mobula-auth/|mobula-cli|mobula-api mounts'
+    -e 'mobula_auth::|mobula-auth/|mobula-cli|mobula-api mounts' \
+    -e 'LEGACY_IDENTITY:-' \
+    -e 'mirrors mobula_core|mobula-policy parse_quantity'
+  # 5. LEGACY_IDENTITY:- is this script's own default search term. Without this
+  #    the sweep reports itself and can never exit 0.
+  # 6. "mirrors mobula_core is_k8s_name" / "mobula-policy parse_quantity" are
+  #    heritage citations that happen to sit inside describe()/it() strings, so
+  #    the comment stripper cannot reach them. Same category as a `// Reference:`
+  #    line: they record which Rust function a behaviour was ported from.
   # 1. MOBULA_CONFIG_DIR / MOBULA_LOCAL_ADMIN_PASSWORD appear only inside
   #    comments recording what the Rust CLI called the variable that this
   #    codebase already renamed (BIFROST_*). Heritage, and the rename is done.
