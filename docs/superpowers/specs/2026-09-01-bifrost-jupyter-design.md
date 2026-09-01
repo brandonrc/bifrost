@@ -113,10 +113,44 @@ Where audiences don't line up, use Bifrost's **RFC 8693 token exchange**
 (already shipped: `internal/auth/flows.go`, `GrantTypeTokenExchange`) to mint a
 correctly-scoped subject token.
 
-**Token lifetime:** OIDC access tokens expire and a pre-spawn snapshot goes
-stale on long sessions. At session start the server extension mints a
-longer-lived Bifrost PAT (`POST /api/v1/auth/tokens`) and uses it thereafter, or
-refreshes from `auth_state`.
+**Token lifetime.** OIDC access tokens expire and a pre-spawn snapshot goes
+stale on long sessions.
+
+**AMENDED during implementation (T9, reviewer-confirmed) — the original
+"mint a session PAT and use it thereafter" is WITHDRAWN as unsatisfiable.**
+It is not merely unimplemented; it cannot be made to work on the OIDC path:
+
+* `CreateToken` calls `requireLocal()` (`internal/api/local_auth.go:126`,
+  `:39-43`), so an OIDC-only deployment — the flags are independent
+  (`cmd/bifrost/serve.go:151-170`) — gets `404 local auth is not enabled`.
+* With local auth on, it mints via `IssueToken(ctx, identity.Subject, …)`
+  (`local_auth.go:137`), whose `GetLocalUser(ctx, username)`
+  (`internal/auth/local.go:566`) is keyed on the OIDC `sub`
+  (`internal/auth/validator.go:483`), not `preferred_username` (`:487`) →
+  `LocalAuthErrUnknownUser` (`local.go:571`), surfaced to the caller as a
+  generic `500 store error` (`authz.go:230-232`).
+* **The structural part.** Seeding a local user whose `Username` *is* the sub
+  makes the lookup succeed — but `identityOf` (`local.go:422`) copies that same
+  `user.Username` into the identity (`local.go:439`), and `Identity.Owner()`
+  (`internal/auth/rbac.go:335`) returns it. The lookup key and `Owner()`'s value
+  are **one field**: "the mint succeeds" and "`Owner()` yields
+  `preferred_username`" are mutually exclusive. Clusters would then carry a UUID
+  `bifrost.dev/owner` label (`internal/provision/kuberay.go:64`) and the
+  per-owner NetworkPolicy (`kuberay.go:719`) would stop admitting the notebook
+  pod to `:8265`/`:10001` — silently breaking Ray Client while the Jobs API
+  kept working. Group-derived project roles are lost too.
+
+**What ships instead:** lifetime is handled by *refreshing the OIDC credential*
+(`grant_type=refresh_token` at the IdP, `_FILE` env forms re-read so a rotating
+token is picked up), which preserves the OIDC identity and therefore owner-match.
+A credential within 60s of expiry is re-resolved; a Bifrost 401 triggers exactly
+one refresh-and-retry; an unrefreshable credential yields an actionable 401.
+`BIFROST_MINT_PAT=1` keeps the mint available, opt-in, scoped to deployments
+where Bifrost's PAT identity *is* the pod owner (i.e. not the Nebari
+owner-label target).
+
+Both T9 and the reviewer confirmed the above empirically with throwaway Go tests
+against `internal/api` (built, run, deleted; repo left clean).
 
 **Dev / non-Hub fallback — pasted `mob_` PAT.** Stored server-side (extension
 settings), never in browser JS. Warn loudly: if the PAT's subject ≠ the pod's
