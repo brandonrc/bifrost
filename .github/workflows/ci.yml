@@ -50,6 +50,36 @@ jobs:
       - uses: actions/setup-go@v5
         with: { go-version-file: go.mod }
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+  spec-sync:
+    # Wave 1 Task 16: the drift alarm between the vendored frozen contract
+    # (internal/api/openapi.json, which oapi-codegen's strict-server
+    # interface is generated from — see the "api codegen drift" step
+    # above, ADR-0002) and bifrost-api's published contract
+    # (github.com/brandonrc/bifrost-api, the authoritative artifact per
+    # its README). The "api codegen drift" step above only proves the
+    # generated Go code matches the VENDORED copy; it says nothing about
+    # whether the vendored copy itself has drifted from bifrost-api. This
+    # job closes that gap: fail red the moment the two disagree, rather
+    # than discovering it when an SDK consumer's contract silently
+    # diverges from the server's.
+    #
+    # Assumes github.com/brandonrc/bifrost-api is checkout-able with the
+    # default GITHUB_TOKEN (true for a public repo, or a private repo the
+    # bifrost repo's token has been granted cross-repo read on). If
+    # bifrost-api is/becomes private without that grant, this step needs
+    # a PAT in a repo secret (e.g. BIFROST_API_RO_TOKEN) passed as
+    # `token:` below — tracked as a follow-up, not silently worked around.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout bifrost-api's published contract
+        uses: actions/checkout@v4
+        with:
+          repository: brandonrc/bifrost-api
+          ref: main
+          path: bifrost-api-contract
+      - name: Diff vendored spec against bifrost-api's published contract
+        run: diff -u internal/api/openapi.json bifrost-api-contract/openapi.json
   nilaway-advisory:
     runs-on: ubuntu-latest
     continue-on-error: true

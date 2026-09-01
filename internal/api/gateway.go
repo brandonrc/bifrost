@@ -113,7 +113,7 @@ func NewGatewayStateWithLimits(registry *core.ClusterRegistry, store controller.
 		Registry: registry,
 		Store:    store,
 		Limits:   limits,
-		Client:   buildSouthboundGatewayClient(),
+		Client:   buildSouthboundGatewayClient(limits.MaxInflight),
 		inflight: make(chan struct{}, limits.MaxInflight),
 	}
 }
@@ -126,8 +126,23 @@ func NewGatewayStateWithLimits(registry *core.ClusterRegistry, store controller.
 // names/IPs) — and connect/read are bounded so a hung or black-holing
 // cluster head can't pin a connection indefinitely. Values match the
 // Rust reference (10s connect, 120s read).
-func buildSouthboundGatewayClient() *http.Client {
+//
+// maxInflight sizes the southbound connection pool (ADR-0005 finding):
+// left at Go's http.Transport default (2 idle connections per host),
+// every southbound request beyond the second concurrently in flight to
+// the same cluster pays a fresh TCP handshake instead of reusing a
+// pooled connection — under concurrent load that showed up in the
+// gateway load rig as connection churn and a p99/max tail growing to
+// tens of milliseconds, unrelated to request processing or GC. Since
+// MaxInflight (gw.inflight) already hard-caps concurrent southbound
+// requests per GatewayState, sizing the pool to it can never leave idle
+// connections unused and removes the churn entirely.
+func buildSouthboundGatewayClient(maxInflight int64) *http.Client {
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	maxIdle := int(maxInflight)
+	if maxIdle < 2 {
+		maxIdle = 2
+	}
 	return &http.Client{
 		// Go's http.Client.Timeout bounds the whole round trip (connect
 		// through body read), not just idle-between-reads the way
@@ -135,8 +150,13 @@ func buildSouthboundGatewayClient() *http.Client {
 		// cluster_obs.go's obsHTTPClient already makes for the sibling
 		// southbound proxy, so the two southbound clients share one
 		// posture.
-		Timeout:   120 * time.Second,
-		Transport: &http.Transport{DialContext: dialer.DialContext},
+		Timeout: 120 * time.Second,
+		Transport: &http.Transport{
+			DialContext:         dialer.DialContext,
+			MaxIdleConns:        maxIdle,
+			MaxIdleConnsPerHost: maxIdle,
+			IdleConnTimeout:     90 * time.Second,
+		},
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
