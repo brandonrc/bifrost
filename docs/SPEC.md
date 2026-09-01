@@ -249,13 +249,13 @@ cross-checks only.
   SIGTERM currently stops accepting and closes the listener but does not
   wait for in-flight requests/reconcile iterations to finish draining
   before the process exits.
-- Coverage gate is red on `main` as of this exit (76.0% vs. the 80%
-  ratchet floor in `ci.yml`'s `COVERAGE_THRESHOLD`) — confirmed
-  pre-existing (reproduced against the tree before this task's changes,
-  which are coverage-neutral: `cmd/gateway-load` is excluded by the
-  `/cmd/` rule and `internal/api/gateway.go`'s change is exercised by
-  existing gateway tests). Needs a coverage pass early in Wave 2 before
-  the ratchet is trustworthy as a gate again.
+- Coverage gate is green on `main` as of this exit: 83.3% with Postgres
+  (`BIFROST_TEST_POSTGRES_URL` set, exercising the Postgres-backed store
+  tests) vs. the 80% ratchet floor in `ci.yml`'s `COVERAGE_THRESHOLD`.
+  The sub-80% figure (76.0%) only appears in a no-Postgres local
+  measurement, where the Postgres-backed store tests are skipped for
+  lack of `BIFROST_TEST_POSTGRES_URL`; that is not the CI-authoritative
+  number.
 
 ## Out of scope for the port (tracked, not built)
 
