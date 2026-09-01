@@ -668,6 +668,13 @@ func observedGone(observed *core.ClusterState) bool {
 	return observed == nil || *observed == core.ClusterStateTerminated
 }
 
+// ObservedGone is observedGone's exported form, for Wave 1 T11's cluster
+// API purge guard (DELETE .../{id}?purge=true), ported from
+// mobula-controller's reconcile.rs observed_gone.
+func ObservedGone(observed *core.ClusterState) bool {
+	return observedGone(observed)
+}
+
 // isPurgeableTombstone reports whether a terminated cluster row is a
 // purgeable tombstone: desired=Terminated, observed gone, and its
 // TerminatedAt stamp is older than the retention window.
@@ -980,6 +987,15 @@ func queueAssignmentForProject(ctx context.Context, store Store, project string)
 		}
 	}
 	return nil, nil
+}
+
+// QueueAssignmentForProject is queueAssignmentForProject's exported form,
+// for Wave 1 T11's cluster API (create-time queue-assignment audit row and
+// the suspend/resume queue-owned-suspend 409 guard) to resolve the same
+// project -> Kueue-queue mapping the reconciler uses, ported from
+// mobula-controller's store.rs queue_assignment_for_project.
+func QueueAssignmentForProject(ctx context.Context, store Store, project string) (*provision.QueueAssignment, error) {
+	return queueAssignmentForProject(ctx, store, project)
 }
 
 // needsApply reports whether an apply is needed: when nothing is
