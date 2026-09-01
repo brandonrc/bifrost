@@ -29,3 +29,8 @@ linters:
               desc: "internal/controller talks only to the Provisioner interface and Store (Task 9); k8s-aware code belongs in internal/provision"
             - pkg: "sigs.k8s.io"
               desc: "internal/controller talks only to the Provisioner interface and Store (Task 9); k8s-aware code belongs in internal/provision"
+        apitest-test-only:
+          files: ["!$test"]
+          deny:
+            - pkg: "github.com/brandonrc/bifrost/internal/api/apitest"
+              desc: "apitest is a dev-mode auth bypass (mobula-api #45); import it only from _test.go files"

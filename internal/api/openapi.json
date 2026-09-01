@@ -1,0 +1,4300 @@
+{
+  "components": {
+    "schemas": {
+      "AllocationSpec": {
+        "description": "A project's allocation within a pool (translates to a Kueue LocalQueue).\n\n`nominal` / `borrowing_limit` / `lending_limit` are reserved for a future\nper-project ClusterQueue layout (ADR-0010): in the v0 layout all\nallocations in a pool share one ClusterQueue, so these are recorded as\nLocalQueue annotations rather than enforced quotas.",
+        "properties": {
+          "borrowing_limit": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "lending_limit": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "nominal": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "pool": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pool",
+          "project",
+          "namespace",
+          "nominal",
+          "borrowing_limit",
+          "lending_limit"
+        ],
+        "type": "object"
+      },
+      "ApiTokenView": {
+        "description": "The public projection of an API token — no hash, no plaintext.",
+        "properties": {
+          "created_at": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "expires_at": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "label": {
+            "type": "string"
+          },
+          "last_used_at": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "revoked": {
+            "type": "boolean"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "prefix",
+          "username",
+          "label",
+          "created_at",
+          "expires_at",
+          "revoked"
+        ],
+        "type": "object"
+      },
+      "AssignmentView": {
+        "description": "One assignment as the wire sees it.",
+        "properties": {
+          "created_at": {
+            "description": "Unix seconds when the assignment was first written.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "principal": {
+            "description": "The principal the assignment applies to: a token `sub` (opaque\nKeycloak UUID) or a `preferred_username` — evaluation matches BOTH, so\nhuman-friendly username grants take effect (#88).",
+            "type": "string"
+          },
+          "role": {
+            "description": "\"viewer\" | \"developer\" | \"operator\" | \"admin\".",
+            "type": "string"
+          },
+          "scope": {
+            "description": "\"*\" (global) or \"project:<name>\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "principal",
+          "role",
+          "scope",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "AuditDecision": {
+        "description": "Whether Bifrost allowed or refused the thing the event describes.\nSerialized snake_case (`allow` / `deny`).",
+        "enum": [
+          "allow",
+          "deny"
+        ],
+        "type": "string"
+      },
+      "AuditEvent": {
+        "description": "One audit-trail row (api-v1.md §5.9). Fields not applicable to the\nemitting site are `None` (serialized `null`); `granted_roles` is empty.\n\nDecision policy (the audit subsystem): `deny` rows are emitted at\nthe point of refusal (authn failures, authz denials, quota denials);\ngateway per-request rows are always `allow` — a request Bifrost refuses\nnever reaches the gateway, so its `deny` row comes from the refuser.",
+        "properties": {
+          "action": {
+            "description": "Control-plane mutation (`create_cluster`, `delete_pool`, …);\n`null` on gateway rows.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cluster": {
+            "description": "Cluster id the event concerns; `null` when not cluster-scoped.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "decision": {
+            "$ref": "#/components/schemas/AuditDecision"
+          },
+          "granted_roles": {
+            "description": "Roles the caller held (snake_case); authz denials only, else `[]`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "latency_ms": {
+            "description": "Gateway upstream round-trip; `null` elsewhere.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "method": {
+            "description": "HTTP method, for gateway and authn/ext_authz rows.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "Request path (no query string).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "description": "Machine-readable refusal reason (`missing_token`, `invalid_token`,\n`insufficient_permission`, `quota_exceeded`); `null` on allows.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "required": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AuditRequired",
+                "description": "The permission an authz denial was checked against."
+              }
+            ]
+          },
+          "status": {
+            "description": "HTTP status of the outcome, when one is known.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "subject": {
+            "description": "Authenticated subject; `null` for authn failures (no identity yet).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ts": {
+            "description": "Unix seconds.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ts",
+          "decision"
+        ],
+        "type": "object"
+      },
+      "AuditListResponse": {
+        "description": "Response of `GET /api/v1/audit`. This endpoint is the ONE list route\nthat wraps its items in an envelope — the cursor has to live somewhere\n(api-v1.md §5.9).",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AuditEvent"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "Pass as `cursor` for the next (older) page; `null` at the end.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "AuditRequired": {
+        "description": "The (verb, target) permission an authorization decision was checked\nagainst — mirrors the auth subsystem's permission/target vocabulary as lowercase\nstrings (`\"write\"`, `\"cluster\"`) so core stays free of auth types.\nPresent only on authz denials.",
+        "properties": {
+          "action": {
+            "description": "e.g. \"read\" | \"write\" | \"delete\" | \"admin\".",
+            "type": "string"
+          },
+          "target": {
+            "description": "e.g. \"job\" | \"cluster\" | \"service\" | \"pool\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "target"
+        ],
+        "type": "object"
+      },
+      "AuditVerifyResponse": {
+        "description": "Response of `GET /api/v1/audit/verify`.",
+        "properties": {
+          "events_checked": {
+            "description": "Rows that verified before the replay stopped (the whole window on\nsuccess; the rows before the broken one on failure).",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "first_broken_seq": {
+            "description": "Seq of the first row whose stored `chain_hash` doesn't match the\nreplay; `null` when the window verifies clean.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ok": {
+            "description": "True when every row in the window matched the replayed chain.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "events_checked"
+        ],
+        "type": "object"
+      },
+      "BudgetStatus": {
+        "description": "A configured project's time-windowed budget status (#77): the cap, what\nhas been consumed over the trailing window (ending at the report's `to`),\nand what remains. Distinct from `UsageGroup` — this reflects the\n`[budgets]` policy, not the raw sample roll-up.",
+        "properties": {
+          "consumed": {
+            "additionalProperties": {
+              "format": "double",
+              "type": "number"
+            },
+            "description": "resource → resource-hours consumed over the trailing window.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "exhausted": {
+            "description": "True once consumption has reached or passed the cap on any capped\nresource — a create for this project would be 409'd.",
+            "type": "boolean"
+          },
+          "limit": {
+            "additionalProperties": {
+              "format": "double",
+              "type": "number"
+            },
+            "description": "resource → resource-hours allowed over the window.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "project": {
+            "type": "string"
+          },
+          "remaining": {
+            "additionalProperties": {
+              "format": "double",
+              "type": "number"
+            },
+            "description": "resource → resource-hours remaining (`limit − consumed`, floored at 0)\nfor each capped resource.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "window_secs": {
+            "description": "Trailing window length in seconds.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "project",
+          "window_secs",
+          "limit",
+          "consumed",
+          "remaining",
+          "exhausted"
+        ],
+        "type": "object"
+      },
+      "BudgetView": {
+        "additionalProperties": {
+          "description": "resource → resource-hours allowed over the window (`cpu` = core-hours,\n`memory` = GiB-hours, `nvidia.com/gpu` = GPU-hours).",
+          "format": "double",
+          "type": "number"
+        },
+        "description": "A configured budget as reported by the settings API.",
+        "properties": {
+          "window_secs": {
+            "description": "Trailing window length in seconds (e.g. 604800 = 7 days).",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window_secs"
+        ],
+        "type": "object"
+      },
+      "ClusterEvent": {
+        "description": "One normalized Kubernetes Event about a cluster object (api-v1.md §5.8).\nFields are `Option` because the two Event schemas (core/v1 and\nevents.k8s.io/v1) name them differently and any of them may be absent.",
+        "properties": {
+          "count": {
+            "description": "How many times this event has fired (K8s collapses repeats). Defaults\nto 1 when the source records no count.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "first_seen": {
+            "description": "First occurrence (RFC3339); `None` when the source omits it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_seen": {
+            "description": "Most recent occurrence (RFC3339); the field the list is sorted by.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "message": {
+            "description": "Human-readable message.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "object": {
+            "description": "The object the event is about, as `Kind/name` (e.g. `Pod/foo-head-abc`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "description": "Short machine reason (`FailedScheduling`, `Pulled`, `BackOff`, …).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "description": "Event severity: `Normal` or `Warning` (verbatim from `type`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "count"
+        ],
+        "type": "object"
+      },
+      "ClusterEvents": {
+        "description": "Kubernetes Events for one cluster's objects (api-v1.md §5.8), newest first\nand capped — the body of `GET /api/v1/clusters/{id}/events`.",
+        "properties": {
+          "cluster_id": {
+            "description": "The cluster id (RayCluster name).",
+            "type": "string"
+          },
+          "events": {
+            "description": "Normalized events, most-recent-first, capped (see the endpoint's cap).",
+            "items": {
+              "$ref": "#/components/schemas/ClusterEvent"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "cluster_id",
+          "events"
+        ],
+        "type": "object"
+      },
+      "ClusterLogs": {
+        "description": "A tail-capped pod log view for one cluster (api-v1.md §5.6, non-streaming\nfirst cut) — the body of `GET /api/v1/clusters/{id}/logs`. WS streaming is\nthe eventual design (Milestone C); this GET-tail form removes the\npending-backend stub now.",
+        "properties": {
+          "cluster_id": {
+            "description": "The cluster id (RayCluster name).",
+            "type": "string"
+          },
+          "lines": {
+            "description": "The most recent log lines (up to `tail`), oldest first.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "pod": {
+            "description": "The pod these `lines` are from (the requested pod, or the head pod when\nnone was requested). Empty only when the cluster has no pods yet.",
+            "type": "string"
+          },
+          "pods": {
+            "description": "Names of the cluster's pods the caller may tail (head first), so the UI\ncan offer a pod selector.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "tail": {
+            "description": "The tail line count that was requested.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "truncated": {
+            "description": "`true` when the tail was filled (there may be older lines beyond it).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "cluster_id",
+          "pods",
+          "pod",
+          "tail",
+          "lines",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "ClusterMetrics": {
+        "description": "Normalized cluster resource-usage summary (the body of\n`GET /api/v1/clusters/{id}/metrics`), distilled from the Ray dashboard's\nautoscaler / load-metrics report. Every stat is `Option` because a cluster\nmay not report GPUs, and an older/mismatched Ray may omit a field — the UI\nrenders a tile only for the stats present.",
+        "properties": {
+          "active_nodes": {
+            "description": "Active Ray nodes the autoscaler reports; `None` when unavailable.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cluster_id": {
+            "description": "The cluster id (RayCluster name).",
+            "type": "string"
+          },
+          "cpu": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResourceStat",
+                "description": "CPU cores used vs total across the Ray cluster."
+              }
+            ]
+          },
+          "failed_nodes": {
+            "description": "Nodes the autoscaler marked failed; `None` when unavailable.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "gpu": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResourceStat",
+                "description": "GPU devices used vs total."
+              }
+            ]
+          },
+          "memory": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResourceStat",
+                "description": "Memory bytes used vs total."
+              }
+            ]
+          },
+          "object_store_memory": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResourceStat",
+                "description": "Object-store memory bytes used vs total."
+              }
+            ]
+          },
+          "pending_nodes": {
+            "description": "Nodes pending launch; `None` when unavailable.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "cluster_id"
+        ],
+        "type": "object"
+      },
+      "ClusterNodes": {
+        "description": "Head + per-worker-group node breakdown for one cluster (api-v1.md §5.3),\nthe body of `GET /api/v1/clusters/{id}/nodes`.",
+        "properties": {
+          "cluster_id": {
+            "description": "The cluster id (RayCluster name).",
+            "type": "string"
+          },
+          "head": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/NodeView",
+                "description": "The head node; `None` if KubeRay has not created the head pod yet."
+              }
+            ]
+          },
+          "worker_groups": {
+            "description": "One entry per worker group, in the RayCluster spec's order.",
+            "items": {
+              "$ref": "#/components/schemas/WorkerGroupNodes"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "cluster_id",
+          "worker_groups"
+        ],
+        "type": "object"
+      },
+      "ClusterSpec": {
+        "description": "Declarative spec for a managed cluster.\n\nHistorically Ray-only (fields mirror a RayCluster CR so the KubeRay\nprovisioner stays a thin translation). Multi-engine adds [`Self::engine`];\nthe head/scheduler + worker-group shape is generic to both engines. For\n`engine = dask`, `ray_version` is unused (Dask's version is carried by\n[`Self::image`]); it stays a required field only for back-compat with\nstored Ray specs and existing clients.",
+        "properties": {
+          "engine": {
+            "$ref": "#/components/schemas/Engine",
+            "description": "Which compute engine backs this cluster. `#[serde(default)]` = Ray, so\nevery pre-multi-engine spec and every Ray client keeps working\nuntouched."
+          },
+          "head_cpu": {
+            "type": "string"
+          },
+          "head_memory": {
+            "type": "string"
+          },
+          "idle_timeout_secs": {
+            "description": "**Inactivity reap window** in seconds (#100): the cluster is reaped once\nit has been *idle* — no job activity — for this long, so a busy cluster\nsurvives past it while a genuinely unused one is released. Distinct from\n[`Self::ttl_seconds`], which still caps absolute age independently:\nwhichever fires first reaps the cluster.\n\nActivity is derived from the persisted job history (a running/recent\ngateway job keeps the cluster alive). **Limitation:** interactive Ray\nClient / Dask sessions submit no gateway jobs, so their activity is\ninvisible to this signal — an interactive-only cluster looks idle from\ncreation. For such sessions rely on [`Self::ttl_seconds`] or leave this\nunset. See `reconcile.rs` module docs.\n\n`#[serde(default)]` so specs persisted before this field — and any\nclient that omits it — keep the prior max-age-only behavior.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "image": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner": {
+            "description": "The authenticated owner of this cluster (tier-2 owned session\nclusters): the human identity that requested it — a\n`preferred_username` when the OIDC token carries one, else the `sub`.\nSet control-plane-side from the request identity (never trusted from\nthe client body); `None` for clusters created without an owner (e.g.\nadmin/service paths). When set it is stamped as the\n`bifrost.dev/owner` label on the RayCluster and its pods, and drives\nthe per-owner Ray-client (`:10001`) ingress NetworkPolicy so only the\nowner's notebook pod can reach the cluster. `#[serde(default)]` keeps\nspecs persisted before this field deserializable (they parse as\n`None`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project": {
+            "type": "string"
+          },
+          "ray_version": {
+            "type": "string"
+          },
+          "ttl_seconds": {
+            "description": "**Absolute max-age cap** in seconds: the cluster is reaped this long\nafter creation regardless of activity. `None` disables the max-age\nreaper. (Despite the historical name, this is a wall-clock age cap, not\nan inactivity window — see [`Self::idle_timeout_secs`] for that.)",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "worker_groups": {
+            "items": {
+              "$ref": "#/components/schemas/WorkerGroup"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "project",
+          "ray_version",
+          "image",
+          "head_cpu",
+          "head_memory",
+          "worker_groups"
+        ],
+        "type": "object"
+      },
+      "ClusterState": {
+        "description": "Lifecycle states of a managed cluster (PLAN.md §3.1).",
+        "enum": [
+          "pending",
+          "provisioning",
+          "running",
+          "degraded",
+          "updating",
+          "suspending",
+          "suspended",
+          "terminating",
+          "terminated"
+        ],
+        "type": "string"
+      },
+      "ClusterView": {
+        "description": "A cluster as the control plane sees it: desired spec metadata plus the\nlast observed state (reconstructed from the provisioner, ADR-0006).",
+        "properties": {
+          "condition": {
+            "description": "Drift/health alarm raised by the reconcile engine (ADR-0004, #41/#47):\n\"spec_drift\" (out-of-band edit) or \"degraded\". `None` when converging\nnormally. Distinct from `observed_state`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "desired": {
+            "description": "\"running\" | \"suspended\" | \"terminated\" — the operator's intent.",
+            "type": "string"
+          },
+          "engine": {
+            "description": "Which engine backs this cluster: \"ray\" | \"dask\" (multi-engine). Lets\nGET /clusters surface a Ray and a Dask cluster side by side.",
+            "type": "string"
+          },
+          "est_max_hourly": {
+            "description": "Estimated $/hr at max (fully scaled) size.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "est_min_hourly": {
+            "description": "Estimated $/hr at min size, if a price sheet is configured.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "generation": {
+            "description": "Bumps when the spec changes; drives the reconcile idempotency key.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "observed_generation": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "observed_state": {
+            "description": "Observed lifecycle state, if the cluster has been reconciled.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project": {
+            "type": "string"
+          },
+          "ray_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "generation",
+          "desired",
+          "observed_generation",
+          "project",
+          "engine",
+          "ray_version"
+        ],
+        "type": "object"
+      },
+      "CreateCluster": {
+        "description": "Request body for creating/updating a managed cluster.",
+        "properties": {
+          "id": {
+            "description": "Stable cluster id (also the gateway routing key / RayCluster name).",
+            "type": "string"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/ClusterSpec"
+          }
+        },
+        "required": [
+          "id",
+          "spec"
+        ],
+        "type": "object"
+      },
+      "CreatePool": {
+        "description": "Request body for creating a pool.",
+        "properties": {
+          "spec": {
+            "$ref": "#/components/schemas/PoolSpec"
+          }
+        },
+        "required": [
+          "spec"
+        ],
+        "type": "object"
+      },
+      "CreateTokenRequest": {
+        "properties": {
+          "expires_in_days": {
+            "description": "Lifetime in days; capped at the server maximum (90).",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "label": {
+            "description": "Human label (\"ci\", \"laptop\") — shown in listings.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "expires_in_days"
+        ],
+        "type": "object"
+      },
+      "CreateTokenResponse": {
+        "description": "`POST /api/v1/auth/tokens` success body. The plaintext `token` is\nreturned ONLY here — store it now; it cannot be recovered.",
+        "properties": {
+          "expires_at": {
+            "description": "Unix seconds.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "prefix",
+          "token",
+          "expires_at"
+        ],
+        "type": "object"
+      },
+      "CreateUserRequest": {
+        "properties": {
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "password": {
+            "description": "Minimum 8 characters; bcrypt-hashed at rest, never stored or\nreturned in plaintext.",
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/LocalRole"
+          },
+          "username": {
+            "description": "RFC 1123 subdomain (k8s-name-safe); unique.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "password",
+          "role"
+        ],
+        "type": "object"
+      },
+      "DeployService": {
+        "description": "Request body to deploy or update a service.",
+        "properties": {
+          "name": {
+            "description": "Stable service name (the RayService name).",
+            "type": "string"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/ServiceSpec"
+          }
+        },
+        "required": [
+          "name",
+          "spec"
+        ],
+        "type": "object"
+      },
+      "Engine": {
+        "description": "The compute engine a cluster is provisioned on (multi-engine spike). The\ncontrol plane is engine-neutral above the provisioner seam; this\ndiscriminator is what the reconciler and the provisioner router dispatch\non. `Ray` is the default so specs persisted before multi-engine — and any\nclient that omits the field — still deserialize as Ray clusters, exactly\nas before.",
+        "enum": [
+          "ray",
+          "dask"
+        ],
+        "type": "string"
+      },
+      "FlavorSpec": {
+        "description": "A hardware flavor within a pool: node selection plus per-resource\nnominal quota (K8s quantity strings, e.g. \"4\", \"512Gi\").",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "node_labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "resources": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Resource key → nominal quota quantity string.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "taints": {
+            "items": {
+              "$ref": "#/components/schemas/TaintSpec"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "resources",
+          "node_labels",
+          "taints"
+        ],
+        "type": "object"
+      },
+      "GpuSharing": {
+        "description": "How a pool's GPUs may be shared between workloads (#58).\n\nNVIDIA GPU time-slicing (and fractional `nvidia.com/gpu` requests via the\ndevice plugin) shares one GPU's SMs across processes with no hardware\nisolation — acceptable within one tenant, never across tenants. MIG is\nhardware partitioning and whole-GPU allocation needs no sharing at all,\nso both are isolation-safe. The tenant-isolation rule itself is enforced\nby the policy package's GPU admission logic at admission time; this field is the per-pool\nknob it evaluates.",
+        "enum": [
+          "whole-gpu",
+          "mig",
+          "time-slice"
+        ],
+        "type": "string"
+      },
+      "IdentityResponse": {
+        "description": "`GET /api/v1/identity` response: the caller's resolved identity.",
+        "properties": {
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "groups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "roles": {
+            "description": "Snake_case role names (\"viewer\", \"developer\", \"operator\", \"admin\").",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "subject": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "subject",
+          "groups",
+          "roles"
+        ],
+        "type": "object"
+      },
+      "JobView": {
+        "description": "A job in the persistent, cross-cluster history (Phase 3, spec §5.5).",
+        "properties": {
+          "cluster": {
+            "type": "string"
+          },
+          "duration_secs": {
+            "description": "Wall-clock seconds once terminal; null while running.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "description": "Ray job status (PENDING | RUNNING | SUCCEEDED | FAILED | STOPPED).",
+            "type": "string"
+          },
+          "submitted_at": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "submitter": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "cluster",
+          "submitter",
+          "status",
+          "submitted_at"
+        ],
+        "type": "object"
+      },
+      "LocalRole": {
+        "description": "A local user's role (ADR-0011: roles are a column on the user, resolved\nper request — no claim staleness). Stored as TEXT in `local_users.role`;\nthe vocabulary mirrors the auth subsystem's Role type (kept as a separate enum so\ncore never depends on the auth package).",
+        "enum": [
+          "viewer",
+          "developer",
+          "operator",
+          "admin",
+          "auditor"
+        ],
+        "type": "string"
+      },
+      "LocalUserView": {
+        "description": "The public projection of a local user — everything EXCEPT the password\nhash and the lockout internals that are nobody else's business.",
+        "properties": {
+          "created_at": {
+            "description": "Unix seconds.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "disabled": {
+            "type": "boolean"
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "$ref": "#/components/schemas/LocalRole"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "role",
+          "disabled",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "LoginIdentity": {
+        "description": "The identity half of a login response.",
+        "properties": {
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "subject": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "subject",
+          "roles"
+        ],
+        "type": "object"
+      },
+      "LoginRequest": {
+        "properties": {
+          "password": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ],
+        "type": "object"
+      },
+      "LoginResponse": {
+        "description": "`POST /api/v1/auth/login` success body. `token` is an opaque\n`mob_…` bearer credential (ADR-0011: stored, never signed).",
+        "properties": {
+          "expires_at": {
+            "description": "Unix seconds after which the token no longer authenticates.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "identity": {
+            "$ref": "#/components/schemas/LoginIdentity"
+          },
+          "token": {
+            "type": "string"
+          },
+          "token_type": {
+            "description": "Always \"bearer\".",
+            "example": "bearer",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "token_type",
+          "expires_at",
+          "identity"
+        ],
+        "type": "object"
+      },
+      "NodeView": {
+        "description": "A single Ray node (head or one worker) as Kubernetes sees it: the pod\nKubeRay created for it, its scheduling/readiness, and the compute it\nrequests. Fields are `Option` because a pod may not yet be scheduled\n(no IP/host) and a quantity may be unparseable or unset.",
+        "properties": {
+          "cpu": {
+            "description": "CPU cores requested, summed across the pod's containers and parsed\nfrom the K8s quantity (`500m` → 0.5). `None` when unset/unparseable.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "gpu": {
+            "description": "GPUs requested (`nvidia.com/gpu`), summed across containers. `None`\nwhen the pod requests no GPU.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "group": {
+            "description": "Worker-group name (`ray.io/group`); `None` for the head node.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "host": {
+            "description": "Kubernetes node the pod landed on (`spec.nodeName`); `None` before\nscheduling.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "is_head": {
+            "description": "Whether this is the cluster's head node.",
+            "type": "boolean"
+          },
+          "memory_bytes": {
+            "description": "Memory bytes requested, summed across the pod's containers (`2Gi` →\n2147483648). `None` when unset/unparseable.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "node_ip": {
+            "description": "Pod IP once scheduled (`status.podIP`); `None` before scheduling.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "phase": {
+            "description": "Kubernetes pod phase: `Pending` | `Running` | `Succeeded` | `Failed` |\n`Unknown` (verbatim from `status.phase`).",
+            "type": "string"
+          },
+          "pod_name": {
+            "description": "The pod's name (`metadata.name`).",
+            "type": "string"
+          },
+          "ready": {
+            "description": "Whether the pod's `Ready` condition is true. Distinct from `phase`: a\npod can be `Running` but not yet `Ready`.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "pod_name",
+          "is_head",
+          "phase",
+          "ready"
+        ],
+        "type": "object"
+      },
+      "OidcProviderInfo": {
+        "properties": {
+          "issuer": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "issuer"
+        ],
+        "type": "object"
+      },
+      "PolicyView": {
+        "description": "`GET /api/v1/settings/policy` response: the effective policy plus its\nprovenance.",
+        "properties": {
+          "budgets": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/BudgetView"
+            },
+            "description": "project → time-windowed compute budget (#77). Empty when none are\nconfigured.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "editable": {
+            "description": "Always true in v1 — the policy is editable via PUT.",
+            "type": "boolean"
+          },
+          "prices": {
+            "additionalProperties": {
+              "format": "double",
+              "type": "number"
+            },
+            "description": "resource → $/unit-hour; `null` when no price sheet is configured.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quotas": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "format": "double",
+                "type": "number"
+              },
+              "propertyNames": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "description": "project → (resource → limit). Empty when no quotas are configured.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "source": {
+            "description": "\"file\" (the untouched `--policy` boot seed) | \"store\" (edited via\nPUT) | \"none\" (no policy configured at all).",
+            "example": "file",
+            "type": "string"
+          }
+        },
+        "required": [
+          "quotas",
+          "budgets",
+          "source",
+          "editable"
+        ],
+        "type": "object"
+      },
+      "PoolSpec": {
+        "description": "A shared capacity pool: flavors + a cohort to borrow from (ADR-0010).",
+        "properties": {
+          "cohort": {
+            "description": "Name of the Kueue cohort this pool's ClusterQueue joins for elastic\nborrowing.",
+            "type": "string"
+          },
+          "elastic": {
+            "description": "Whether workloads in this pool may be elastically resized (Kueue\nelastic jobs / Workload Slices).",
+            "type": "boolean"
+          },
+          "fair_sharing_weight": {
+            "description": "Kueue `spec.fairSharing.weight` for the pool's ClusterQueue.",
+            "format": "double",
+            "type": "number"
+          },
+          "flavors": {
+            "items": {
+              "$ref": "#/components/schemas/FlavorSpec"
+            },
+            "type": "array"
+          },
+          "gpu_sharing": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GpuSharing",
+                "description": "GPU sharing mode for this pool (#58). `None` inherits the platform\ndefault (`[gpu] default_sharing` in the policy file, itself\ndefaulting to `whole-gpu`). A pool shared by more than one project\nmay not resolve to `time-slice` — enforced at admission by\nthe policy package's GPU admission logic, not here (core validates shape; tenancy is\nknown only at the API edge, where allocations live)."
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "flavors",
+          "cohort",
+          "fair_sharing_weight",
+          "elastic"
+        ],
+        "type": "object"
+      },
+      "PoolUsageView": {
+        "description": "Live point-in-time usage of one pool (Slice 4): built from the pool's\nlatest stored ClusterQueue/LocalQueue observation plus the spec's\nnominal quotas. NOT a timeseries — for history use `GET /api/v1/usage`.\n`projects` is the per-LocalQueue (per-project) attribution; empty when\nthe observation predates per-LQ status or none exists.",
+        "properties": {
+          "pool": {
+            "type": "string"
+          },
+          "projects": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "format": "double",
+                "type": "number"
+              },
+              "propertyNames": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "description": "project → resource → allocated quantity.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "sampled_at": {
+            "description": "When the observation was recorded (unix seconds); `null` until the\npool reconcile loop has observed this pool.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "utilization": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ResourceUtilization"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "pool",
+          "utilization",
+          "projects"
+        ],
+        "type": "object"
+      },
+      "PoolView": {
+        "description": "A pool as the control plane serves it: the stored spec metadata plus\n`total_nominal`, the per-resource sum of all flavors' nominal quotas.",
+        "properties": {
+          "cohort": {
+            "type": "string"
+          },
+          "created_at": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "elastic": {
+            "type": "boolean"
+          },
+          "fair_sharing_weight": {
+            "format": "double",
+            "type": "number"
+          },
+          "flavors": {
+            "items": {
+              "$ref": "#/components/schemas/FlavorSpec"
+            },
+            "type": "array"
+          },
+          "generation": {
+            "description": "Bumps when the spec changes (same convention as clusters).",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "gpu_sharing": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GpuSharing",
+                "description": "The pool's GPU sharing mode (#58); `null` = the platform default\n(`[gpu] default_sharing`, itself defaulting to `whole-gpu`)."
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "total_nominal": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Resource key → summed nominal quota across flavors, as a string.\nA resource key whose quantity fails to parse on ANY flavor is\nomitted entirely (a partial sum would misreport capacity); the\nfailure is logged. Display math only — the spec stays authoritative.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "name",
+          "generation",
+          "created_at",
+          "flavors",
+          "cohort",
+          "fair_sharing_weight",
+          "elastic",
+          "total_nominal"
+        ],
+        "type": "object"
+      },
+      "ProvidersResponse": {
+        "description": "Which auth providers this deployment offers (login-page metadata; not\nsensitive — the endpoint is public by design).",
+        "properties": {
+          "local": {
+            "description": "Local username/password auth is enabled (ADR-0011).",
+            "type": "boolean"
+          },
+          "oidc": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/OidcProviderInfo",
+                "description": "OIDC configuration, when a validator is configured."
+              }
+            ]
+          }
+        },
+        "required": [
+          "local"
+        ],
+        "type": "object"
+      },
+      "PutAllocation": {
+        "description": "Request body for putting an allocation: `AllocationSpec` minus\n`pool`/`project`, which come from the path. If the body still carries\nthem, they must match the path or the request is rejected.",
+        "properties": {
+          "borrowing_limit": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "lending_limit": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "nominal": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "pool": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "namespace",
+          "nominal",
+          "borrowing_limit",
+          "lending_limit"
+        ],
+        "type": "object"
+      },
+      "RayJobSummary": {
+        "description": "A Ray job normalized to a stable Bifrost shape (api-v1.md §5.6). Every\nfield is optional: Ray's own records vary by version and by whether the\njob has started/finished. `status` is Ray's vocabulary verbatim\n(`PENDING | RUNNING | SUCCEEDED | FAILED | STOPPED`) — not snake_cased,\nper §5.7. `start_time`/`end_time` are Ray's unix-millis timestamps.",
+        "properties": {
+          "end_time": {
+            "description": "Ray's `end_time` (unix millis); `None` while the job runs.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "entrypoint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "job_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "start_time": {
+            "description": "Ray's `start_time` (unix millis); `None` before the job starts.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "submission_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "RegistryEntryView": {
+        "description": "A gateway routing entry as the control plane may show it: where a\ncluster is exposed and where its dashboard head lives, but never the\ntoken itself (ADR-0003, security issue #4).",
+        "properties": {
+          "api_base_url": {
+            "type": "string"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "token_set": {
+            "description": "Whether the gateway holds a static Ray token for this cluster.",
+            "type": "boolean"
+          },
+          "validation": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RegistryValidation",
+                "description": "Reserved for per-entry validation/reachability checks. Always null\ntoday: registry validation is fail-fast at startup, so every served\nentry is valid by construction."
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "hostname",
+          "api_base_url",
+          "token_set"
+        ],
+        "type": "object"
+      },
+      "RegistryValidation": {
+        "description": "Placeholder shape for future per-entry health/validation results.",
+        "properties": {
+          "checked_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      },
+      "ResourceStat": {
+        "description": "A single resource's capacity, and its used amount when known. `used`/\n`total` are in the resource's natural unit: CPU in cores, GPU in device\ncount, memory in bytes. `used` is `None` when the cluster does not report\nlive utilization (e.g. a non-autoscaling cluster whose Ray dashboard has\nno load-metrics report) — the tile then shows capacity only.",
+        "properties": {
+          "total": {
+            "format": "double",
+            "type": "number"
+          },
+          "used": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "total"
+        ],
+        "type": "object"
+      },
+      "ResourceUtilization": {
+        "description": "One resource's live utilization within a pool: `allocated` is the Kueue\nreservation-ledger total (summed across flavors from the latest\nClusterQueue observation), `nominal` the summed flavor quotas from the\nspec, `pct` = allocated / nominal × 100 (0 when nominal is 0 — a\npercentage of nothing is undefined, and 0 keeps the type non-optional).",
+        "properties": {
+          "allocated": {
+            "format": "double",
+            "type": "number"
+          },
+          "nominal": {
+            "format": "double",
+            "type": "number"
+          },
+          "pct": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "allocated",
+          "nominal",
+          "pct"
+        ],
+        "type": "object"
+      },
+      "RoleMappingsView": {
+        "description": "Group→role mappings from the OIDC auth config; shape mirrors\nthe auth subsystem's role-mapping type (a wire twin so the auth package stays free of\nserialization/api deps).",
+        "properties": {
+          "admin": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "auditor": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "developer": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "operator": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "viewer": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "admin",
+          "operator",
+          "developer",
+          "viewer",
+          "auditor"
+        ],
+        "type": "object"
+      },
+      "RolesResponse": {
+        "description": "`GET /api/v1/access/roles` response. `mappings` is null when no OIDC\nvalidator is configured (local-auth or dev mode): group→role mappings\nare meaningless there — local users carry their role as a column.",
+        "properties": {
+          "editable": {
+            "description": "Always false in v1 — editing stays in the config file + restart.",
+            "type": "boolean"
+          },
+          "mappings": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RoleMappingsView"
+              }
+            ]
+          },
+          "source": {
+            "description": "\"file\" (mappings from the OIDC auth config) or \"local\" (no OIDC\nvalidator; roles live on the local user rows).",
+            "example": "file",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "editable"
+        ],
+        "type": "object"
+      },
+      "ServiceSpec": {
+        "description": "Declarative spec for a managed Serve service.",
+        "properties": {
+          "head_cpu": {
+            "type": "string"
+          },
+          "head_memory": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "ray_version": {
+            "type": "string"
+          },
+          "serve_config_v2": {
+            "description": "The Serve application config (KubeRay `serveConfigV2`), passed\nthrough verbatim as a YAML string — Bifrost does not interpret it.",
+            "type": "string"
+          },
+          "upgrade": {
+            "$ref": "#/components/schemas/UpgradeStrategy"
+          },
+          "worker_cpu": {
+            "type": "string"
+          },
+          "worker_memory": {
+            "type": "string"
+          },
+          "worker_replicas": {
+            "description": "Fixed worker replicas backing the service (autoscaling of Serve\ndeployments is Ray Serve's own concern).",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "project",
+          "ray_version",
+          "image",
+          "serve_config_v2",
+          "head_cpu",
+          "head_memory",
+          "worker_replicas",
+          "worker_cpu",
+          "worker_memory"
+        ],
+        "type": "object"
+      },
+      "ServiceView": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "description": "Observed lifecycle state: provisioning | running | updating | ...",
+            "type": "string"
+          },
+          "url": {
+            "description": "External Serve endpoint base URL, when ready.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "state"
+        ],
+        "type": "object"
+      },
+      "TaintSpec": {
+        "description": "A Kubernetes taint on a flavor's nodes. `effect` is e.g. \"NoSchedule\";\nvalidated non-empty here (the set of legal effects is Kubernetes', not\nours).",
+        "properties": {
+          "effect": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "value",
+          "effect"
+        ],
+        "type": "object"
+      },
+      "UpdatePolicy": {
+        "description": "Request body for `PUT /api/v1/settings/policy`. Section-replace\nsemantics: a present key replaces that whole section (`prices: null`\nclears the price sheet; `quotas: {}` clears all quotas); an absent key\nleaves that section untouched.",
+        "properties": {
+          "budgets": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/BudgetView"
+            },
+            "description": "Present replaces the whole budget map (`{}` clears all budgets) (#77).",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "prices": {
+            "additionalProperties": {
+              "format": "double",
+              "type": "number"
+            },
+            "description": "Present (incl. explicit `null`) replaces/clears the price sheet.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quotas": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "format": "double",
+                "type": "number"
+              },
+              "propertyNames": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "description": "Present replaces the whole quota map (`{}` clears all quotas).",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "UpdateUserRequest": {
+        "properties": {
+          "disabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "password": {
+            "description": "New password (min 8 chars); replaces the bcrypt hash.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LocalRole"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "UpgradeStrategy": {
+        "description": "How to roll out a new version of a service.",
+        "enum": [
+          "canary",
+          "in_place"
+        ],
+        "type": "string"
+      },
+      "UpsertAssignment": {
+        "description": "Body of `PUT /api/v1/access/assignments/{principal}`.",
+        "properties": {
+          "role": {
+            "description": "\"viewer\" | \"developer\" | \"operator\" | \"admin\".",
+            "type": "string"
+          },
+          "scope": {
+            "description": "\"*\" (global) or \"project:<name>\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "scope"
+        ],
+        "type": "object"
+      },
+      "UsageGroup": {
+        "description": "One (project, pool) group of the usage report.",
+        "properties": {
+          "cost_usd": {
+            "description": "Total cost in USD; `null` when no price sheet is configured.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "pool": {
+            "description": "Empty string = the project has no allocation.",
+            "type": "string"
+          },
+          "project": {
+            "description": "Empty string = the pool-level aggregate row (Kueue path only).",
+            "type": "string"
+          },
+          "resource_hours": {
+            "additionalProperties": {
+              "format": "double",
+              "type": "number"
+            },
+            "description": "resource → resource-hours over the window.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "project",
+          "pool",
+          "resource_hours"
+        ],
+        "type": "object"
+      },
+      "UsageReport": {
+        "description": "Response of `GET /api/v1/usage`.",
+        "properties": {
+          "budgets": {
+            "description": "Time-windowed budget status per configured project (#77). Empty when\nno `[budgets]` are configured. When the report is filtered to one\n`project`, only that project's budget appears.",
+            "items": {
+              "$ref": "#/components/schemas/BudgetStatus"
+            },
+            "type": "array"
+          },
+          "from": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/UsageGroup"
+            },
+            "type": "array"
+          },
+          "to": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "groups",
+          "budgets"
+        ],
+        "type": "object"
+      },
+      "VersionInfo": {
+        "properties": {
+          "name": {
+            "description": "Always \"bifrost\".",
+            "example": "bifrost",
+            "type": "string"
+          },
+          "version": {
+            "description": "Control-plane semver.",
+            "example": "0.0.1",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "version"
+        ],
+        "type": "object"
+      },
+      "WorkerGroup": {
+        "description": "A homogeneous group of Ray worker nodes.\n\nAutoscaling in v0 is actuated exclusively through these replica bounds,\nwhich translate to KubeRay worker-group fields — never by reading demand\nfrom GCS (ADR-0002).",
+        "properties": {
+          "cpu": {
+            "type": "string"
+          },
+          "gpu": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "max_replicas": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "memory": {
+            "type": "string"
+          },
+          "min_replicas": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "replicas": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "cpu",
+          "memory",
+          "min_replicas",
+          "max_replicas",
+          "replicas"
+        ],
+        "type": "object"
+      },
+      "WorkerGroupNodes": {
+        "description": "One worker group and its nodes (api-v1.md §5.3).",
+        "properties": {
+          "desired": {
+            "description": "Desired replicas: the group's `replicas` field, or `minReplicas` when\nautoscaling leaves `replicas` unmanaged (ADR-0007). Per-group desired\ncounts are not in the RayCluster status, so this is the spec's answer.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "description": "The worker-group name (`groupName` in the RayCluster spec).",
+            "type": "string"
+          },
+          "nodes": {
+            "description": "The group's nodes.",
+            "items": {
+              "$ref": "#/components/schemas/NodeView"
+            },
+            "type": "array"
+          },
+          "ready": {
+            "description": "Ready replicas: pods in this group that are `Running` and `Ready`.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "desired",
+          "ready",
+          "nodes"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bearer": {
+        "bearerFormat": "JWT",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "FOSS control plane for Ray clusters. All endpoints take a Bearer JWT (OIDC). Note: the Ray Jobs API is NOT documented here — it is served by hostname, each registered cluster's hostname proxying Ray's own /api/jobs/ surface through the federating gateway. This spec covers Bifrost's own control-plane routes.",
+    "license": {
+      "name": "Apache-2.0"
+    },
+    "title": "Bifrost",
+    "version": "0.0.1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/access/assignments": {
+      "get": {
+        "operationId": "list_assignments",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AssignmentView"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "All role assignments"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Admin only — access-control surface (api-v1.md §2.2)"
+          },
+          "503": {
+            "description": "No store configured (gateway-only deployment)"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List every scoped role assignment, Admin-only.",
+        "tags": [
+          "access"
+        ]
+      }
+    },
+    "/api/v1/access/assignments/{principal}": {
+      "delete": {
+        "operationId": "delete_assignment",
+        "parameters": [
+          {
+            "description": "The Identity subject",
+            "in": "path",
+            "name": "principal",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "role",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Assignment removed"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Admin only"
+          },
+          "404": {
+            "description": "No such assignment"
+          },
+          "503": {
+            "description": "No store configured"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Remove one assignment, Admin-only; 404 when the triple doesn't exist.",
+        "tags": [
+          "access"
+        ]
+      },
+      "put": {
+        "operationId": "upsert_assignment",
+        "parameters": [
+          {
+            "description": "The principal to bind: a token `sub` (Keycloak UUID) or a `preferred_username` — both are matched at evaluation (#88)",
+            "in": "path",
+            "name": "principal",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertAssignment"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssignmentView"
+                }
+              }
+            },
+            "description": "Assignment stored"
+          },
+          "400": {
+            "description": "Unknown role or invalid scope grammar"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Admin only"
+          },
+          "503": {
+            "description": "No store configured"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Create or replace one assignment, Admin-only. The role and scope grammar\nare validated here — the store is dumb persistence.",
+        "tags": [
+          "access"
+        ]
+      }
+    },
+    "/api/v1/access/roles": {
+      "get": {
+        "operationId": "list_roles",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RolesResponse"
+                }
+              }
+            },
+            "description": "Role mappings and their source"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Admin only — access-control surface (api-v1.md §2.2)"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Effective role mappings for the access page. Admin-only. v1 is\nread-only: with an OIDC validator the mappings come from the auth\nconfig file; without one (local auth) `mappings` is null and roles are\nmanaged per-user via `/api/v1/auth/users`.",
+        "tags": [
+          "access"
+        ]
+      }
+    },
+    "/api/v1/audit": {
+      "get": {
+        "operationId": "list_audit_events",
+        "parameters": [
+          {
+            "description": "Page size (default 100, max 1000).",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Only rows with `seq` strictly before this value (from a previous\nresponse's `next_cursor`).",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Window start, unix seconds (inclusive).",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Window end, unix seconds (inclusive).",
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Exact subject match.",
+            "in": "query",
+            "name": "subject",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Exact cluster id match.",
+            "in": "query",
+            "name": "cluster",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Exact HTTP method match (e.g. `POST`).",
+            "in": "query",
+            "name": "method",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Rows whose path starts with this prefix.",
+            "in": "query",
+            "name": "path_prefix",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Only rows with `status` >= this (status-less rows excluded).",
+            "in": "query",
+            "name": "min_status",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "`allow` or `deny`.",
+            "in": "query",
+            "name": "decision",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/AuditDecision"
+                }
+              ]
+            }
+          },
+          {
+            "description": "Exact reason match (e.g. `insufficient_permission`).",
+            "in": "query",
+            "name": "reason",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "`csv` exports the page as `text/csv`; anything else is a 400.",
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditListResponse"
+                }
+              }
+            },
+            "description": "Audit events, newest first. `?format=csv` returns text/csv instead."
+          },
+          "400": {
+            "description": "Bad query (e.g. from > to, unknown format)"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Admin or Auditor only — audit subjects are Admin data"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List the persisted audit trail, Admin/Auditor-only (api-v1.md §5.9).",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/api/v1/audit/verify": {
+      "get": {
+        "operationId": "verify_audit_trail",
+        "parameters": [
+          {
+            "description": "First `seq` to check (default 1 — the whole trail from genesis).\nThe window chains from the newest preceding row's stored hash, so a\nmid-trail window verifies against the same head it was written with.",
+            "in": "query",
+            "name": "from_seq",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Max rows to replay (default 100_000, clamped to 1_000_000). Trails\nlarger than one window verify in successive `from_seq` windows.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditVerifyResponse"
+                }
+              }
+            },
+            "description": "Chain replay result"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Admin or Auditor only"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Replay the audit hash chain over a window, Admin/Auditor-only (#59).",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResponse"
+                }
+              }
+            },
+            "description": "Logged in; opaque bearer token returned"
+          },
+          "401": {
+            "description": "Invalid credentials (identical body for unknown user, wrong password, locked, or disabled)"
+          }
+        },
+        "summary": "Username/password login (ADR-0011). Public (allowlisted); rate-limited\nby bcrypt cost and the 5-strikes/5-minute account lockout.",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "operationId": "logout",
+        "responses": {
+          "204": {
+            "description": "Logged out (PAT revoked when one was used)"
+          },
+          "401": {
+            "description": "No/invalid token"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Log out: if the caller authenticated with a PAT, revoke it; otherwise a\n204 no-op (JWTs are stateless — there is nothing server-side to kill).",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/providers": {
+      "get": {
+        "operationId": "providers",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvidersResponse"
+                }
+              }
+            },
+            "description": "Configured auth providers"
+          }
+        },
+        "summary": "Login-page metadata: which providers are configured. Public by design.",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/tokens": {
+      "get": {
+        "operationId": "list_tokens",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ApiTokenView"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The caller's tokens, newest first"
+          },
+          "401": {
+            "description": "No/invalid token"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List the caller's own tokens. Hashes are never serialized.",
+        "tags": [
+          "auth"
+        ]
+      },
+      "post": {
+        "operationId": "create_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateTokenResponse"
+                }
+              }
+            },
+            "description": "Token created; plaintext returned once"
+          },
+          "400": {
+            "description": "expires_in_days out of range"
+          },
+          "401": {
+            "description": "No/invalid token"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Mint a personal access token for the caller (ADR-0011). Any\nauthenticated identity; the plaintext is shown once.",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/tokens/{prefix}": {
+      "delete": {
+        "operationId": "revoke_token",
+        "parameters": [
+          {
+            "description": "The token's 8-char lookup prefix",
+            "in": "path",
+            "name": "prefix",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "404": {
+            "description": "No such token for this caller"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Revoke one of the caller's own tokens. Someone else's token (or a\nnonexistent prefix) is a 404 — ownership can't be probed.",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/users": {
+      "get": {
+        "operationId": "list_users",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LocalUserView"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "All local users, ordered by username"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Admin only"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List all local users. Admin-only; hashes never serialize\n([`LocalUserView`]).",
+        "tags": [
+          "auth"
+        ]
+      },
+      "post": {
+        "operationId": "create_user",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateUserRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocalUserView"
+                }
+              }
+            },
+            "description": "User created"
+          },
+          "400": {
+            "description": "Invalid username (RFC 1123) or password under 8 chars"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Admin only"
+          },
+          "409": {
+            "description": "Username already taken"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Create a local user. Admin-only. 201 with the wire-safe view; 400 on a\nbad username/short password; 409 when the username is taken.",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/users/{username}": {
+      "put": {
+        "operationId": "update_user",
+        "parameters": [
+          {
+            "description": "The local user's username",
+            "in": "path",
+            "name": "username",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateUserRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocalUserView"
+                }
+              }
+            },
+            "description": "User updated"
+          },
+          "400": {
+            "description": "Password under 8 chars"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Admin only"
+          },
+          "404": {
+            "description": "No such user"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Update a local user: role, disabled flag, and/or password. Admin-only;\n404 for an unknown user. Changing your OWN role/disabled is allowed in\nv0 (no footgun guard) but is audit-logged loudly.",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/clusters": {
+      "get": {
+        "operationId": "list_clusters",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ClusterView"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "All managed clusters"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Missing Read on cluster"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "clusters"
+        ]
+      },
+      "post": {
+        "operationId": "create_cluster",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCluster"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Desired state recorded; reconciler will converge"
+          },
+          "400": {
+            "description": "Invalid spec (bad quantity, min>max), or GPU tenant-isolation violation (fractional GPU in a multi-tenant pool)"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Missing Write on cluster (Operator/Admin only)"
+          },
+          "409": {
+            "description": "Project quota exceeded"
+          },
+          "500": {
+            "description": "Store/quota-accounting failure"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "clusters"
+        ]
+      }
+    },
+    "/api/v1/clusters/{id}": {
+      "delete": {
+        "operationId": "delete_cluster",
+        "parameters": [
+          {
+            "description": "Cluster id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Hard-delete the store row (tombstone purge); only when already terminated and observed gone",
+            "in": "query",
+            "name": "purge",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tombstone purged (purge=true): store row removed"
+          },
+          "202": {
+            "description": "Marked for termination; reconciler tears it down"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Missing Write on cluster (Operator/Admin only)"
+          },
+          "404": {
+            "description": "No such cluster"
+          },
+          "409": {
+            "description": "Purge refused: cluster is not a terminated/gone tombstone"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "clusters"
+        ]
+      },
+      "get": {
+        "operationId": "get_cluster",
+        "parameters": [
+          {
+            "description": "Cluster id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterView"
+                }
+              }
+            },
+            "description": "The cluster"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Missing Read on cluster"
+          },
+          "404": {
+            "description": "No such cluster"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "clusters"
+        ]
+      }
+    },
+    "/api/v1/clusters/{id}/events": {
+      "get": {
+        "operationId": "cluster_events",
+        "parameters": [
+          {
+            "description": "Cluster id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterEvents"
+                }
+              }
+            },
+            "description": "Kubernetes Events for the cluster's objects, newest first (capped)"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Missing Read on cluster"
+          },
+          "404": {
+            "description": "No such cluster, or the backend exposes no events"
+          },
+          "503": {
+            "description": "The event source (Kubernetes) could not be reached"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "clusters"
+        ]
+      }
+    },
+    "/api/v1/clusters/{id}/jobs": {
+      "get": {
+        "operationId": "cluster_jobs",
+        "parameters": [
+          {
+            "description": "Cluster id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RayJobSummary"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Normalized list of Ray jobs on the cluster"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Missing Read on job"
+          },
+          "404": {
+            "description": "No such cluster, or no reachable Ray endpoint for it"
+          },
+          "503": {
+            "description": "The cluster's Ray Job API could not be reached"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "clusters"
+        ]
+      }
+    },
+    "/api/v1/clusters/{id}/logs": {
+      "get": {
+        "operationId": "cluster_logs",
+        "parameters": [
+          {
+            "description": "Cluster id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Pod to tail (one of the cluster's pods); defaults to the head pod.",
+            "in": "query",
+            "name": "node",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Number of trailing lines to return (default 200, capped at 5000).",
+            "in": "query",
+            "name": "tail",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterLogs"
+                }
+              }
+            },
+            "description": "Recent (tail-capped) pod logs plus the list of tailable pods"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Missing Read on cluster"
+          },
+          "404": {
+            "description": "No such cluster/pod, or the backend exposes no logs"
+          },
+          "503": {
+            "description": "The log source (Kubernetes) could not be reached"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "clusters"
+        ]
+      }
+    },
+    "/api/v1/clusters/{id}/metrics": {
+      "get": {
+        "operationId": "cluster_metrics",
+        "parameters": [
+          {
+            "description": "Cluster id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterMetrics"
+                }
+              }
+            },
+            "description": "Normalized cluster resource-usage summary (CPU/GPU/mem used vs total + node counts)"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Missing Read on cluster"
+          },
+          "404": {
+            "description": "No such cluster, or no reachable Ray dashboard for it"
+          },
+          "503": {
+            "description": "The cluster's Ray dashboard could not be reached"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "clusters"
+        ]
+      }
+    },
+    "/api/v1/clusters/{id}/nodes": {
+      "get": {
+        "operationId": "cluster_nodes",
+        "parameters": [
+          {
+            "description": "Cluster id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterNodes"
+                }
+              }
+            },
+            "description": "Head + per-worker-group node breakdown, sourced from Kubernetes"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Missing Read on cluster"
+          },
+          "404": {
+            "description": "No such cluster, or the backend exposes no node breakdown"
+          },
+          "503": {
+            "description": "The node source (Kubernetes) could not be reached"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "clusters"
+        ]
+      }
+    },
+    "/api/v1/clusters/{id}/resume": {
+      "post": {
+        "operationId": "resume_cluster",
+        "parameters": [
+          {
+            "description": "Cluster id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Desired state set back to running; reconciler re-provisions (suspend=false)"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Missing Write on cluster (Operator/Admin only)"
+          },
+          "404": {
+            "description": "No such cluster"
+          },
+          "409": {
+            "description": "Illegal state transition, or the cluster's project is queue-assigned (Kueue owns suspend)"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "clusters"
+        ]
+      }
+    },
+    "/api/v1/clusters/{id}/suspend": {
+      "post": {
+        "operationId": "suspend_cluster",
+        "parameters": [
+          {
+            "description": "Cluster id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Desired state set to suspended; reconciler releases compute (spec.suspend=true)"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Missing Write on cluster (Operator/Admin only)"
+          },
+          "404": {
+            "description": "No such cluster"
+          },
+          "409": {
+            "description": "Illegal state transition, or the cluster's project is queue-assigned (Kueue owns suspend)"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "clusters"
+        ]
+      }
+    },
+    "/api/v1/identity": {
+      "get": {
+        "operationId": "identity",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityResponse"
+                }
+              }
+            },
+            "description": "The caller's identity (the dev identity when auth is disabled)"
+          },
+          "401": {
+            "description": "No/invalid token (only when auth is configured)"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "\"Who am I\": the resolved identity for any authenticated caller. In dev\nmode (no validator AND no local auth) the auth middleware attaches no\nidentity, and this returns the specced dev identity so the\nunauthenticated dev loop renders the full console.",
+        "tags": [
+          "access"
+        ]
+      }
+    },
+    "/api/v1/jobs": {
+      "get": {
+        "operationId": "list_jobs",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/JobView"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Persistent job history, newest first"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Missing Read on job"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/api/v1/metrics": {
+      "get": {
+        "operationId": "metrics",
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Prometheus text exposition of usage and control-plane gauges"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Missing Read on cluster"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "usage"
+        ]
+      }
+    },
+    "/api/v1/pools": {
+      "get": {
+        "operationId": "list_pools",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PoolView"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "All capacity pools"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Missing Read on pool"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "pools"
+        ]
+      },
+      "post": {
+        "operationId": "create_pool",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePool"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Pool created"
+          },
+          "400": {
+            "description": "Invalid spec (bad name, no flavors, unparseable quantity)"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Missing Write on pool (Admin only)"
+          },
+          "409": {
+            "description": "Pool already exists (create-only in v0; spec update lands with a later PATCH)"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "pools"
+        ]
+      }
+    },
+    "/api/v1/pools/{name}": {
+      "delete": {
+        "operationId": "delete_pool",
+        "parameters": [
+          {
+            "description": "Pool name",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Pool deleted"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Missing Delete on pool (Admin only)"
+          },
+          "404": {
+            "description": "No such pool"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "pools"
+        ]
+      },
+      "get": {
+        "operationId": "get_pool",
+        "parameters": [
+          {
+            "description": "Pool name",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoolView"
+                }
+              }
+            },
+            "description": "The pool"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Missing Read on pool"
+          },
+          "404": {
+            "description": "No such pool"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "pools"
+        ]
+      }
+    },
+    "/api/v1/pools/{name}/allocations": {
+      "get": {
+        "operationId": "list_allocations",
+        "parameters": [
+          {
+            "description": "Pool name",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AllocationSpec"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The pool's allocations"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Missing Read on pool"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "pools"
+        ]
+      }
+    },
+    "/api/v1/pools/{name}/allocations/{project}": {
+      "delete": {
+        "operationId": "delete_allocation",
+        "parameters": [
+          {
+            "description": "Pool name",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Project name",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Allocation deleted"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Missing Delete on pool (Admin only)"
+          },
+          "404": {
+            "description": "No such allocation"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "pools"
+        ]
+      },
+      "put": {
+        "operationId": "put_allocation",
+        "parameters": [
+          {
+            "description": "Pool name",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Project name",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutAllocation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Allocation recorded"
+          },
+          "400": {
+            "description": "Invalid allocation, body pool/project mismatches the path, or GPU tenant-isolation violation (time-slice pool shared by >1 project)"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Missing Write on pool (Admin only)"
+          },
+          "404": {
+            "description": "No such pool"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "pools"
+        ]
+      }
+    },
+    "/api/v1/pools/{name}/usage": {
+      "get": {
+        "operationId": "pool_usage",
+        "parameters": [
+          {
+            "description": "Pool name",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoolUsageView"
+                }
+              }
+            },
+            "description": "Live pool utilization (latest observation)"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Missing Read on pool"
+          },
+          "404": {
+            "description": "No such pool"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "pools"
+        ]
+      }
+    },
+    "/api/v1/registry/clusters": {
+      "get": {
+        "operationId": "list_registry",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RegistryEntryView"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The gateway's routing table"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Admin only — the registry is the credential-routing table"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "registry"
+        ]
+      }
+    },
+    "/api/v1/services": {
+      "get": {
+        "operationId": "list_services",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ServiceView"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "All managed services"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Missing Read on service"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "services"
+        ]
+      },
+      "post": {
+        "operationId": "deploy_service",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeployService"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Deploy accepted; KubeRay rolls it out"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Missing Write on service (Developer/Admin only)"
+          },
+          "502": {
+            "description": "Service backend error"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "services"
+        ]
+      }
+    },
+    "/api/v1/services/{name}": {
+      "delete": {
+        "operationId": "delete_service",
+        "parameters": [
+          {
+            "description": "Service name",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Teardown accepted"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Missing Write on service (Developer/Admin only)"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "services"
+        ]
+      },
+      "get": {
+        "operationId": "get_service",
+        "parameters": [
+          {
+            "description": "Service name",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceView"
+                }
+              }
+            },
+            "description": "The service"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Missing Read on service"
+          },
+          "404": {
+            "description": "No such service"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "services"
+        ]
+      }
+    },
+    "/api/v1/settings/policy": {
+      "get": {
+        "operationId": "get_policy",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyView"
+                }
+              }
+            },
+            "description": "The effective policy and its provenance"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Admin only — governance is platform configuration"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The effective governance policy. Admin-only: quotas and prices are\nplatform configuration (api-v1.md §2.2), classified with `Target::Cluster`\nlike the registry/audit surfaces.",
+        "tags": [
+          "settings"
+        ]
+      },
+      "put": {
+        "operationId": "update_policy",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePolicy"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyView"
+                }
+              }
+            },
+            "description": "The policy after the update (source is now \"store\")"
+          },
+          "400": {
+            "description": "Negative or non-finite price/quota value"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Admin only — governance is platform configuration"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Replace sections of the governance policy. Admin-only. Edits take effect\non the very next request — quota admission, cost estimates, and the usage\nroll-up all read the store per request. Emits an `update_policy` audit\nevent on success.",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/v1/usage": {
+      "get": {
+        "operationId": "usage_report",
+        "parameters": [
+          {
+            "description": "Filter to one project.",
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Filter to one pool.",
+            "in": "query",
+            "name": "pool",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Window start, unix seconds (default: `to - 86400`).",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Window end, unix seconds (default: now).",
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageReport"
+                }
+              }
+            },
+            "description": "Resource-hours (and cost when priced) by project and pool"
+          },
+          "400": {
+            "description": "from must be before to"
+          },
+          "401": {
+            "description": "No/invalid token"
+          },
+          "403": {
+            "description": "Missing Read on cluster"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "usage"
+        ]
+      }
+    },
+    "/api/v1/version": {
+      "get": {
+        "operationId": "version",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionInfo"
+                }
+              }
+            },
+            "description": "Name and semver"
+          }
+        },
+        "summary": "Control-plane identity and version.",
+        "tags": [
+          "system"
+        ]
+      }
+    },
+    "/healthz": {
+      "get": {
+        "operationId": "healthz",
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Control plane is up"
+          }
+        },
+        "summary": "Liveness/readiness probe.",
+        "tags": [
+          "system"
+        ]
+      }
+    }
+  },
+  "tags": [
+    {
+      "description": "Health and version probes.",
+      "name": "system"
+    },
+    {
+      "description": "Cluster lifecycle. Reads need any authenticated role; create/terminate need Write on the cluster target (Operator or Admin). Mounted only when the lifecycle controller is enabled (`serve --kuberay-namespace`).",
+      "name": "clusters"
+    },
+    {
+      "description": "Ray Serve services (RayService). Deploy/update/delete need Write on the service target (Developer or Admin — deploying is code); reads are open to any authenticated role. KubeRay handles zero-downtime canary rollout.",
+      "name": "services"
+    },
+    {
+      "description": "Capacity pools and per-project allocations (ADR-0010): platform configuration, not app lifecycle. Reads need any authenticated role; create/delete/allocation mutations are Admin-only. Mounted only when a store is configured.",
+      "name": "pools"
+    },
+    {
+      "description": "Usage metering (Slice 4): resource-hours reports and the Prometheus gauge over the metered samples. Reads need Read on the cluster target (Viewer+) — consumption reporting is cluster data, not pool topology. Mounted only when a store is configured.",
+      "name": "usage"
+    },
+    {
+      "description": "Governance policy management (api-v1.md §5.16): the effective price sheet and per-project quotas. Admin-only. The `--policy` file is the boot-time default; the store row wins once edited via PUT, and every consumer (quota admission, cost estimates, usage roll-up) reads the store per request, so edits apply without a restart. Mounted only when a store is configured.",
+      "name": "settings"
+    },
+    {
+      "description": "The job gateway's routing table (ADR-0002). Admin-only: it is the credential-routing table. Static config today; dynamic registration of managed clusters is a follow-up.",
+      "name": "registry"
+    },
+    {
+      "description": "The persisted audit trail (api-v1.md §5.9): every authn/authz decision, mutation, and proxied gateway request, newest-first with seq-cursor pagination and CSV export. Rows are hash-chained for tamper-evidence (#59); `audit/verify` replays the chain. Reads need Read on the audit target — Admin or Auditor — and are themselves audited (`audit_read` rows). Mounted only when a store is configured.",
+      "name": "audit"
+    },
+    {
+      "description": "Local auth (ADR-0011): username/password login issuing opaque (unsigned) bearer tokens, personal access token management, provider metadata, and Admin-only local user management. `login` and `providers` are public; token routes are owner-scoped; user routes are Admin-only. Mounted only with `serve --local-auth` (except `providers`).",
+      "name": "auth"
+    },
+    {
+      "description": "Identity & access (api-v1.md §5.8): `identity` is 'who am I' for any authenticated caller (the dev identity when auth is disabled); `access/roles` is the Admin-only read of the effective role mappings. Mounted unconditionally.",
+      "name": "access"
+    }
+  ]
+}
