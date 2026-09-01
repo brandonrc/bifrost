@@ -154,8 +154,27 @@ against `internal/api` (built, run, deleted; repo left clean).
 
 **Dev / non-Hub fallback — pasted `mob_` PAT.** Stored server-side (extension
 settings), never in browser JS. Warn loudly: if the PAT's subject ≠ the pod's
-owner label, `:10001` (Ray Client) stays blocked — but the Jobs-API path still
-works, so this is acceptable for dev.
+owner label, the data plane is blocked entirely.
+
+**CORRECTED (T10 reconciliation) — the original "but the Jobs-API path still
+works" was WRONG for the shipped architecture, and reassuringly so.** It was
+true only while the Jobs API was reached through the *gateway*. Since T3 the
+extension talks to the in-cluster head service directly (§2 amendment), and the
+tier-2 per-owner rule in `internal/provision/kuberay.go`
+(`ClusterAllowNetworkPolicy`) is a **single ingress rule** whose one
+`bifrost.dev/owner` pod-selector guards
+`Ports: []NetworkPolicyPort{tcpPort(10001), tcpPort(8265)}` **together**. One
+selector, both ports: an owner mismatch removes Ray Client *and* the Ray
+dashboard/Jobs API in the same stroke. What survives is only the Bifrost control
+plane (create/list/stop), because that goes to Bifrost over HTTP and never
+touches the NetworkPolicy.
+
+This matters for diagnosis, not just accuracy: an operator hitting a mismatch
+sees the cluster list and lifecycle working perfectly and everything *inside*
+the cluster failing. The old wording would have sent them looking at Ray or the
+network instead of at the pod's owner label. Dev use with a subject-mismatched
+PAT gets a working control plane and a dead data plane — usable for exercising
+the panel, useless for running work.
 
 ## 5. Profiles
 
