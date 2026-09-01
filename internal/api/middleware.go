@@ -3,13 +3,28 @@
 // (require_auth, is_public, resolve_identity, is_jwt_shaped) and lib.rs
 // (refuse_non_loopback, the serve_with_shutdown_and_limits bind guard).
 //
-// Scope note (Wave 1 T10): this wave wires authentication only — every
+// Scope note (Wave 1 T10): this wave wired authentication only — every
 // request either carries a valid bearer identity or is refused. The
 // per-route/target authorization checks (auth_layer.rs's authorize,
 // authorize_scoped, target_for_path) apply once real handlers exist
-// behind ClusterRegistry/Store state, which is Wave 1 T11/T12's job; the
-// gateway's host-is-cluster override (never-public cluster hostnames) is
-// T13.
+// behind ClusterRegistry/Store state (Wave 1 T11/T12's job).
+//
+// Wave 1 T13 adds the one authorization check that belongs HERE rather
+// than behind a route handler: the gateway's host-is-cluster override.
+// auth_layer.rs's require_auth does this inline (it does NOT call the
+// Rust reference's own authorize() helper) because cluster-host traffic
+// never reaches a per-route handler at all — it goes straight to
+// gateway.go's HostGateway middleware, which this package composes
+// directly behind RequireAuth (see server.go's NewHandler). Two
+// consequences, both ported verbatim: (1) a Host matching a registered
+// cluster is NEVER public — isPublic's allowlist is for the
+// control-plane host only, so e.g. GET /healthz on a cluster host still
+// requires a valid bearer token; (2) once authenticated, that identity
+// must additionally hold the Target::Job permission the request's verb
+// requires (required_permission/target_for_path collapse to a fixed
+// Target::Job here — the whole cluster-host surface IS the proxied Ray
+// job surface) before the request is allowed to fall through to the
+// gateway at all.
 package api
 
 import (
@@ -22,6 +37,8 @@ import (
 	"strings"
 
 	"github.com/brandonrc/bifrost/internal/auth"
+	"github.com/brandonrc/bifrost/internal/controller"
+	"github.com/brandonrc/bifrost/internal/core"
 )
 
 // isPublic mirrors auth_layer.rs's is_public: the narrow allowlist
@@ -54,6 +71,17 @@ func isJWTShaped(token string) bool {
 type AuthState struct {
 	Validator *auth.Validator
 	Local     *auth.LocalAuthenticator
+	// Registry backs the host-is-cluster gate (T13): a Host matching a
+	// registered cluster is never public and is authorized against
+	// Target::Job right here rather than by a per-route handler — see
+	// the package doc comment above. nil disables the gateway override
+	// entirely (every request is judged only against the control-plane
+	// allowlist), matching a deployment with no gateway configured.
+	Registry *core.ClusterRegistry
+	// Store persists the audit trail for host-is-cluster authorization
+	// denials (api-v1.md §5.9); nil keeps those denials trace-only, the
+	// same nil-store contract every other EmitAudit call site has.
+	Store controller.Store
 }
 
 // configured reports whether any authentication mechanism is wired up —
@@ -61,6 +89,70 @@ type AuthState struct {
 // #36/#45: local auth counts exactly like an OIDC validator).
 func (s AuthState) configured() bool {
 	return s.Validator != nil || s.Local != nil
+}
+
+// hostIsCluster reports whether r's Host matches a registered cluster
+// (auth_layer.rs's require_auth: `st.registry.by_hostname(h).is_some()`).
+// Go's net/http moves the Host header out of r.Header into r.Host for
+// server requests (unlike axum, which keeps it in the header map), so
+// this reads r.Host rather than r.Header.Get("Host").
+func hostIsCluster(registry *core.ClusterRegistry, r *http.Request) bool {
+	if registry == nil {
+		return false
+	}
+	_, ok := registry.ByHostname(r.Host)
+	return ok
+}
+
+// requiredGatewayPermission mirrors auth_layer.rs's required_permission:
+// reads (GET/HEAD/OPTIONS) need Read; every other verb (including the
+// websocket log-tail's GET upgrade, which required_permission's own doc
+// comment calls out explicitly) needs Write. DELETE on the proxied Ray
+// surface is job deletion — a Developer action — so it maps to Write,
+// not Delete.
+func requiredGatewayPermission(method string) auth.PermissionType {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return auth.Read
+	default:
+		return auth.Write
+	}
+}
+
+// authorizeGatewayRequest enforces the Target::Job permission cluster-
+// host traffic requires. identity is always non-nil here — RequireAuth
+// only reaches this call after successfully resolving one.
+//
+// Deliberately NOT authz.go's shared Authorize helper: auth_layer.rs's
+// require_auth doesn't call its own authorize() either, because this
+// denial's audit row carries Method and Path (core.AuditEvent's doc
+// comment: "for gateway and authn/ext_authz rows") — fields Authorize's
+// shared emitAuthzDenial doesn't set, since a per-route handler's own
+// authorization call has no comparable use for them. EmitAudit,
+// PermissionStr, TargetStr, grantedRoleStrs, and ErrForbidden ARE reused
+// from authz.go — only the denial's field population differs.
+func authorizeGatewayRequest(store controller.Store, identity *auth.Identity, r *http.Request) error {
+	required := requiredGatewayPermission(r.Method)
+	if identity.Permits(required, auth.TargetJob) {
+		return nil
+	}
+	subject := identity.Subject
+	reason := "insufficient_permission"
+	status := uint16(http.StatusForbidden)
+	method := r.Method
+	path := r.URL.Path
+	EmitAudit(r.Context(), store, &core.AuditEvent{
+		Ts:           controller.NowUnix(),
+		Subject:      &subject,
+		Decision:     core.AuditDecisionDeny,
+		Reason:       &reason,
+		Method:       &method,
+		Path:         &path,
+		Status:       &status,
+		Required:     &core.AuditRequired{Action: PermissionStr(required), Target: TargetStr(auth.TargetJob)},
+		GrantedRoles: grantedRoleStrs(identity.Roles),
+	})
+	return ErrForbidden
 }
 
 func bearerToken(r *http.Request) (string, bool) {
@@ -151,8 +243,14 @@ func auditDenial(level slog.Level, r *http.Request, reason string) {
 // require_auth). When state carries no validator and no local
 // authenticator, auth is disabled and every request passes through
 // (dev mode). Otherwise every request needs a valid bearer token except
-// the public allowlist (isPublic); a missing or invalid token gets 401
-// with a WWW-Authenticate: Bearer header and the canonical error body.
+// the public allowlist (isPublic) — UNLESS its Host matches a
+// registered cluster (state.Registry), in which case the allowlist is
+// suppressed entirely and, once authenticated, the identity must also
+// hold the Target::Job permission the request's verb requires (T13's
+// host-is-cluster gate — see the package doc comment and
+// authorizeGatewayRequest). A missing or invalid token gets 401 with a
+// WWW-Authenticate: Bearer header and the canonical error body; an
+// authenticated-but-unauthorized cluster-host request gets 403.
 func RequireAuth(state AuthState) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -160,7 +258,8 @@ func RequireAuth(state AuthState) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			if isPublic(r.URL.Path) {
+			onClusterHost := hostIsCluster(state.Registry, r)
+			if !onClusterHost && isPublic(r.URL.Path) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -178,6 +277,12 @@ func RequireAuth(state AuthState) func(http.Handler) http.Handler {
 				w.Header().Set("WWW-Authenticate", "Bearer")
 				WriteError(w, r, ErrInvalidBearerToken)
 				return
+			}
+			if onClusterHost {
+				if err := authorizeGatewayRequest(state.Store, identity, r); err != nil {
+					WriteError(w, r, err)
+					return
+				}
 			}
 			ctx := context.WithValue(r.Context(), identityContextKey{}, identity)
 			ctx = context.WithValue(ctx, bearerTokenContextKey{}, token)

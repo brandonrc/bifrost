@@ -146,6 +146,21 @@ func specHandler() http.HandlerFunc {
 type HandlerOptions struct {
 	Validator *auth.Validator
 	Local     *auth.LocalAuthenticator
+	// Registry backs the federating gateway (T13, gateway.go): a Host
+	// matching a registered cluster is proxied there instead of reaching
+	// the control-plane routes at all, and (middleware.go's
+	// host-is-cluster gate) is never treated as public. nil disables the
+	// gateway entirely — every request is a control-plane request,
+	// exactly as before T13.
+	Registry *core.ClusterRegistry
+	// Store persists the gateway's per-request audit trail and the
+	// host-is-cluster authorization denials RequireAuth emits; nil keeps
+	// both trace-only (mirrors mobula-api's gateway-only mode, where no
+	// store is configured at all).
+	Store controller.Store
+	// GatewayLimits overrides the federating gateway's hardening knobs
+	// (body cap, inflight cap, timeouts). nil uses DefaultGatewayLimits().
+	GatewayLimits *GatewayLimits
 	// AllowUnauthenticated permits binding a non-loopback address with
 	// no authentication configured (mobula-api's --dev-allow-unauthenticated,
 	// ServeOptions.allow_unauthenticated). It does NOT disable
@@ -159,12 +174,15 @@ type HandlerOptions struct {
 }
 
 // NewHandler builds the full Bifrost API http.Handler: the generated
-// routes plus SpecPath, wrapped by the deny-by-default auth middleware
-// and — when neither a validator nor local auth is configured and
-// AllowUnauthenticated is false — the outermost fail-closed
-// non-loopback guard (mobula-api lib.rs build_app_full_svc_inner's layer
-// order: auth outermost, routes innermost; the loopback guard, when
-// installed, wraps everything).
+// routes plus SpecPath, with the federating gateway (T13, gateway.go)
+// spliced in directly ahead of route matching, wrapped by the
+// deny-by-default auth middleware and — when neither a validator nor
+// local auth is configured and AllowUnauthenticated is false — the
+// outermost fail-closed non-loopback guard. Layer order (outermost
+// first) mirrors mobula-api lib.rs build_app_full_svc_inner's: the
+// loopback guard, when installed, wraps everything; then auth
+// (RequireAuth, which also runs the host-is-cluster gate — see
+// middleware.go); then the gateway (HostGateway); then the routes.
 func NewHandler(server StrictServerInterface, opts HandlerOptions) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET "+SpecPath, specHandler())
@@ -180,7 +198,18 @@ func NewHandler(server StrictServerInterface, opts HandlerOptions) http.Handler 
 	})
 	h := HandlerWithOptions(strict, StdHTTPServerOptions{BaseRouter: mux})
 
-	h = RequireAuth(AuthState{Validator: opts.Validator, Local: opts.Local})(h)
+	// The federating gateway sits directly in front of route matching:
+	// a Host matching a registered cluster is proxied here and never
+	// reaches the mux at all, so a cluster hostname can never be
+	// shadowed by a control-plane path (T13's core invariant).
+	gatewayLimits := DefaultGatewayLimits()
+	if opts.GatewayLimits != nil {
+		gatewayLimits = *opts.GatewayLimits
+	}
+	gw := NewGatewayStateWithLimits(opts.Registry, opts.Store, gatewayLimits)
+	h = gw.HostGateway(h)
+
+	h = RequireAuth(AuthState{Validator: opts.Validator, Local: opts.Local, Registry: opts.Registry, Store: opts.Store})(h)
 
 	// Fail-closed (mobula-api #45): when no authentication is
 	// configured at all and it hasn't been explicitly overridden,
