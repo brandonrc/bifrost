@@ -26,13 +26,14 @@ func newExchangeCmd() *cobra.Command {
 		Short: "Exchange a user's token for a Bifrost-audience token that carries the USER as subject (RFC 8693, #102). " +
 			"Prints the exchanged access token",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			secret := resolveClientSecret(clientSecret)
 			if issuer == "" {
 				return errors.New("required flag(s) \"issuer\" not set")
 			}
 			if clientID == "" {
 				return errors.New("required flag(s) \"client-id\" not set")
 			}
-			if clientSecret == "" {
+			if secret == "" {
 				return errors.New("required flag(s) \"client-secret\" not set (or set BIFROST_CLIENT_SECRET)")
 			}
 			if subjectTokenStdin && subjectToken != "" {
@@ -42,13 +43,16 @@ func newExchangeCmd() *cobra.Command {
 			if scope != "" {
 				scopePtr = &scope
 			}
-			return runExchange(cmd.Context(), issuer, clientID, clientSecret, subjectToken, subjectTokenStdin, idToken, audience, scopePtr)
+			return runExchange(cmd.Context(), issuer, clientID, secret, subjectToken, subjectTokenStdin, idToken, audience, scopePtr)
 		},
 	}
 	f := cmd.Flags()
 	f.StringVar(&issuer, "issuer", "", "OIDC issuer URL (its token endpoint performs the exchange)")
 	f.StringVar(&clientID, "client-id", "", "The trusted service's confidential client id (e.g. checkmaite-svc)")
-	f.StringVar(&clientSecret, "client-secret", envOr("BIFROST_CLIENT_SECRET", ""), "The service's client secret (or set BIFROST_CLIENT_SECRET)")
+	// Default left empty deliberately — see resolveClientSecret's doc
+	// comment for why BIFROST_CLIENT_SECRET is NOT wired in as the pflag
+	// default here.
+	f.StringVar(&clientSecret, "client-secret", "", "The service's client secret (or set BIFROST_CLIENT_SECRET)")
 	f.StringVar(&subjectToken, "subject-token", "", "The user's token to exchange")
 	f.BoolVar(&subjectTokenStdin, "subject-token-stdin", false, "Read the user's subject token from stdin (one line)")
 	f.BoolVar(&idToken, "id-token", false, "Treat the subject token as an OIDC id token rather than an access token")

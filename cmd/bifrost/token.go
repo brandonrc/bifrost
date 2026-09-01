@@ -22,17 +22,21 @@ func newTokenCmd() *cobra.Command {
 		Use:   "token",
 		Short: "Print a bearer token: the stored login token by default, or a fresh service-account token with --issuer/--client-id/--client-secret",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			secret := resolveClientSecret(clientSecret)
 			var scopePtr *string
 			if scope != "" {
 				scopePtr = &scope
 			}
-			return runToken(cmd.Context(), issuer, clientID, clientSecret, scopePtr)
+			return runToken(cmd.Context(), issuer, clientID, secret, scopePtr)
 		},
 	}
 	f := cmd.Flags()
 	f.StringVar(&issuer, "issuer", "", "Service account: OIDC issuer URL")
 	f.StringVar(&clientID, "client-id", "", "Service account: confidential client id")
-	f.StringVar(&clientSecret, "client-secret", envOr("BIFROST_CLIENT_SECRET", ""), "Service account: client secret (or set BIFROST_CLIENT_SECRET)")
+	// Default left empty deliberately — see resolveClientSecret's doc
+	// comment for why BIFROST_CLIENT_SECRET is NOT wired in as the pflag
+	// default here.
+	f.StringVar(&clientSecret, "client-secret", "", "Service account: client secret (or set BIFROST_CLIENT_SECRET)")
 	f.StringVar(&scope, "scope", "", "Optional scope for the client-credentials grant")
 	return cmd
 }

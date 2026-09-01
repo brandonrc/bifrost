@@ -53,11 +53,35 @@ func newRootCmd() *cobra.Command {
 }
 
 // envOr returns the environment variable's value, or def when it is unset
-// or empty. Used for flag defaults that mirror mobula-cli's clap `env =`
-// attributes (e.g. BIFROST_SERVER, BIFROST_CLIENT_SECRET).
+// or empty. Used for NON-SECRET flag defaults that mirror mobula-cli's
+// clap `env =` attributes (e.g. --server / BIFROST_SERVER). Never use
+// this for --client-secret: see resolveClientSecret.
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
 	}
 	return def
+}
+
+// clientSecretEnv is the env var carrying --client-secret's fallback
+// value (token.go, exchange.go).
+const clientSecretEnv = "BIFROST_CLIENT_SECRET"
+
+// resolveClientSecret returns flagValue when the caller passed
+// --client-secret explicitly, otherwise the BIFROST_CLIENT_SECRET env var.
+//
+// Deliberately NOT wired as the --client-secret flag's pflag default
+// (unlike --server/BIFROST_SERVER above): pflag prints any non-empty
+// default inline in --help/usage output, so
+// `BIFROST_CLIENT_SECRET=... bifrost token --help` would echo the secret
+// in cleartext — a real leak into support pastes, screen shares, `set -x`
+// traces, and CI logs. The Rust oracle avoided exactly this with clap's
+// `hide_env_values = true` (main.rs:144,163); resolving the fallback here,
+// after flag parsing, gets the same effective behavior (flag wins, env is
+// the fallback) without ever letting the secret become a flag's DefValue.
+func resolveClientSecret(flagValue string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	return os.Getenv(clientSecretEnv)
 }
