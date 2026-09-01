@@ -15,14 +15,28 @@ jobs:
         with: { version: v2.13.2 }
   test:
     runs-on: ubuntu-latest
-    env: { COVERAGE_THRESHOLD: "80" }
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      COVERAGE_THRESHOLD: "80"
+      BIFROST_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: { go-version-file: go.mod }
       - name: no-cgo build posture
         run: CGO_ENABLED=0 go build ./...
-      - name: race tests + coverage
+      - name: race tests + coverage (incl. live Postgres store backend)
         run: CGO_ENABLED=1 go test -race -covermode=atomic -coverprofile=coverage.txt ./...
       - run: ./scripts/coverage-gate.sh
   vuln:
