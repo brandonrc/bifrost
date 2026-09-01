@@ -50,7 +50,7 @@ package boundaries with an enforced import graph (depguard):
 | mobula-policy | `internal/policy` | Pure functions: resource accounting, cost estimation, quota admission, K8s quantity parsing. No I/O. |
 | mobula-provision | `internal/provision` | The ONLY k8s-aware package. Provisioner interface; spec→manifest translators for KubeRay/Kueue/Dask (typed upstream APIs); EngineRouter. |
 | mobula-controller | `internal/controller` | Store interface (memory/SQLite/Postgres) + level-triggered observation-first reconcile engine, pool reconciler, metering loop. |
-| mobula-auth | `internal/auth` | OIDC discovery/JWKS/RS256 validation, RBAC permission sets, device-code/client-credentials/token-exchange flows, local users + `mob_*` PATs (bcrypt). |
+| mobula-auth | `internal/auth` | OIDC discovery/JWKS/RS256 validation, RBAC permission sets, device-code/client-credentials/token-exchange flows, local users + `bfr_*` PATs (bcrypt). |
 | mobula-api | `internal/api` | REST surface (all frozen-contract operations), auth middleware, **federating Ray Jobs gateway** (Host-based routing, credential strip-and-swap, WS bridge). |
 | mobula-proxy | `internal/proxy` | Standalone-mode single-upstream identity proxy. |
 | mobula-cli | `cmd/bifrost` | Single binary: serve, login, token, exchange. |
@@ -181,7 +181,7 @@ Wave 1 (CRITICAL parity — reqs 3, 6, 7, 8) is **complete**: Tasks 1-16 of
   (`internal/provision/live`, thin and coverage-excluded per this file's
   governance section).
 - **Auth** (T7-T8): OIDC validator + RBAC, device-code/client-credentials/
-  token-exchange flows, local users + `mob_*` PATs.
+  token-exchange flows, local users + `bfr_*` PATs.
 - **API** (T10-T12): the full strict-server surface generated from the
   frozen contract (ADR-0002) — 47/47 operations implemented, every 501
   stub eliminated.

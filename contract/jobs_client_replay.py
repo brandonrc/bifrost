@@ -1,4 +1,4 @@
-"""Contract test: the real Ray JobSubmissionClient against the Mobula gateway.
+"""Contract test: the real Ray JobSubmissionClient against the Bifrost gateway.
 
 This is the drift alarm demanded by PLAN.md gate S4: KubeRay's Go client
 history shows the Jobs API surface moves, so we replay the genuine Python
@@ -7,7 +7,7 @@ poll, full logs, and the websocket log tail — through the gateway fronting a
 real `ray start --head`.
 
 Environment:
-  MOBULA_ADDRESS  gateway base URL as the stock client sees it
+  BIFROST_ADDRESS  gateway base URL as the stock client sees it
                   (default http://demo.ray.test:8484)
   RAY_AUTH_MODE   "token" on the token-auth matrix legs: the stock client
                   then attaches `Authorization: Bearer $RAY_AUTH_TOKEN`
@@ -24,8 +24,8 @@ from pathlib import Path
 import ray
 from ray.job_submission import JobStatus, JobSubmissionClient
 
-MARKER = "mobula-contract-ok"
-ADDRESS = os.environ.get("MOBULA_ADDRESS", "http://demo.ray.test:8484")
+MARKER = "bifrost-contract-ok"
+ADDRESS = os.environ.get("BIFROST_ADDRESS", "http://demo.ray.test:8484")
 TERMINAL = {JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.STOPPED}
 
 
@@ -37,7 +37,7 @@ def main() -> int:
 
     # working_dir forces the runtime-env package path through the gateway:
     # GET /api/packages (existence probe) then PUT /api/packages (upload).
-    workdir = Path(tempfile.mkdtemp(prefix="mobula-contract-"))
+    workdir = Path(tempfile.mkdtemp(prefix="bifrost-contract-"))
     (workdir / "entry.py").write_text(f'print("{MARKER}")\n')
 
     submission_id = client.submit_job(

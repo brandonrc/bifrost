@@ -197,8 +197,9 @@ func TestMintedTokenFormatAndPrefixParsing(t *testing.T) {
 			t.Fatalf("prefix %q not alphanumeric", prefix)
 		}
 	}
-	// mob_<8>_<32 hex>
-	if token[:4+8+1] != "mob_"+prefix+"_" {
+	// <scheme><8>_<32 hex>, read from the constant rather than respelled, so a
+	// future scheme change cannot leave this test asserting the old one.
+	if token[:len(TokenScheme)+8+1] != TokenScheme+prefix+"_" {
 		t.Fatalf("unexpected token shape: %q", token)
 	}
 	if len(token) != 4+8+1+32 {
@@ -210,17 +211,31 @@ func TestMintedTokenFormatAndPrefixParsing(t *testing.T) {
 	}
 
 	// Rejects non-scheme shapes.
-	if _, ok := TokenPrefix("mob_short_hex"); ok {
+	if _, ok := TokenPrefix("bfr_short_hex"); ok {
 		t.Fatal("expected rejection of malformed token")
 	}
 	if _, ok := TokenPrefix("nope_abcd1234_0123456789abcdef0123456789abcdef"); ok {
 		t.Fatal("expected rejection of wrong scheme")
 	}
-	if _, ok := TokenPrefix("mob_abcd1234_0123456789abcdef0123456789abcdeg"); ok {
+	if _, ok := TokenPrefix("bfr_abcd1234_0123456789abcdef0123456789abcdeg"); ok {
 		t.Fatal("expected rejection of non-hex suffix")
 	}
-	if _, ok := TokenPrefix("mob_abcd!234_0123456789abcdef0123456789abcdef"); ok {
+	if _, ok := TokenPrefix("bfr_abcd!234_0123456789abcdef0123456789abcdef"); ok {
 		t.Fatal("expected rejection of non-alphanumeric prefix")
+	}
+
+	// The retired mobula scheme. Renaming the prefix was a hard cutover with no
+	// compatibility window: an old token must not parse, so it can never reach
+	// the store lookup, let alone the bcrypt compare.
+	if _, ok := TokenPrefix("mob_abcd1234_0123456789abcdef0123456789abcdef"); ok {
+		t.Fatal("a retired mob_ token must not be accepted")
+	}
+
+	// And the scheme itself is the new one — asserted directly so a revert of
+	// the constant fails here with an explicit message rather than only as a
+	// shape mismatch above.
+	if TokenScheme != "bfr_" {
+		t.Fatalf("TokenScheme = %q, want %q", TokenScheme, "bfr_")
 	}
 
 	// Two random mints never collide.
@@ -322,7 +337,7 @@ func TestSuccessfulLoginClearsFailuresAndIssuesAWorkingToken(t *testing.T) {
 		t.Fatalf("expected authentication to succeed, got %v", id)
 	}
 	// Garbage and truncated tokens do not.
-	if auth.AuthenticateToken(ctx, "mob_garbage") != nil {
+	if auth.AuthenticateToken(ctx, "bfr_garbage") != nil {
 		t.Fatal("expected garbage token to fail")
 	}
 	if auth.AuthenticateToken(ctx, outcome.Token.Token[:20]) != nil {
@@ -479,7 +494,7 @@ func TestLocalAuthErrorUnwrap(t *testing.T) {
 
 func TestAuthenticateTokenBackendErrorFailsClosed(t *testing.T) {
 	auth := NewLocalAuthenticator(&erroringStore{}, 3600, 90)
-	if id := auth.AuthenticateToken(context.Background(), "mob_abcdefgh_0123456789abcdef0123456789abcdef"); id != nil {
+	if id := auth.AuthenticateToken(context.Background(), "bfr_abcdefgh_0123456789abcdef0123456789abcdef"); id != nil {
 		t.Fatal("expected backend errors to fail closed (nil identity)")
 	}
 }

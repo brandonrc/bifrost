@@ -196,7 +196,7 @@ func secretFixtures() map[string]struct {
 		ExpiresIn: 600, Interval: 5,
 	}
 	px := NewTokenExchangeParams("checkmaite-svc", "CLIENT-SECRET", "SUBJECT-SECRET")
-	mt := MintedToken{Prefix: "abcd1234", Token: "mob_abcd1234_PLAINTEXT-SECRET", TokenHash: "$2b$12$hash"}
+	mt := MintedToken{Prefix: "abcd1234", Token: "bfr_abcd1234_PLAINTEXT-SECRET", TokenHash: "$2b$12$hash"}
 	lo := LoginOutcome{Token: mt, ExpiresAt: 1234, Identity: Identity{Subject: "alice"}}
 
 	return map[string]struct {
@@ -209,10 +209,10 @@ func secretFixtures() map[string]struct {
 		"*DeviceAuthorization": {&da, []string{"DEVICE-SECRET"}},
 		"TokenExchangeParams":  {px, []string{"CLIENT-SECRET", "SUBJECT-SECRET"}},
 		"*TokenExchangeParams": {&px, []string{"CLIENT-SECRET", "SUBJECT-SECRET"}},
-		"MintedToken":          {mt, []string{"mob_abcd1234_PLAINTEXT-SECRET"}},
-		"*MintedToken":         {&mt, []string{"mob_abcd1234_PLAINTEXT-SECRET"}},
-		"LoginOutcome":         {lo, []string{"mob_abcd1234_PLAINTEXT-SECRET"}},
-		"*LoginOutcome":        {&lo, []string{"mob_abcd1234_PLAINTEXT-SECRET"}},
+		"MintedToken":          {mt, []string{"bfr_abcd1234_PLAINTEXT-SECRET"}},
+		"*MintedToken":         {&mt, []string{"bfr_abcd1234_PLAINTEXT-SECRET"}},
+		"LoginOutcome":         {lo, []string{"bfr_abcd1234_PLAINTEXT-SECRET"}},
+		"*LoginOutcome":        {&lo, []string{"bfr_abcd1234_PLAINTEXT-SECRET"}},
 	}
 }
 
@@ -422,34 +422,34 @@ func escape(s string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(s, ":", "%3A"), "/", "%2F")
 }
 
-// The token scheme is mob_ + 8 alphanumerics + _ + 32 hex. Anything else must
+// The token scheme is bfr_ + 8 alphanumerics + _ + 32 hex. Anything else must
 // be refused before it ever reaches a store lookup or a bcrypt.
 func TestTokenPrefixRejectsMalformedTokens(t *testing.T) {
-	valid := "mob_abcd1234_0123456789abcdef0123456789abcdef"
+	valid := "bfr_abcd1234_0123456789abcdef0123456789abcdef"
 	if p, ok := TokenPrefix(valid); !ok || p != "abcd1234" {
 		t.Fatalf("a well-formed token must parse: got %q, %v", p, ok)
 	}
 	// Uppercase is accepted in both halves, matching Rust's
 	// is_ascii_alphanumeric / is_ascii_hexdigit.
-	if _, ok := TokenPrefix("mob_ABCD1234_0123456789ABCDEF0123456789ABCDEF"); !ok {
+	if _, ok := TokenPrefix("bfr_ABCD1234_0123456789ABCDEF0123456789ABCDEF"); !ok {
 		t.Error("uppercase prefix and hex must be accepted (Rust parity)")
 	}
 	for _, bad := range []string{
 		"",
-		"mob_",
-		"mob__",
+		"bfr_",
+		"bfr__",
 		valid[:len(valid)-1], // one byte short
 		valid + "a",          // one byte long
 		"MOB_abcd1234_0123456789abcdef0123456789abcdef", // wrong scheme case
 		"nope_abcd1234_0123456789abcdef0123456789abcde", // wrong scheme
-		"mob_abcd1234-0123456789abcdef0123456789abcdef", // dash for underscore
-		"mob_abcd!234_0123456789abcdef0123456789abcdef", // non-alnum prefix
-		"mob_abcd1234_0123456789abcdef0123456789abcdeg", // non-hex suffix
-		"mob_abcd123\x00_0123456789abcdef0123456789abcdef",
-		" mob_abcd1234_0123456789abcdef0123456789abcdef", // leading space
-		"mob_abcd1234_0123456789abcdef0123456789abcde\n", // trailing newline
-		"mob_mob_1234_0123456789abcdef0123456789abcdef",  // nested scheme
-		"mob_ábcd123_0123456789abcdef0123456789abcdef",   // multi-byte prefix
+		"bfr_abcd1234-0123456789abcdef0123456789abcdef", // dash for underscore
+		"bfr_abcd!234_0123456789abcdef0123456789abcdef", // non-alnum prefix
+		"bfr_abcd1234_0123456789abcdef0123456789abcdeg", // non-hex suffix
+		"bfr_abcd123\x00_0123456789abcdef0123456789abcdef",
+		" bfr_abcd1234_0123456789abcdef0123456789abcdef", // leading space
+		"bfr_abcd1234_0123456789abcdef0123456789abcde\n", // trailing newline
+		"bfr_bfr_1234_0123456789abcdef0123456789abcdef",  // nested scheme
+		"bfr_ábcd123_0123456789abcdef0123456789abcdef",   // multi-byte prefix
 	} {
 		if p, ok := TokenPrefix(bad); ok {
 			t.Errorf("TokenPrefix(%q) accepted, returning %q", bad, p)
@@ -467,7 +467,7 @@ func TestMintedTokensAreUniqueAndUnbiased(t *testing.T) {
 		if err != nil {
 			t.Fatalf("mint: %v", err)
 		}
-		if len(token) != len("mob_")+tokenPrefixLen+1+32 {
+		if len(token) != len("bfr_")+tokenPrefixLen+1+32 {
 			t.Fatalf("wrong token length %d: %q", len(token), token)
 		}
 		if seen[token] {

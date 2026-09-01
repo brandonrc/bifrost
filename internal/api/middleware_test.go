@@ -70,8 +70,8 @@ func TestIsJWTShaped(t *testing.T) {
 	if !isJWTShaped("aaa.bbb.ccc") {
 		t.Error("aaa.bbb.ccc should be JWT-shaped")
 	}
-	if isJWTShaped("mob_abcd1234_0123456789abcdef0123456789abcdef") {
-		t.Error("a mob_ PAT should not be JWT-shaped")
+	if isJWTShaped("bfr_abcd1234_0123456789abcdef0123456789abcdef") {
+		t.Error("a bfr_ PAT should not be JWT-shaped")
 	}
 	if isJWTShaped("garbage") {
 		t.Error("garbage should not be JWT-shaped")
@@ -139,7 +139,7 @@ func TestRequireAuth_InvalidBearerIsDenied(t *testing.T) {
 	local := auth.NewLocalAuthenticator(newFakeUserStore(), 3600, 30)
 	h := RequireAuth(AuthState{Local: local})(okHandler())
 
-	const badToken = "mob_totallybogus_0000000000000000000000000000"
+	const badToken = "bfr_totallybogus_0000000000000000000000000000"
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/clusters", nil)
 	req.Header.Set("Authorization", "Bearer "+badToken)
 	rec := httptest.NewRecorder()

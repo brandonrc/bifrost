@@ -161,9 +161,9 @@ func stateLabel(s *core.ClusterState) string {
 	return s.String()
 }
 
-// renderClusterGauges renders mobula_clusters_total{state} (counts by
+// renderClusterGauges renders bifrost_clusters_total{state} (counts by
 // observed state, "unknown" until the reconcile engine's first observation
-// lands) and mobula_clusters_by_project{project} (counts per spec
+// lands) and bifrost_clusters_by_project{project} (counts per spec
 // project). Both reflect the store as it is — Terminated rows count until
 // the store reaps them. Ported from usage.rs's render_cluster_gauges.
 func renderClusterGauges(clusters []controller.StoredCluster) string {
@@ -175,29 +175,29 @@ func renderClusterGauges(clusters []controller.StoredCluster) string {
 		byProject[c.Spec.Project]++
 	}
 	var b strings.Builder
-	b.WriteString("# HELP mobula_clusters_total Managed clusters by observed state " +
+	b.WriteString("# HELP bifrost_clusters_total Managed clusters by observed state " +
 		"('unknown' before the reconcile engine's first observation).\n" +
-		"# TYPE mobula_clusters_total gauge\n")
+		"# TYPE bifrost_clusters_total gauge\n")
 	states := sortedKeys(byState)
 	for _, st := range states {
-		fmt.Fprintf(&b, "mobula_clusters_total{state=%q} %d\n", promEscape(st), byState[st])
+		fmt.Fprintf(&b, "bifrost_clusters_total{state=%q} %d\n", promEscape(st), byState[st])
 	}
-	b.WriteString("# HELP mobula_clusters_by_project Managed clusters per project.\n" +
-		"# TYPE mobula_clusters_by_project gauge\n")
+	b.WriteString("# HELP bifrost_clusters_by_project Managed clusters per project.\n" +
+		"# TYPE bifrost_clusters_by_project gauge\n")
 	for _, p := range sortedKeys(byProject) {
-		fmt.Fprintf(&b, "mobula_clusters_by_project{project=%q} %d\n", promEscape(p), byProject[p])
+		fmt.Fprintf(&b, "bifrost_clusters_by_project{project=%q} %d\n", promEscape(p), byProject[p])
 	}
 	return b.String()
 }
 
-// renderPoolNominalGauge renders mobula_pool_nominal{pool,resource} (#52):
+// renderPoolNominalGauge renders bifrost_pool_nominal{pool,resource} (#52):
 // each pool's nominal quota, summed across flavors, with the same
 // fail-soft policy as pools.go's poolView.total_nominal. Ported from
 // usage.rs's render_pool_nominal_gauge.
 func renderPoolNominalGauge(pools []controller.StoredPool) string {
 	var b strings.Builder
-	b.WriteString("# HELP mobula_pool_nominal Pool nominal quota per resource, summed " +
-		"across the pool's flavor specs.\n# TYPE mobula_pool_nominal gauge\n")
+	b.WriteString("# HELP bifrost_pool_nominal Pool nominal quota per resource, summed " +
+		"across the pool's flavor specs.\n# TYPE bifrost_pool_nominal gauge\n")
 	for i := range pools {
 		p := &pools[i]
 		sums, unparseable := sumFlavorResources(p.Name, p.Spec.Flavors)
@@ -205,7 +205,7 @@ func renderPoolNominalGauge(pools []controller.StoredPool) string {
 			if unparseable[k] {
 				continue
 			}
-			fmt.Fprintf(&b, "mobula_pool_nominal{pool=%q,resource=%q} %v\n", promEscape(p.Name), promEscape(k), sums[k])
+			fmt.Fprintf(&b, "bifrost_pool_nominal{pool=%q,resource=%q} %v\n", promEscape(p.Name), promEscape(k), sums[k])
 		}
 	}
 	return b.String()
@@ -235,11 +235,11 @@ func renderUsageGauge(samples []controller.UsageSample) string {
 		return keys[i].resource < keys[j].resource
 	})
 	var b strings.Builder
-	b.WriteString("# HELP mobula_pool_resource_usage Latest metered resource usage " +
+	b.WriteString("# HELP bifrost_pool_resource_usage Latest metered resource usage " +
 		"(Kueue reservation ledger or observed-spec estimate).\n" +
-		"# TYPE mobula_pool_resource_usage gauge\n")
+		"# TYPE bifrost_pool_resource_usage gauge\n")
 	for _, k := range keys {
-		fmt.Fprintf(&b, "mobula_pool_resource_usage{pool=%q,project=%q,resource=%q} %v\n",
+		fmt.Fprintf(&b, "bifrost_pool_resource_usage{pool=%q,project=%q,resource=%q} %v\n",
 			promEscape(k.pool), promEscape(k.project), promEscape(k.resource), latest[k])
 	}
 	return b.String()

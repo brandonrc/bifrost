@@ -31,7 +31,7 @@ func TestJwtExp(t *testing.T) {
 	if _, ok := jwtExp(fakeJWT(t, nil)); ok {
 		t.Fatal("jwtExp should be false when the exp claim is absent")
 	}
-	if _, ok := jwtExp("mob_notajwt"); ok {
+	if _, ok := jwtExp("bfr_notajwt"); ok {
 		t.Fatal("jwtExp should be false for an opaque (non-JWT) token")
 	}
 	if _, ok := jwtExp("only.two"); ok {
@@ -47,7 +47,7 @@ func TestStoredTokenAction(t *testing.T) {
 
 	// Opaque local-auth token (no exp claim decodable) — always valid
 	// client-side; the server enforces its lifetime.
-	if got := storedTokenAction(Credentials{AccessToken: "mob_abc123"}, now); got != tokenActionValid {
+	if got := storedTokenAction(Credentials{AccessToken: "bfr_abc123"}, now); got != tokenActionValid {
 		t.Errorf("opaque token: got %v, want valid", got)
 	}
 	// Unexpired JWT — valid.

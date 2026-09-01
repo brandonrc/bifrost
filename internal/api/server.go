@@ -142,7 +142,7 @@ func specHandler() http.HandlerFunc {
 // Local may be nil (dev mode, matching mobula-api's `validator = None`
 // build_router() path) or either/both may be set — mirroring
 // mobula-api's `resolve_identity` dispatch (OIDC for JWT-shaped bearers,
-// local for opaque `mob_*` PATs).
+// local for opaque `bfr_*` PATs).
 type HandlerOptions struct {
 	Validator *auth.Validator
 	Local     *auth.LocalAuthenticator

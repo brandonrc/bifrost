@@ -183,7 +183,7 @@ var postgresSchemaStatements = []string{
 	    failed_logins BIGINT NOT NULL DEFAULT 0,
 	    locked_until  BIGINT
 	)`,
-	// Opaque API tokens (mob_<prefix>_<32 hex>). The 8-char prefix is the
+	// Opaque API tokens (bfr_<prefix>_<32 hex>). The 8-char prefix is the
 	// lookup key; the plaintext token is never stored.
 	`CREATE TABLE IF NOT EXISTS api_tokens (
 	    prefix       TEXT PRIMARY KEY,
