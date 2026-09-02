@@ -1,5 +1,6 @@
 // Package target selects the req.Target for this run from REQ_TARGET:
-// inproc (default) in P0; kind and grace arrive with the cluster target in P2.
+// inproc (default), or kind / grace — the two configurations of the L3
+// cluster target.
 package target
 
 import (
@@ -7,18 +8,22 @@ import (
 	"testing"
 
 	"github.com/brandonrc/bifrost/test/requirements/req"
+	"github.com/brandonrc/bifrost/test/requirements/target/cluster"
 	"github.com/brandonrc/bifrost/test/requirements/target/inproc"
 )
 
 // Get returns the run's target. A fresh inproc target per test keeps tests
-// independent; cluster targets (P2) are shared per process by design.
+// independent; cluster targets are shared per process by design (one
+// deployment, one seeding, one preflight).
 func Get(t testing.TB) req.Target {
 	t.Helper()
 	switch v := os.Getenv("REQ_TARGET"); v {
 	case "", "inproc":
 		return inproc.New(t)
+	case "kind", "grace":
+		return cluster.New(t, v)
 	default:
-		t.Fatalf("REQ_TARGET=%q is not available in this build (P0 ships inproc only)", v)
+		t.Fatalf("REQ_TARGET=%q is not a known target (inproc, kind, grace)", v)
 		return nil
 	}
 }

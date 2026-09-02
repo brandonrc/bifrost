@@ -42,6 +42,12 @@ func (p *fakeProvisioner) Apply(_ context.Context, id core.ClusterId, _ *core.Cl
 		p.clusters[id] = c
 	}
 	c.generation = generation
+	// Apply writes the whole desired spec, and a desired-running spec has
+	// suspend=false: the real KubeRay translator resumes by re-applying
+	// (lifecycleResume's transitional state is provisioning, not a
+	// separate Resume call), so the fake must un-suspend on Apply too or a
+	// resume never converges here while it does on a real cluster.
+	c.suspended = false
 	url := "http://" + string(id) + "-head-svc:8265"
 	return provision.ApplyResponse{Generation: generation, ApiBaseUrl: &url}, nil
 }

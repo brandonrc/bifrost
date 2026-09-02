@@ -95,13 +95,17 @@ func New(t testing.TB) req.Target {
 
 	tg := &target{srv: srv, store: store, principal: "admin", tokens: &sync.Map{}, cancel: cancel, t: t}
 	// Project-scoped assignments are made through the API as admin, so the
-	// seeding itself exercises the real access path.
+	// seeding itself exercises the real access path. dev-a/dev-b hold an
+	// `operator` grant on their project (their local role stays
+	// `developer`): rbac.go makes developers read-only on clusters, so the
+	// self-serve lifecycle a data-science-pack user needs is the
+	// project-operator shape. The cluster target seeds identically.
 	for name, p := range principals {
 		if p.project == "" {
 			continue
 		}
 		body := client.UpsertAssignmentJSONRequestBody{}
-		_ = json.Unmarshal([]byte(fmt.Sprintf(`{"role":"developer","scope":"project:%s"}`, p.project)), &body)
+		_ = json.Unmarshal([]byte(fmt.Sprintf(`{"role":"operator","scope":"project:%s"}`, p.project)), &body)
 		resp, err := tg.API().UpsertAssignmentWithResponse(ctx, name, body)
 		if err != nil || resp.StatusCode()/100 != 2 {
 			t.Fatalf("assign %s: err=%v status=%v body=%s", name, err, statusOf(resp), bodyOf(resp))
