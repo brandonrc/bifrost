@@ -89,6 +89,12 @@ jobs:
     # TODO(pack): check out bifrost-pack and set PACK_CHART once the pack
     # has a remote; test/requirements/pack skips with a recorded reason
     # until then.
+    #
+    # The regenerated matrix is also published as a build artifact (below),
+    # not just diffed against docs/requirements/: on a red run the diff
+    # step is skipped by default (its condition is success()), and without
+    # this the regenerated docs/requirements/ would exist only on the
+    # ephemeral runner's disk, never surfaced to anyone looking at the run.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -100,7 +106,12 @@ jobs:
         if: always()
         run: go run ./test/requirements/cmd/reqreport -in l2.json -lane l2 -out docs/requirements -allow-untested
       - name: Committed matrix must match
+        if: always()
         run: git diff --exit-code -- docs/requirements/
+      - name: Upload regenerated matrix
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: traceability-l2, path: docs/requirements/, if-no-files-found: error }
   nilaway-advisory:
     runs-on: ubuntu-latest
     continue-on-error: true
