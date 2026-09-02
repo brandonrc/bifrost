@@ -15,18 +15,23 @@ import (
 )
 
 // ChartDir resolves the chart: $PACK_CHART, else a sibling checkout.
+// ChartDir is PACK_CHART, explicitly. There is no relative default: a
+// developer whose checkout happens to sit beside bifrost-pack would run the
+// chart tests and regenerate a traceability matrix CI (which has no chart)
+// cannot reproduce — exactly what broke PR #2's L2 job. The matrix must not
+// depend on disk layout.
 func ChartDir(t testing.TB) string {
 	t.Helper()
 	if v := os.Getenv("PACK_CHART"); v != "" {
+		if _, err := os.Stat(filepath.Join(v, "Chart.yaml")); err != nil {
+			t.Fatalf("PACK_CHART=%s has no Chart.yaml: %v", v, err)
+		}
 		return v
 	}
-	p := filepath.Join("..", "..", "..", "..", "bifrost-pack", "chart")
-	if _, err := os.Stat(filepath.Join(p, "Chart.yaml")); err != nil {
-		reason := "bifrost-pack chart not checked out (set PACK_CHART)"
-		t.Log(req.Line{Kind: "skip", Req: 0, Reason: reason}.Format())
-		t.Skipf("bifrost-pack chart not found at %s (set PACK_CHART): %s", p, reason)
-	}
-	return p
+	reason := "bifrost-pack chart not checked out (set PACK_CHART)"
+	t.Log(req.Line{Kind: "skip", Req: 0, Reason: reason}.Format())
+	t.Skip(reason)
+	return ""
 }
 
 func helm(t testing.TB, args ...string) (string, error) {
