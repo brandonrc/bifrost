@@ -8,4 +8,9 @@
 // committed file — drift fails the build (see ADR-0002).
 package api
 
+import _ "embed"
+
 //go:generate go tool oapi-codegen -generate types,std-http,strict-server -package api -o zz_generated_api.go openapi.json
+
+//go:embed openapi.json
+var contractJSON []byte

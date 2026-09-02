@@ -198,6 +198,11 @@ func NewHandler(server StrictServerInterface, opts HandlerOptions) http.Handler 
 	})
 	h := HandlerWithOptions(strict, StdHTTPServerOptions{BaseRouter: mux})
 
+	// Contract validation sits directly on the routes: inside auth (so a
+	// missing token is 401, not 400) and inside the gateway (a cluster
+	// host is never a contract path).
+	h = ValidateRequests(h)
+
 	// The federating gateway sits directly in front of route matching:
 	// a Host matching a registered cluster is proxied here and never
 	// reaches the mux at all, so a cluster hostname can never be

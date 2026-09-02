@@ -337,6 +337,9 @@ func (s *Server) CreateCluster(ctx context.Context, req CreateClusterRequestObje
 	if err := AuthorizeScoped(ctx, s.Store, identity, auth.Write, auth.TargetCluster, body.Spec.Project); err != nil {
 		return nil, err
 	}
+	if !core.IsK8sName(body.Id) {
+		return nil, badRequest("id must be a valid Kubernetes name (RFC 1123 label): " + body.Id)
+	}
 	id := core.ClusterId(body.Id)
 	spec, err := clusterSpecFromWire(&body.Spec)
 	if err != nil {
