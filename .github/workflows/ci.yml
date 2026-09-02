@@ -34,10 +34,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: { go-version-file: go.mod }
-      - name: api codegen drift (ADR-0002 spec-first contract)
+      - name: api + client codegen drift (ADR-0002 spec-first contract)
         run: |
-          go generate ./internal/api/...
-          git diff --exit-code -- internal/api/zz_generated_api.go
+          go generate ./internal/api/... ./pkg/client/...
+          git diff --exit-code -- internal/api/zz_generated_api.go pkg/client/zz_generated_client.go
       - name: no-cgo build posture
         run: CGO_ENABLED=0 go build ./...
       - name: race tests + coverage (incl. live Postgres store backend)
