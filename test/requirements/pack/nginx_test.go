@@ -26,4 +26,8 @@ func TestDashboardNginxResolvesUpstreamAtRequestTime(t *testing.T) {
 	mustContain(t, out, "default.conf.template", "the conf must ship as a template so the image's envsubst renders it at boot")
 	mustContain(t, out, "/etc/nginx/templates", "the template must be mounted where the image's entrypoint looks")
 	mustContain(t, out, "NGINX_ENVSUBST_FILTER", "envsubst must be restricted to NGINX_* or it will clobber nginx's own $variables")
+	// The image exports NGINX_LOCAL_RESOLVERS only behind this opt-in; the
+	// first rollout of the template on Grace (release revision 8) missed it
+	// and nginx died on the literal "${NGINX_LOCAL_RESOLVERS}".
+	mustContain(t, out, "NGINX_ENTRYPOINT_LOCAL_RESOLVERS", "the entrypoint's resolver export is opt-in; without it the resolver directive is rendered literally and nginx refuses to start")
 }
