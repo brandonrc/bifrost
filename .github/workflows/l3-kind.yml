@@ -1,0 +1,108 @@
+# L3: the requirement suite against real Kubernetes with an enforcing CNI
+# (spec §3). Nightly, on demand, and on pull requests that touch what it
+# exercises. Not merge-blocking (spec §3 — L2 is); its traceability matrix is
+# published as an artifact, not committed.
+name: l3-kind
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - "test/requirements/**"
+      - "internal/provision/**"
+      - "internal/controller/**"
+      - "internal/app/**"
+      - "cmd/bifrost/**"
+      - "Dockerfile"
+      - ".github/workflows/l3-kind.yml"
+jobs:
+  kind-calico:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      KIND_CLUSTER: bifrost-l3
+      BIFROST_URL: http://127.0.0.1:8484
+      BIFROST_ADMIN_PASSWORD: kind-l3-admin-0123456789   # test/requirements/target/cluster/kind/manifests.yaml
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+
+      - name: Build the control-plane image
+        run: docker build -t bifrost:l3 --build-arg VERSION=l3-${GITHUB_SHA::7} .
+
+      - name: Create kind cluster (no default CNI)
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: ${{ env.KIND_CLUSTER }}
+          config: test/requirements/target/cluster/kind/kind-calico.yaml
+
+      - name: Install Calico
+        run: |
+          kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.2/manifests/tigera-operator.yaml
+          kubectl wait --for condition=established crd/installations.operator.tigera.io --timeout=120s
+          kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.2/manifests/custom-resources.yaml
+          for i in $(seq 1 60); do
+            if kubectl get tigerastatus calico -o jsonpath='{.status.conditions[?(@.type=="Available")].status}' 2>/dev/null | grep -q True; then
+              echo "Calico available"; break
+            fi
+            echo "  waiting for Calico ($i/60)"; sleep 5
+          done
+          kubectl wait --for=condition=ready node --all --timeout=180s
+
+      - name: Load the image and pre-pull the Ray image on the node
+        run: |
+          kind load docker-image bifrost:l3 --name "$KIND_CLUSTER"
+          # rayproject/ray is large; start the pull now so the first cluster
+          # create does not spend its convergence budget downloading it.
+          docker exec -d "${KIND_CLUSTER}-control-plane" crictl pull rayproject/ray:2.56.0
+          docker exec -d "${KIND_CLUSTER}-control-plane" crictl pull registry.k8s.io/e2e-test-images/agnhost:2.45
+
+      - uses: azure/setup-helm@v4
+
+      - name: Install KubeRay and Kueue
+        run: |
+          helm repo add kuberay https://ray-project.github.io/kuberay-helm/
+          helm install kuberay-operator kuberay/kuberay-operator --version 1.7.0 \
+            -n kuberay --create-namespace --wait --timeout 4m
+          helm install kueue oci://registry.k8s.io/kueue/charts/kueue --version 0.19.2 \
+            -n kueue-system --create-namespace --wait --timeout 4m
+
+      - name: Deploy Bifrost
+        run: |
+          kubectl apply -f test/requirements/target/cluster/kind/manifests.yaml
+          kubectl -n bifrost rollout status deploy/bifrost --timeout=180s
+          for i in $(seq 1 30); do curl -sf "$BIFROST_URL/healthz" && break; sleep 2; done
+          curl -sf "$BIFROST_URL/api/v1/version"
+
+      - name: L3 requirement suite
+        id: suite
+        env:
+          REQ_TARGET: kind
+          REQ_CONTROL_PLANE_SELECTOR: app.kubernetes.io/name=bifrost-pack
+        run: |
+          # One run id for every package (-p 1 runs them one at a time), so
+          # preflight's leaked-cluster check and postflight's sweep agree.
+          export REQ_RUN_ID="t$(printf '%x' "$GITHUB_RUN_ID")"
+          CGO_ENABLED=1 go test -race -count=1 -p 1 -timeout 40m -json ./test/requirements/... > l3.json
+      - name: Traceability (L3 lane)
+        if: always()
+        run: go run ./test/requirements/cmd/reqreport -in l3.json -lane l3 -out l3-report -allow-untested
+
+      - name: Cluster state on failure
+        if: failure()
+        run: |
+          kubectl get all,networkpolicy -A -o wide || true
+          kubectl -n bifrost get rayclusters -o yaml || true
+          kubectl -n bifrost logs deploy/bifrost --tail=400 || true
+          kubectl -n kuberay logs deploy/kuberay-operator --tail=200 || true
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: l3-kind
+          path: |
+            l3.json
+            l3-report/
+          if-no-files-found: error

@@ -21,3 +21,19 @@ ratchet: cover
 	go run ./test/requirements/cmd/covreport -profile coverage.txt -update
 lint:
 	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2 run
+
+# L3: the requirement suite against a live cluster (test/requirements/target/cluster).
+# TARGET=kind needs BIFROST_URL/BIFROST_ADMIN_PASSWORD/KUBECONFIG for a kind
+# cluster deployed from test/requirements/target/cluster/kind (see
+# .github/workflows/l3-kind.yml for the full recipe). TARGET=grace ships the
+# binaries to grace and runs them there (scripts/l3-grace.sh).
+TARGET ?= kind
+test-l3:
+ifeq ($(TARGET),grace)
+	scripts/l3-grace.sh l3-grace.json
+else
+	CGO_ENABLED=1 REQ_TARGET=$(TARGET) REQ_RUN_ID=$${REQ_RUN_ID:-t$$(printf '%x' $$(date +%s))} \
+	  go test -race -count=1 -p 1 -timeout 45m -json ./test/requirements/... > l3-$(TARGET).json; test_status=$$?; \
+	go run ./test/requirements/cmd/reqreport -in l3-$(TARGET).json -lane l3 -out l3-report -allow-untested; \
+	exit $$test_status
+endif
