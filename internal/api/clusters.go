@@ -337,10 +337,19 @@ func (s *Server) CreateCluster(ctx context.Context, req CreateClusterRequestObje
 	if err := AuthorizeScoped(ctx, s.Store, identity, auth.Write, auth.TargetCluster, body.Spec.Project); err != nil {
 		return nil, err
 	}
+	if !core.IsK8sName(body.Id) {
+		return nil, badRequest("id must be a valid Kubernetes name (RFC 1123 label): " + body.Id)
+	}
 	id := core.ClusterId(body.Id)
 	spec, err := clusterSpecFromWire(&body.Spec)
 	if err != nil {
 		return nil, err
+	}
+	// Administrator's allowlist (requirement 7): image and worker cap.
+	// Checked before quota so a refused image never counts against anything.
+	if aerr := s.Admission.Check(&spec); aerr != nil {
+		s.denyCreate(ctx, identity, body.Id, aerr.reason, http.StatusBadRequest)
+		return nil, badRequest(aerr.message)
 	}
 	// Tier-2 owned session clusters: the authenticated caller is always
 	// the recorded owner, overriding any client-supplied value — the body
@@ -568,21 +577,32 @@ var (
 )
 
 // lifecycleCommand is the shared implementation of the suspend/resume
-// routes: authorization (global Write on Cluster — NOT project-scoped,
-// matching clusters.rs verbatim), the Kueue queue-owned-suspend guard
-// (ADR-0010), and the observed-state transition-legality check
+// routes: authorization, the Kueue queue-owned-suspend guard (ADR-0010),
+// and the observed-state transition-legality check
 // (core.ClusterState.CanTransitionTo). Returns nil on success (the desired
 // state was flipped) or an *HTTPError describing the refusal.
+//
+// Authorization is Write on Cluster scoped to the cluster's project — the
+// same rule create and delete apply. clusters.rs demanded GLOBAL write
+// here, which the port carried over verbatim; on grace (2026-09-02) that
+// meant the project operator who had just created a cluster got 403 from
+// the suspend/resume buttons bifrost-jupyter shows exactly that user. The
+// record is fetched first so the scope is known; a caller with no read on
+// the cluster still sees 404 or 403 — the same two answers get_cluster gives.
 func (s *Server) lifecycleCommand(ctx context.Context, identity *auth.Identity, id core.ClusterId, cmd lifecycleCmd) error {
-	if err := Authorize(ctx, s.Store, identity, auth.Write, auth.TargetCluster); err != nil {
-		return err
-	}
 	cluster, err := s.Store.Get(ctx, id)
 	if err != nil {
 		return wrapStoreErr(err)
 	}
 	if cluster == nil {
+		// Existence is not revealed to callers without global write.
+		if aerr := Authorize(ctx, s.Store, identity, auth.Write, auth.TargetCluster); aerr != nil {
+			return aerr
+		}
 		return notFound("no such cluster")
+	}
+	if err := AuthorizeScoped(ctx, s.Store, identity, auth.Write, auth.TargetCluster, cluster.Spec.Project); err != nil {
+		return err
 	}
 	idStr := id.String()
 

@@ -1,0 +1,327 @@
+package cluster
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"regexp"
+	"strings"
+	"time"
+
+	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/kubernetes"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+	ctrlconfig "sigs.k8s.io/controller-runtime/pkg/client/config"
+
+	"github.com/brandonrc/bifrost/test/requirements/req"
+)
+
+// clusterIDLabel is the label the control plane stamps on every object it
+// owns (spec §1.4); postflight sweeps by it.
+const clusterIDLabel = "bifrost.dev/cluster-id"
+
+type k8sHandle struct {
+	raw       ctrlclient.Client
+	guarded   ctrlclient.Client
+	clientset kubernetes.Interface
+	ns        string
+}
+
+// newK8s resolves the kubeconfig the way the control plane does
+// (controller-runtime's GetConfig), checks the current context against the
+// target's allowlist, and builds the raw + guarded clients. Returns
+// (nil, nil) when no kubeconfig resolves at all: the lane then runs API-only
+// and every k8s-needing test skips with a recorded reason.
+func newK8s(ns string, contexts []string) (*k8sHandle, error) {
+	cfg, err := ctrlconfig.GetConfig()
+	if err != nil {
+		return nil, nil //nolint:nilnil // documented: no kubeconfig = no K8s()
+	}
+	if err := checkContext(contexts); err != nil {
+		return nil, err
+	}
+	sch := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(sch); err != nil {
+		return nil, err
+	}
+	if err := rayv1.AddToScheme(sch); err != nil {
+		return nil, err
+	}
+	raw, err := ctrlclient.New(cfg, ctrlclient.Options{Scheme: sch})
+	if err != nil {
+		return nil, fmt.Errorf("controller-runtime client: %w", err)
+	}
+	cs, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("clientset: %w", err)
+	}
+	return &k8sHandle{
+		raw:       raw,
+		guarded:   &guarded{Client: raw, run: req.RunID()},
+		clientset: cs,
+		ns:        ns,
+	}, nil
+}
+
+// checkContext refuses a kubeconfig whose current context is not on the
+// target's allowlist (spec §6): REQ_TARGET=kind against a production
+// kubeconfig must not run.
+func checkContext(allow []string) error {
+	rules := clientcmd.NewDefaultClientConfigLoadingRules()
+	rawCfg, err := rules.Load()
+	if err != nil {
+		// In-cluster or otherwise context-less configs have nothing to check.
+		if _, icErr := rest.InClusterConfig(); icErr == nil {
+			return nil
+		}
+		return fmt.Errorf("loading kubeconfig: %w", err)
+	}
+	cur := rawCfg.CurrentContext
+	if cur == "" {
+		if _, icErr := rest.InClusterConfig(); icErr == nil {
+			return nil
+		}
+		return errors.New("kubeconfig has no current context")
+	}
+	for _, pat := range allow {
+		if regexp.MustCompile(pat).MatchString(cur) {
+			return nil
+		}
+	}
+	return fmt.Errorf("kubeconfig context %q is not on this target's allowlist %v (targets.yaml)", cur, allow)
+}
+
+// guarded wraps a controller-runtime client so that a test can mutate only
+// objects that belong to its run: a bifrost.dev/cluster-id carrying the run
+// prefix, or the req.RunLabel the runner stamps on probe objects. Reads are
+// unrestricted. This is the "Never" clause of spec §6 made mechanical.
+type guarded struct {
+	ctrlclient.Client
+	run string
+}
+
+func (g *guarded) owned(obj ctrlclient.Object) error {
+	l := obj.GetLabels()
+	if strings.HasPrefix(l[clusterIDLabel], g.run+"-") || l[req.RunLabel] == g.run {
+		return nil
+	}
+	return fmt.Errorf("refusing to mutate %s/%s: it does not belong to run %s (labels %v)",
+		obj.GetNamespace(), obj.GetName(), g.run, l)
+}
+
+func (g *guarded) Create(ctx context.Context, obj ctrlclient.Object, opts ...ctrlclient.CreateOption) error {
+	if err := g.owned(obj); err != nil {
+		return err
+	}
+	return g.Client.Create(ctx, obj, opts...)
+}
+
+func (g *guarded) Delete(ctx context.Context, obj ctrlclient.Object, opts ...ctrlclient.DeleteOption) error {
+	if err := g.owned(obj); err != nil {
+		return err
+	}
+	return g.Client.Delete(ctx, obj, opts...)
+}
+
+func (g *guarded) Update(ctx context.Context, obj ctrlclient.Object, opts ...ctrlclient.UpdateOption) error {
+	if err := g.owned(obj); err != nil {
+		return err
+	}
+	return g.Client.Update(ctx, obj, opts...)
+}
+
+func (g *guarded) Patch(ctx context.Context, obj ctrlclient.Object, patch ctrlclient.Patch, opts ...ctrlclient.PatchOption) error {
+	if err := g.owned(obj); err != nil {
+		return err
+	}
+	return g.Client.Patch(ctx, obj, patch, opts...)
+}
+
+func (g *guarded) DeleteAllOf(context.Context, ctrlclient.Object, ...ctrlclient.DeleteAllOfOption) error {
+	return errors.New("DeleteAllOf is never allowed from a requirement test")
+}
+
+// postflight reaps the run's probe objects and waits until no RayCluster,
+// pod or NetworkPolicy still carries the run's labels. Leftovers are the
+// error — the run leaked, and a human looks before the next run.
+func (h *k8sHandle) postflight(ctx context.Context, prefix, probeNS string) error {
+	runSel := ctrlclient.MatchingLabels{req.RunLabel: req.RunID()}
+	for _, ns := range uniq(h.ns, probeNS) {
+		var pods corev1.PodList
+		if err := h.raw.List(ctx, &pods, ctrlclient.InNamespace(ns), runSel); err == nil {
+			for i := range pods.Items {
+				_ = h.raw.Delete(ctx, &pods.Items[i], ctrlclient.GracePeriodSeconds(0))
+			}
+		}
+		var nps networkingv1.NetworkPolicyList
+		if err := h.raw.List(ctx, &nps, ctrlclient.InNamespace(ns), runSel); err == nil {
+			for i := range nps.Items {
+				_ = h.raw.Delete(ctx, &nps.Items[i])
+			}
+		}
+	}
+
+	var left []string
+	err := wait.PollUntilContextTimeout(ctx, 3*time.Second, 3*time.Minute, true, func(ctx context.Context) (bool, error) {
+		left = left[:0]
+		var rcs rayv1.RayClusterList
+		if err := h.raw.List(ctx, &rcs, ctrlclient.InNamespace(h.ns)); err != nil {
+			return false, err
+		}
+		for _, rc := range rcs.Items {
+			if strings.HasPrefix(rc.Labels[clusterIDLabel], prefix) || strings.HasPrefix(rc.Name, prefix) {
+				left = append(left, "raycluster/"+rc.Name)
+			}
+		}
+		var pods corev1.PodList
+		if err := h.raw.List(ctx, &pods, ctrlclient.InNamespace(h.ns)); err != nil {
+			return false, err
+		}
+		for _, p := range pods.Items {
+			if strings.HasPrefix(p.Labels[clusterIDLabel], prefix) || strings.HasPrefix(p.Labels["ray.io/cluster"], prefix) {
+				left = append(left, "pod/"+p.Name)
+			}
+		}
+		var nps networkingv1.NetworkPolicyList
+		if err := h.raw.List(ctx, &nps, ctrlclient.InNamespace(h.ns)); err != nil {
+			return false, err
+		}
+		for _, np := range nps.Items {
+			if strings.HasPrefix(np.Labels[clusterIDLabel], prefix) || strings.HasPrefix(strings.TrimPrefix(np.Name, "bifrost-cluster-"), prefix) {
+				left = append(left, "networkpolicy/"+np.Name)
+			}
+		}
+		for _, ns := range uniq(h.ns, probeNS) {
+			var probes corev1.PodList
+			if err := h.raw.List(ctx, &probes, ctrlclient.InNamespace(ns), runSel); err != nil {
+				return false, err
+			}
+			for _, p := range probes.Items {
+				left = append(left, "probe-pod/"+ns+"/"+p.Name)
+			}
+		}
+		return len(left) == 0, nil
+	})
+	if err != nil {
+		return fmt.Errorf("run %s left objects behind: %v (%v)", req.RunID(), left, err)
+	}
+	return nil
+}
+
+func uniq(a, b string) []string {
+	if a == b {
+		return []string{a}
+	}
+	return []string{a, b}
+}
+
+// restart deletes the control-plane pods matched by selector and waits
+// until a pod that did not exist before is Ready.
+func (h *k8sHandle) restart(ctx context.Context, selector string) error {
+	sel, err := labels.Parse(selector)
+	if err != nil {
+		return fmt.Errorf("control-plane selector %q: %w", selector, err)
+	}
+	var before corev1.PodList
+	if err := h.raw.List(ctx, &before, ctrlclient.InNamespace(h.ns), ctrlclient.MatchingLabelsSelector{Selector: sel}); err != nil {
+		return err
+	}
+	if len(before.Items) == 0 {
+		return fmt.Errorf("no control-plane pods match %q in %s", selector, h.ns)
+	}
+	old := map[string]bool{}
+	for i := range before.Items {
+		old[before.Items[i].Name] = true
+		if err := h.raw.Delete(ctx, &before.Items[i]); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete %s: %w", before.Items[i].Name, err)
+		}
+	}
+	return wait.PollUntilContextTimeout(ctx, 2*time.Second, 3*time.Minute, true, func(ctx context.Context) (bool, error) {
+		var now corev1.PodList
+		if err := h.raw.List(ctx, &now, ctrlclient.InNamespace(h.ns), ctrlclient.MatchingLabelsSelector{Selector: sel}); err != nil {
+			return false, nil //nolint:nilerr // transient API errors during restart are expected
+		}
+		for _, p := range now.Items {
+			if old[p.Name] {
+				continue
+			}
+			for _, c := range p.Status.Conditions {
+				if c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue {
+					return true, nil
+				}
+			}
+		}
+		return false, nil
+	})
+}
+
+// runPod creates the probe pod, waits (to Running when Detach, else to a
+// terminal phase), collects logs, and — for run-to-completion pods —
+// deletes it. Detached pods are reaped by postflight.
+func (h *k8sHandle) runPod(ctx context.Context, spec req.PodSpec) (req.PodResult, error) {
+	name := req.Name("probe-" + fmt.Sprintf("%x", time.Now().UnixNano()%0xfffff))
+	lbl := map[string]string{req.RunLabel: req.RunID(), "app.kubernetes.io/name": "bifrost-req-probe"}
+	for k, v := range spec.Labels {
+		lbl[k] = v
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: spec.Namespace, Labels: lbl},
+		Spec: corev1.PodSpec{
+			RestartPolicy: corev1.RestartPolicyNever,
+			Containers: []corev1.Container{{
+				Name:    "probe",
+				Image:   spec.Image,
+				Command: spec.Command,
+			}},
+		},
+	}
+	if err := h.raw.Create(ctx, pod); err != nil {
+		return req.PodResult{}, fmt.Errorf("create probe pod: %w", err)
+	}
+	res := req.PodResult{Name: name}
+	var phase corev1.PodPhase
+	err := wait.PollUntilContextTimeout(ctx, 2*time.Second, spec.Timeout, true, func(ctx context.Context) (bool, error) {
+		var cur corev1.Pod
+		if err := h.raw.Get(ctx, ctrlclient.ObjectKey{Namespace: spec.Namespace, Name: name}, &cur); err != nil {
+			return false, nil //nolint:nilerr // keep polling through transient errors
+		}
+		phase = cur.Status.Phase
+		res.IP = cur.Status.PodIP
+		if spec.Detach {
+			return phase == corev1.PodRunning && res.IP != "", nil
+		}
+		return phase == corev1.PodSucceeded || phase == corev1.PodFailed, nil
+	})
+	if !spec.Detach || err != nil {
+		res.Logs = h.logs(ctx, spec.Namespace, name)
+	}
+	if err != nil {
+		return res, fmt.Errorf("probe pod %s: phase=%s: %w\n%s", name, phase, err, res.Logs)
+	}
+	res.Succeeded = spec.Detach || phase == corev1.PodSucceeded
+	if !spec.Detach {
+		_ = h.raw.Delete(ctx, pod, ctrlclient.GracePeriodSeconds(0))
+	}
+	return res, nil
+}
+
+func (h *k8sHandle) logs(ctx context.Context, ns, name string) string {
+	rc, err := h.clientset.CoreV1().Pods(ns).GetLogs(name, &corev1.PodLogOptions{}).Stream(ctx)
+	if err != nil {
+		return "(logs unavailable: " + err.Error() + ")"
+	}
+	defer func() { _ = rc.Close() }()
+	b, _ := io.ReadAll(io.LimitReader(rc, 64<<10))
+	return string(b)
+}

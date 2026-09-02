@@ -213,13 +213,19 @@ func (s *SqliteStore) UpsertDesired(ctx context.Context, id core.ClusterId, spec
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	var revive bool
 	generation, err := func() (uint64, error) {
-		var curJSON string
+		var curJSON, curDesired string
 		var curGen int64
-		err := tx.QueryRowContext(ctx, "SELECT spec_json, generation FROM clusters WHERE id = ?", string(id)).
-			Scan(&curJSON, &curGen)
+		err := tx.QueryRowContext(ctx, "SELECT spec_json, generation, desired FROM clusters WHERE id = ?", string(id)).
+			Scan(&curJSON, &curGen, &curDesired)
 		switch {
 		case err == nil:
+			if curDesired == DesiredTerminated.AsStr() {
+				// Store.UpsertDesired: a terminated record is re-created.
+				revive = true
+				return uint64(curGen) + 1, nil
+			}
 			var cur core.ClusterSpec
 			if uerr := json.Unmarshal([]byte(curJSON), &cur); uerr != nil {
 				return 0, jsonErr(uerr)
@@ -245,13 +251,22 @@ func (s *SqliteStore) UpsertDesired(ctx context.Context, id core.ClusterId, spec
 	// Keep desired/observed/condition/backoff/created_at on update (not in
 	// the DO UPDATE SET list); default desired='running', observed_generation=0
 	// on insert.
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO clusters (id, spec_json, generation, desired, observed_generation, created_at)
-		VALUES (?, ?, ?, 'running', 0, ?)
-		ON CONFLICT(id) DO UPDATE SET
-			spec_json = excluded.spec_json,
-			generation = excluded.generation
-	`, string(id), string(specJSON), int64(generation), int64(NowUnix()))
+	if revive {
+		_, err = tx.ExecContext(ctx, `
+			UPDATE clusters SET spec_json = ?, generation = ?, desired = 'running',
+				observed_state = NULL, observed_generation = 0, condition = NULL,
+				failure_count = 0, next_attempt_at = 0, created_at = ?, terminated_at = NULL
+			WHERE id = ?
+		`, string(specJSON), int64(generation), int64(NowUnix()), string(id))
+	} else {
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO clusters (id, spec_json, generation, desired, observed_generation, created_at)
+			VALUES (?, ?, ?, 'running', 0, ?)
+			ON CONFLICT(id) DO UPDATE SET
+				spec_json = excluded.spec_json,
+				generation = excluded.generation
+		`, string(id), string(specJSON), int64(generation), int64(NowUnix()))
+	}
 	if err != nil {
 		return 0, storeErrorf("upsert cluster: %v", err)
 	}

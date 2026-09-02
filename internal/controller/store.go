@@ -617,6 +617,14 @@ type Store interface {
 	// UpsertDesired creates or updates a cluster's desired spec. Returns
 	// the (possibly bumped) generation. Generation only advances when the
 	// spec actually changes.
+	// UpsertDesired records the desired spec. On a live record (desired
+	// running/suspended) it keeps desired, observed state, backoff and
+	// created_at: a spec edit is not a restart. On a TERMINATED record it
+	// is a fresh create — desired back to running, observed state and
+	// backoff cleared, created_at now, terminated_at cleared, generation
+	// bumped — because a create that answers 201 and leaves a terminated
+	// zombie behind is the one thing a caller cannot recover from (found on
+	// grace 2026-09-02 when a test reused an id).
 	UpsertDesired(ctx context.Context, id core.ClusterId, spec core.ClusterSpec) (uint64, error)
 
 	Get(ctx context.Context, id core.ClusterId) (*StoredCluster, error)

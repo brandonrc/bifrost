@@ -1,6 +1,12 @@
 /bifrost
 *.out
 coverage.txt
+l2.json
 dist/
 .superpowers/
 .claude/worktrees/
+
+# L3 lane scratch (scripts/l3-grace.sh, make test-l3)
+.l3/
+l3-*.json
+l3-report/

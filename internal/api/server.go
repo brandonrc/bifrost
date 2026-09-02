@@ -65,6 +65,12 @@ type Server struct {
 	// only until the store holds a policy row — see effectivePolicy in
 	// settings.go.
 	PolicySeed PolicyConfig
+	// Admission is the platform administrator's allowlist for what a
+	// self-serve cluster may ask for (requirement 7): image prefixes and a
+	// worker cap. Zero value = no restriction. Set from `serve` flags; the
+	// frozen contract has no operation to edit it, so it is deployment
+	// configuration, not API state.
+	Admission Admission
 
 	// Local is the local (IdP-free) authenticator (ADR-0011), when local
 	// auth is enabled — login.go/local_auth.go's login/tokens/logout/user-
@@ -197,6 +203,11 @@ func NewHandler(server StrictServerInterface, opts HandlerOptions) http.Handler 
 		ResponseErrorHandlerFunc: WriteError,
 	})
 	h := HandlerWithOptions(strict, StdHTTPServerOptions{BaseRouter: mux})
+
+	// Contract validation sits directly on the routes: inside auth (so a
+	// missing token is 401, not 400) and inside the gateway (a cluster
+	// host is never a contract path).
+	h = ValidateRequests(h)
 
 	// The federating gateway sits directly in front of route matching:
 	// a Host matching a registered cluster is proxied here and never

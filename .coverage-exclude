@@ -1,0 +1,6 @@
+/cmd/
+internal/provision/live
+internal/controller/storetest
+internal/api/zz_generated_api.go
+pkg/client/zz_generated_client.go
+test/requirements/

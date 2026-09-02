@@ -1,0 +1,18 @@
+# The L3 targets. REQ_TARGET selects one; the kubeconfig's current context
+# must match one of `contexts` (spec §6 preflight) or the run refuses.
+#
+# capabilities:
+#   calico    the CNI enforces NetworkPolicy (isolation tests are meaningful)
+#   probes    tests may run probe pods in the consumer namespace
+#   restart   tests may kill the control-plane pod and watch it recover
+#   consumers the real consumer packs (data-science-pack, checkmaite) are present
+kind:
+  namespace: bifrost
+  probeNamespace: jupyter
+  contexts: ["^kind-"]
+  capabilities: [calico, probes, restart]
+grace:
+  namespace: bifrost
+  probeNamespace: jupyter
+  contexts: ["^microk8s$", "^grace$"]
+  capabilities: [calico, probes, restart, consumers]

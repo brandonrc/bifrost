@@ -351,7 +351,7 @@ func containerImage(tmpl *corev1.PodTemplateSpec) (string, bool) {
 }
 
 func headGroupSpec(id string, spec *core.ClusterSpec, generation *uint64) (rayv1.HeadGroupSpec, error) {
-	tmpl, err := podTemplate(id, "ray-head", spec.Image, spec.HeadCpu, spec.HeadMemory, nil, generation, spec.Owner)
+	tmpl, err := podTemplate(id, HeadContainerName, spec.Image, spec.HeadCpu, spec.HeadMemory, nil, generation, spec.Owner)
 	if err != nil {
 		return rayv1.HeadGroupSpec{}, err
 	}
@@ -365,7 +365,7 @@ func workerGroupSpec(id string, g *core.WorkerGroup, image string, autoscaling b
 	// Workers run the cluster image (Kubernetes requires an image on
 	// every container; KubeRay does NOT copy the head image onto worker
 	// groups, so an empty image would be rejected).
-	tmpl, err := podTemplate(id, "ray-worker", image, g.Cpu, g.Memory, g.Gpu, generation, owner)
+	tmpl, err := podTemplate(id, WorkerContainerName, image, g.Cpu, g.Memory, g.Gpu, generation, owner)
 	if err != nil {
 		return rayv1.WorkerGroupSpec{}, err
 	}
@@ -383,6 +383,47 @@ func workerGroupSpec(id string, g *core.WorkerGroup, image string, autoscaling b
 		ws.Replicas = ptr.To(int32(g.Replicas))
 	}
 	return ws, nil
+}
+
+// HeadContainerName / WorkerContainerName are the container names KubeRay
+// also uses; podTemplate keys the probe shape on them.
+const (
+	HeadContainerName   = "ray-head"
+	WorkerContainerName = "ray-worker"
+)
+
+// rayHealthScript is the probe body: exit 0 when every endpoint answers
+// "success". Timeouts mirror KubeRay's defaults (2 s raylet, 10 s GCS).
+const rayHealthScript = `import sys, urllib.request
+def ok(url, t):
+    try:
+        return b"success" in urllib.request.urlopen(url, timeout=t).read()
+    except Exception:
+        return False
+checks = [ok("http://localhost:52365/api/local_raylet_healthz", 2)]
+if len(sys.argv) > 1 and sys.argv[1] == "head":
+    checks.append(ok("http://localhost:8265/api/gcs_healthz", 10))
+sys.exit(0 if all(checks) else 1)
+`
+
+// rayProbe is the liveness/readiness probe for a Ray node: raylet health on
+// every node, GCS health on the head as well. Timing matches KubeRay's
+// defaults (initial 30 s, period 5 s, timeout 5 s, 120 failures) so the
+// convergence behaviour operators already know is unchanged; only the
+// command differs — python, which every Ray image has, instead of wget.
+func rayProbe(head bool) *corev1.Probe {
+	args := []string{"python", "-c", rayHealthScript}
+	if head {
+		args = append(args, "head")
+	}
+	return &corev1.Probe{
+		ProbeHandler:        corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: args}},
+		InitialDelaySeconds: 30,
+		PeriodSeconds:       5,
+		TimeoutSeconds:      5,
+		SuccessThreshold:    1,
+		FailureThreshold:    120,
+	}
 }
 
 func podTemplate(clusterID, containerName, image, cpu, memory string, gpu *string, generation *uint64, owner *string) (corev1.PodTemplateSpec, error) {
@@ -408,6 +449,15 @@ func podTemplate(clusterID, containerName, image, cpu, memory string, gpu *strin
 		Name:      containerName,
 		Resources: corev1.ResourceRequirements{Limits: limits, Requests: requests},
 	}
+	// Explicit probes, so KubeRay does not inject its defaults. KubeRay's
+	// default probes shell out to `wget`, and a Ray image without it (any
+	// slim environment image; the checkmaite Ray image on grace) runs Ray
+	// perfectly and is killed by the liveness probe every ~10 minutes
+	// (docs/defects/2026-09-02-health-probes-assume-wget.md). Every Ray image
+	// has the Python that runs Ray, so the probes ask Ray's own health
+	// endpoints through it: the raylet on every node, plus GCS on the head.
+	container.LivenessProbe = rayProbe(containerName == HeadContainerName)
+	container.ReadinessProbe = rayProbe(containerName == HeadContainerName)
 	// Both head and workers carry the cluster image; only omitted if a
 	// caller passes empty (KubeRay then applies its default).
 	if image != "" {

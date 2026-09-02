@@ -1,0 +1,16 @@
+# kind config for the L3 lane. kindnet does not enforce NetworkPolicy, so
+# the default CNI is disabled and Calico is installed by the workflow
+# (lifted from rayserve-pack's netpol job). The port mapping exposes the
+# control plane's NodePort as http://127.0.0.1:8484 on the runner, which
+# survives the control-plane pod being killed — a port-forward would not.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  disableDefaultCNI: true
+  podSubnet: 192.168.0.0/16   # Calico's default IP pool
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30484
+        hostPort: 8484
+        protocol: TCP

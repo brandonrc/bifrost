@@ -1,0 +1,20 @@
+# The 18 rows of the Ray Software Pack requirement table (docs/SPEC.md).
+# req.Covers validates against this; reqreport renders from it. One source.
+- {n: 1,  priority: CRITICAL, title: "Deploy models from within Jupyter"}
+- {n: 2,  priority: HIGH,     title: "Groups share models privately"}
+- {n: 3,  priority: HIGH,     title: "RBAC for model serving and cluster access; direct Ray Serve/dashboard/Jobs/GCS access blocked"}
+- {n: 4,  priority: CRITICAL, title: "Serving in separate resource pool from compute clusters"}
+- {n: 5,  priority: CRITICAL, title: "UI runs jobs via ephemeral RayJob"}
+- {n: 6,  priority: CRITICAL, title: "Self-serve private clusters (dask-gateway UX)"}
+- {n: 7,  priority: CRITICAL, title: "Group admins control profiles, images, CPU/mem/GPU, max workers"}
+- {n: 8,  priority: CRITICAL, title: "Automatic cleanup even after gateway failure; ownership recorded; state recovered on restart"}
+- {n: 9,  priority: CRITICAL, title: "Start/stop clusters from JupyterLab (extension)"}
+- {n: 10, priority: CRITICAL, title: "Use nebi environments on the cluster"}
+- {n: 11, priority: CRITICAL, title: "Pass environment variables to the cluster (JupyterLab extension)"}
+- {n: 12, priority: CRITICAL, title: "Private storage (e.g. S3) from the cluster"}
+- {n: 13, priority: LOW,      title: "Group capacity via shared resource pools; fair queueing; admin quotas/weights"}
+- {n: 14, priority: LOW,      title: "Usage visibility: who requested what, duration, estimated cost"}
+- {n: 15, priority: LOW,      title: "Cluster health / pending-reasons without direct K8s access"}
+- {n: 16, priority: LOW,      title: "Same UX across Ray and Dask"}
+- {n: 17, priority: LOW,      title: "Same UX across Kubernetes and Slurm (design must not foreclose)"}
+- {n: 18, priority: LOW,      title: "NIST security baseline operation + audit evidence"}

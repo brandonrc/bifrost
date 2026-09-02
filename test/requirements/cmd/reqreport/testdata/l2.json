@@ -1,0 +1,30 @@
+{"Action":"run","Test":"TestA","Package":"github.com/brandonrc/bifrost/test/requirements/contract"}
+{"Action":"output","Test":"TestA","Package":"github.com/brandonrc/bifrost/test/requirements/contract","Output":"REQ: kind=covers req=3 reason=\"rbac matrix\"\n"}
+{"Action":"pass","Test":"TestA","Package":"github.com/brandonrc/bifrost/test/requirements/contract","Elapsed":0.1}
+{"Action":"run","Test":"TestB","Package":"github.com/brandonrc/bifrost/test/requirements/contract"}
+{"Action":"output","Test":"TestB","Package":"github.com/brandonrc/bifrost/test/requirements/contract","Output":"    required_test.go:42: REQ: kind=covers req=3 reason=\"unauth is 401\"\n"}
+{"Action":"fail","Test":"TestB","Package":"github.com/brandonrc/bifrost/test/requirements/contract","Elapsed":0.1}
+{"Action":"run","Test":"TestC","Package":"github.com/brandonrc/bifrost/test/requirements/contract"}
+{"Action":"output","Test":"TestC","Package":"github.com/brandonrc/bifrost/test/requirements/contract","Output":"\treq.go:210: REQ: kind=notyetbuilt req=5 reason=\"ephemeral RayJob\" outcome=failed\n"}
+{"Action":"pass","Test":"TestC","Package":"github.com/brandonrc/bifrost/test/requirements/contract","Elapsed":0.1}
+{"Action":"run","Test":"TestD","Package":"github.com/brandonrc/bifrost/test/requirements/contract"}
+{"Action":"output","Test":"TestD","Package":"github.com/brandonrc/bifrost/test/requirements/contract","Output":"    req.go:230: REQ: kind=skip req=0 reason=\"target inproc has no Kubernetes\"\n"}
+{"Action":"output","Test":"TestD","Package":"github.com/brandonrc/bifrost/test/requirements/contract","Output":"    inproc_test.go:88: REQ: kind=covers req=6 reason=\"netpol isolates owners\"\n"}
+{"Action":"skip","Test":"TestD","Package":"github.com/brandonrc/bifrost/test/requirements/contract","Elapsed":0}
+{"Action":"run","Test":"TestE","Package":"github.com/brandonrc/bifrost/test/requirements/contract"}
+{"Action":"output","Test":"TestE","Package":"github.com/brandonrc/bifrost/test/requirements/contract","Output":"    required_test.go:100: REQ: kind=covers req=7 reason=\"rbac matrix parent\"\n"}
+{"Action":"run","Test":"TestE/sub_pass","Package":"github.com/brandonrc/bifrost/test/requirements/contract"}
+{"Action":"pass","Test":"TestE/sub_pass","Package":"github.com/brandonrc/bifrost/test/requirements/contract","Elapsed":0.05}
+{"Action":"run","Test":"TestE/sub_fail","Package":"github.com/brandonrc/bifrost/test/requirements/contract"}
+{"Action":"fail","Test":"TestE/sub_fail","Package":"github.com/brandonrc/bifrost/test/requirements/contract","Elapsed":0.05}
+{"Action":"fail","Test":"TestE","Package":"github.com/brandonrc/bifrost/test/requirements/contract","Elapsed":0.1}
+{"Action":"run","Test":"TestF","Package":"github.com/brandonrc/bifrost/test/requirements/contract"}
+{"Action":"output","Test":"TestF","Package":"github.com/brandonrc/bifrost/test/requirements/contract","Output":"    required_test.go:120: REQ: kind=covers req=8 reason=\"cleanup runs on pool teardown\"\n"}
+{"Action":"pass","Test":"TestF","Package":"github.com/brandonrc/bifrost/test/requirements/contract","Elapsed":0.1}
+{"Action":"run","Test":"TestG","Package":"github.com/brandonrc/bifrost/test/requirements/contract"}
+{"Action":"output","Test":"TestG","Package":"github.com/brandonrc/bifrost/test/requirements/contract","Output":"    req.go:230: REQ: kind=skip req=0 reason=\"target inproc has no Kubernetes\"\n"}
+{"Action":"output","Test":"TestG","Package":"github.com/brandonrc/bifrost/test/requirements/contract","Output":"    required_test.go:130: REQ: kind=covers req=8 reason=\"cleanup survives gateway restart\"\n"}
+{"Action":"skip","Test":"TestG","Package":"github.com/brandonrc/bifrost/test/requirements/contract","Elapsed":0}
+{"Action":"run","Test":"TestNotYetBuiltInverts/self-test","Package":"github.com/brandonrc/bifrost/test/requirements/req"}
+{"Action":"output","Test":"TestNotYetBuiltInverts/self-test","Package":"github.com/brandonrc/bifrost/test/requirements/req","Output":"    req_test.go:117: REQ: kind=notyetbuilt req=5 reason=\"self-test\" outcome=failed\n"}
+{"Action":"pass","Test":"TestNotYetBuiltInverts/self-test","Package":"github.com/brandonrc/bifrost/test/requirements/req","Elapsed":0}

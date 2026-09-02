@@ -93,7 +93,24 @@ const dummyHash = "$2b$12$dcjUjjUwxXC4Z9wsZzBD3.8Ec1/3r8C.XkqTVfQsgyrNz9sJGUt.K"
 //
 // Reference: mobula-auth/src/local.rs:35-42 (hash_password).
 func HashPassword(password string) (string, error) {
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
+	return HashPasswordWithCost(password, bcryptCost)
+}
+
+// HashPasswordWithCost hashes password with bcrypt at an explicit cost,
+// rejecting anything outside bcrypt's supported [bcrypt.MinCost,
+// bcrypt.MaxCost] range instead of letting bcrypt.GenerateFromPassword
+// fail (or, for cost 0, silently substitute DefaultCost) on a bogus value.
+// HashPassword is the production entry point (always bcryptCost, 12); this
+// is the seam a caller with its own latency budget — e.g. the L2
+// requirement-test lane, spec §3 — uses to hash at a cheaper cost. Cost is
+// stored inside the bcrypt hash itself, so verification
+// (CompareHashAndPassword, and this package's VerifyPassword) needs no
+// matching cost parameter.
+func HashPasswordWithCost(password string, cost int) (string, error) {
+	if cost < bcrypt.MinCost || cost > bcrypt.MaxCost {
+		return "", LocalAuthError{Kind: LocalAuthErrBackend, Message: fmt.Sprintf("bcrypt: cost %d out of range [%d, %d]", cost, bcrypt.MinCost, bcrypt.MaxCost)}
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), cost)
 	if err != nil {
 		return "", LocalAuthError{Kind: LocalAuthErrBackend, Message: fmt.Sprintf("bcrypt: %s", err), Source: err}
 	}
@@ -473,11 +490,34 @@ type LocalAuthenticator struct {
 	loginTTLSecs uint64
 	// tokenMaxDays is the maximum lifetime of a user-minted PAT, in days.
 	tokenMaxDays uint64
+	// cost is the bcrypt work factor storeToken hashes issued tokens at.
+	// Always bcryptCost (12) in production; NewLocalAuthenticatorWithCost
+	// is the only way to set anything else.
+	cost int
 }
 
-// NewLocalAuthenticator builds a LocalAuthenticator over store.
+// NewLocalAuthenticator builds a LocalAuthenticator over store, hashing
+// every token it issues at the pinned production cost (bcryptCost, 12).
+// This is the constructor production code calls.
 func NewLocalAuthenticator(store LocalUserStore, loginTTLSecs, tokenMaxDays uint64) *LocalAuthenticator {
-	return &LocalAuthenticator{store: store, loginTTLSecs: loginTTLSecs, tokenMaxDays: tokenMaxDays}
+	// bcryptCost is a package constant inside bcrypt's valid range, so
+	// this construction can never fail — the error is deliberately
+	// discarded rather than threaded through every production call site.
+	a, _ := NewLocalAuthenticatorWithCost(store, loginTTLSecs, tokenMaxDays, bcryptCost)
+	return a
+}
+
+// NewLocalAuthenticatorWithCost is NewLocalAuthenticator with an explicit
+// bcrypt cost for every token this authenticator issues (storeToken),
+// rejecting anything outside bcrypt's supported range. Exists for callers
+// with their own latency budget — e.g. the L2 requirement-test lane, spec
+// §3 — that must not run at the production cost; production always goes
+// through NewLocalAuthenticator instead.
+func NewLocalAuthenticatorWithCost(store LocalUserStore, loginTTLSecs, tokenMaxDays uint64, cost int) (*LocalAuthenticator, error) {
+	if cost < bcrypt.MinCost || cost > bcrypt.MaxCost {
+		return nil, LocalAuthError{Kind: LocalAuthErrBackend, Message: fmt.Sprintf("bcrypt: cost %d out of range [%d, %d]", cost, bcrypt.MinCost, bcrypt.MaxCost)}
+	}
+	return &LocalAuthenticator{store: store, loginTTLSecs: loginTTLSecs, tokenMaxDays: tokenMaxDays, cost: cost}, nil
 }
 
 // Store returns the backing LocalUserStore.
@@ -617,7 +657,10 @@ func (a *LocalAuthenticator) storeToken(ctx context.Context, username, label str
 	if err != nil {
 		return nil, LocalAuthError{Kind: LocalAuthErrBackend, Message: err.Error(), Source: err}
 	}
-	tokenHash, err := HashToken(plaintext)
+	// a.cost, not the package-level HashToken (which is pinned to
+	// bcryptCost): this is the one call site NewLocalAuthenticatorWithCost
+	// exists to redirect.
+	tokenHash, err := HashPasswordWithCost(plaintext, a.cost)
 	if err != nil {
 		return nil, err
 	}

@@ -28,21 +28,21 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      COVERAGE_THRESHOLD: "80"
       BIFROST_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: { go-version-file: go.mod }
-      - name: api codegen drift (ADR-0002 spec-first contract)
+      - name: api + client codegen drift (ADR-0002 spec-first contract)
         run: |
-          go generate ./internal/api/...
-          git diff --exit-code -- internal/api/zz_generated_api.go
+          go generate ./internal/api/... ./pkg/client/...
+          git diff --exit-code -- internal/api/zz_generated_api.go pkg/client/zz_generated_client.go
       - name: no-cgo build posture
         run: CGO_ENABLED=0 go build ./...
       - name: race tests + coverage (incl. live Postgres store backend)
         run: CGO_ENABLED=1 go test -race -count=2 -covermode=atomic -coverprofile=coverage.txt ./...
-      - run: ./scripts/coverage-gate.sh
+      - name: tiered coverage ratchet (spec §4)
+        run: go run ./test/requirements/cmd/covreport -profile coverage.txt
   vuln:
     runs-on: ubuntu-latest
     steps:
@@ -80,6 +80,38 @@ jobs:
           path: bifrost-api-contract
       - name: Diff vendored spec against bifrost-api's published contract
         run: diff -u internal/api/openapi.json bifrost-api-contract/openapi.json
+  requirements-l2:
+    # Spec §3: the requirement suite against the in-process target, on every
+    # push, merge-blocking. Regenerates the traceability matrix and fails if
+    # the committed one differs, so docs/requirements/ is always the truth
+    # of the last run. -allow-untested is P0-only; the P1 plan removes it.
+    #
+    # TODO(pack): check out bifrost-pack and set PACK_CHART once the pack
+    # has a remote; test/requirements/pack skips with a recorded reason
+    # until then.
+    #
+    # The regenerated matrix is also published as a build artifact (below),
+    # not just diffed against docs/requirements/: on a red run the diff
+    # step is skipped by default (its condition is success()), and without
+    # this the regenerated docs/requirements/ would exist only on the
+    # ephemeral runner's disk, never surfaced to anyone looking at the run.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - name: L2 requirement suite
+        run: CGO_ENABLED=1 REQ_TARGET=inproc go test -race -count=1 -json ./test/requirements/... > l2.json
+      - name: Regenerate traceability
+        if: always()
+        run: go run ./test/requirements/cmd/reqreport -in l2.json -lane l2 -out docs/requirements -allow-untested
+      - name: Committed matrix must match
+        if: always()
+        run: git diff --exit-code -- docs/requirements/
+      - name: Upload regenerated matrix
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: traceability-l2, path: docs/requirements/, if-no-files-found: error }
   nilaway-advisory:
     runs-on: ubuntu-latest
     continue-on-error: true

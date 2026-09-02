@@ -1,0 +1,10 @@
+# Spec §4. Package path prefixes (module-relative). A file belongs to the
+# first tier whose prefix matches. Files matching .coverage-exclude are
+# removed before tiering.
+tiers:
+  - name: tier1
+    floor: 95.0
+    packages: [internal/auth, internal/policy, internal/core]
+  - name: tier2
+    floor: 90.0
+    packages: [internal/api, internal/controller, internal/provision, internal/app]

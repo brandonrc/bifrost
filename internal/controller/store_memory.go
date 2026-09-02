@@ -99,8 +99,14 @@ func (s *MemoryStore) UpsertDesired(_ context.Context, id core.ClusterId, spec c
 	defer s.clustersMu.Unlock()
 
 	existing, ok := s.clusters[id]
+	revive := ok && existing.Desired == DesiredTerminated
 	var generation uint64
 	switch {
+	case revive:
+		// A terminated record is re-created, never edited: bump the
+		// generation so the provisioner sees a new apply, and start from a
+		// fresh record below.
+		generation = existing.Generation + 1
 	case ok && !specChanged(&existing.Spec, &spec):
 		generation = existing.Generation
 	case ok:
@@ -116,7 +122,7 @@ func (s *MemoryStore) UpsertDesired(_ context.Context, id core.ClusterId, spec c
 		Desired:    DesiredRunning,
 		CreatedAt:  NowUnix(),
 	}
-	if ok {
+	if ok && !revive {
 		record.Desired = existing.Desired
 		record.ObservedState = existing.ObservedState
 		record.ObservedGeneration = existing.ObservedGeneration

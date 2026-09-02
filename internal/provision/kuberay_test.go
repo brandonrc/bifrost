@@ -2,6 +2,7 @@ package provision
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -486,6 +487,54 @@ func TestPodTemplatesCarryTheClusterIDLabel(t *testing.T) {
 	}
 	if rs.Spec.RayClusterSpec.WorkerGroupSpecs[0].Template.Labels[ClusterIDLabel] != "svc" {
 		t.Fatalf("service worker pod template label wrong")
+	}
+}
+
+// Defect 2 (docs/defects/2026-09-02-health-probes-assume-wget.md): with no
+// probes of our own, KubeRay injects wget-based defaults and an image without
+// wget is restarted every ~10 minutes while Ray is healthy. We set probes
+// that use the Python every Ray image has: raylet health on every node, GCS
+// health on the head too.
+func TestProbesDoNotDependOnWget(t *testing.T) {
+	spec := testSpec(t, wg("cpu", 0, 4, 2))
+	rc, err := RayClusterFor("demo", spec, false, 1, nil)
+	if err != nil {
+		t.Fatalf("RayClusterFor: %v", err)
+	}
+	head := rc.Spec.HeadGroupSpec.Template.Spec.Containers[0]
+	worker := rc.Spec.WorkerGroupSpecs[0].Template.Spec.Containers[0]
+	for _, c := range []struct {
+		name string
+		ctr  corev1.Container
+		head bool
+	}{{"head", head, true}, {"worker", worker, false}} {
+		for _, p := range []*corev1.Probe{c.ctr.LivenessProbe, c.ctr.ReadinessProbe} {
+			if p == nil || p.Exec == nil {
+				t.Fatalf("%s: probe missing or not exec: %+v", c.name, p)
+			}
+			cmd := strings.Join(p.Exec.Command, " ")
+			if strings.Contains(cmd, "wget") || strings.Contains(cmd, "curl") {
+				t.Fatalf("%s probe shells out to a tool Ray images need not ship: %s", c.name, cmd)
+			}
+			if p.Exec.Command[0] != "python" {
+				t.Fatalf("%s probe must run through python (present in every Ray image), got %q", c.name, p.Exec.Command[0])
+			}
+			if !strings.Contains(cmd, "local_raylet_healthz") {
+				t.Fatalf("%s probe does not check the raylet", c.name)
+			}
+			isHead := p.Exec.Command[len(p.Exec.Command)-1] == "head"
+			if isHead != c.head {
+				t.Fatalf("%s probe head flag = %v", c.name, isHead)
+			}
+			if p.FailureThreshold != 120 || p.PeriodSeconds != 5 || p.InitialDelaySeconds != 30 {
+				t.Fatalf("%s probe timing differs from KubeRay's defaults: %+v", c.name, p)
+			}
+		}
+	}
+	// The script itself must be valid Python for the head and worker branch
+	// alike — a syntax slip here would restart every pod forever.
+	if !strings.Contains(rayHealthScript, "gcs_healthz") {
+		t.Fatal("head branch must also check GCS")
 	}
 }
 
