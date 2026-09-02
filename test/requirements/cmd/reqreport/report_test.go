@@ -15,9 +15,23 @@ func TestBuildFromFixture(t *testing.T) {
 	if r3.N != 3 || r3.Tests != 2 || r3.Passed != 1 || r3.Failed != 1 || r3.Status != "failing" {
 		t.Errorf("row 3 = %+v", r3)
 	}
+	// Row 5 must count only TestC's notyetbuilt line. The fixture also
+	// carries a REQ line for req=5 from
+	// test/requirements/req/req_test.go's own self-test
+	// (TestNotYetBuiltInverts/self-test, Package
+	// ".../test/requirements/req") -- req's unit tests exercise
+	// NotYetBuilt using "5" as an arbitrary example number, not a real
+	// coverage claim -- and readEvents must drop it before it ever
+	// reaches a Row (selfTestPackageSuffix). If this regresses, row 5
+	// would show Tests=2, NotYetBuilt=2 instead of 1.
 	r5 := rep.Rows[4]
-	if r5.NotYetBuilt != 1 || r5.Status != "not-yet-built" {
+	if r5.NotYetBuilt != 1 || r5.Tests != 1 || r5.Status != "not-yet-built" {
 		t.Errorf("row 5 = %+v", r5)
+	}
+	for _, n := range r5.TestNames {
+		if n == "TestNotYetBuiltInverts/self-test" {
+			t.Errorf("row 5 test names = %v; req's self-test must not be counted", r5.TestNames)
+		}
 	}
 	// Row 6: its only covering test (TestD) was skipped -- no pass, no
 	// fail, no NotYetBuilt marker. A skipped test did not pass, so this

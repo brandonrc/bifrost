@@ -80,6 +80,27 @@ jobs:
           path: bifrost-api-contract
       - name: Diff vendored spec against bifrost-api's published contract
         run: diff -u internal/api/openapi.json bifrost-api-contract/openapi.json
+  requirements-l2:
+    # Spec §3: the requirement suite against the in-process target, on every
+    # push, merge-blocking. Regenerates the traceability matrix and fails if
+    # the committed one differs, so docs/requirements/ is always the truth
+    # of the last run. -allow-untested is P0-only; the P1 plan removes it.
+    #
+    # TODO(pack): check out bifrost-pack and set PACK_CHART once the pack
+    # has a remote; test/requirements/pack skips with a recorded reason
+    # until then.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - name: L2 requirement suite
+        run: CGO_ENABLED=1 REQ_TARGET=inproc go test -race -count=1 -json ./test/requirements/... > l2.json
+      - name: Regenerate traceability
+        if: always()
+        run: go run ./test/requirements/cmd/reqreport -in l2.json -lane l2 -out docs/requirements -allow-untested
+      - name: Committed matrix must match
+        run: git diff --exit-code -- docs/requirements/
   nilaway-advisory:
     runs-on: ubuntu-latest
     continue-on-error: true

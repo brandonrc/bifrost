@@ -1,6 +1,7 @@
 /bifrost
 *.out
 coverage.txt
+l2.json
 dist/
 .superpowers/
 .claude/worktrees/

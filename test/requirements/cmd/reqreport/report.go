@@ -14,10 +14,24 @@ import (
 // event is one line of `go test -json` output. Only the fields reqreport
 // needs are decoded; everything else in the stream is ignored.
 type event struct {
-	Action string `json:"Action"`
-	Test   string `json:"Test"`
-	Output string `json:"Output"`
+	Action  string `json:"Action"`
+	Package string `json:"Package"`
+	Test    string `json:"Test"`
+	Output  string `json:"Output"`
 }
+
+// selfTestPackageSuffix is the package whose tests must never feed the
+// matrix. test/requirements/req is the requirement-test framework's own
+// implementation; its unit tests (req_test.go) exercise Covers/NotYetBuilt
+// end to end using example requirement numbers (e.g. "5") to prove the
+// mechanism works, not to claim coverage of that requirement. Every number
+// 1..18 names a real row, so there is no "safe" example number to pick
+// instead, and guards_test.go's TestEveryRequirementTestDeclaresCoverage
+// exempts this same directory from the Covers/NotYetBuilt rule for the
+// identical reason: it is infrastructure, not a requirement test. Events
+// from this package are dropped in readEvents before a testResult is ever
+// created for them, so their REQ lines never reach a Row.
+const selfTestPackageSuffix = "/test/requirements/req"
 
 // testResult is one top-level or sub test with the REQ lines it logged and
 // its final pass/fail/skip outcome.
@@ -115,6 +129,9 @@ func readEvents(path string, results map[string]*testResult, order *[]string) er
 		var e event
 		if err := json.Unmarshal(sc.Bytes(), &e); err != nil || e.Test == "" {
 			continue // package-level events (no Test field) carry no REQ lines
+		}
+		if strings.HasSuffix(e.Package, selfTestPackageSuffix) {
+			continue // req's own self-tests; see selfTestPackageSuffix
 		}
 		r, ok := results[e.Test]
 		if !ok {
