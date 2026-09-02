@@ -34,6 +34,12 @@ func RayImage() string {
 // ClusterBody is the canonical minimal cluster: one 1-CPU head, one 1-CPU
 // worker. ttl nil = no max-age reaper.
 func ClusterBody(id, project string, ttl *int64) client.CreateClusterJSONRequestBody {
+	return ClusterBodyWithImage(id, project, RayImage(), ttl)
+}
+
+// ClusterBodyWithImage is ClusterBody with an explicit image, for tests
+// about what the image does or does not ship (defect 2: no wget).
+func ClusterBodyWithImage(id, project, image string, ttl *int64) client.CreateClusterJSONRequestBody {
 	ttlJSON := "null"
 	if ttl != nil {
 		ttlJSON = fmt.Sprint(*ttl)
@@ -41,7 +47,7 @@ func ClusterBody(id, project string, ttl *int64) client.CreateClusterJSONRequest
 	raw := fmt.Sprintf(`{"id":%q,"spec":{"name":%q,"project":%q,"ray_version":"2.56.0","image":%q,
 		"head_cpu":"1","head_memory":"2Gi","ttl_seconds":%s,
 		"worker_groups":[{"name":"w","cpu":"1","memory":"2Gi","gpu":null,"min_replicas":1,"max_replicas":1,"replicas":1}]}}`,
-		id, id, project, RayImage(), ttlJSON)
+		id, id, project, image, ttlJSON)
 	var body client.CreateClusterJSONRequestBody
 	if err := json.Unmarshal([]byte(raw), &body); err != nil {
 		panic("fixture: ClusterBody: " + err.Error())
