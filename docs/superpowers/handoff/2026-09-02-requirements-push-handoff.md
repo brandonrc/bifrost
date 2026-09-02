@@ -51,8 +51,15 @@ plus the group-membership mapper. On grace both were added by hand to client
 `keycloak/nebari-realm-admin-credentials`). Re-provisioning by the operator
 does not remove them, but a fresh cluster will hit this again.
 
-## Lanes
+## Lanes — results on the final commit (b498ba7)
 
+- **kind (CI run 33678290320): 52 pass, 0 fail**, 3 skips = the pack template
+  tests (no chart checkout until bifrost-pack has a remote).
+- **grace (image `localhost:32000/bifrost:b498ba7`): 26 pass, 0 fail**, 2 skips =
+  r07 (grace's deployment has no allowlist configured). Requirements 3, 6, 8,
+  10, 14, 15, 18 read **built** on the real environment, including the
+  wget-less checkmaite image reaching running and the usage report showing
+  resource-hours.
 - L2 green on every push. Kind lane: infra fixed (Kueue webhook race →
   retry apply; head-only clusters via `REQ_WORKER_REPLICAS=0`; inproc smoke
   tests bind to inproc).
