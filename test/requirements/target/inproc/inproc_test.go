@@ -8,11 +8,14 @@ import (
 
 	"github.com/brandonrc/bifrost/pkg/client"
 	"github.com/brandonrc/bifrost/test/requirements/req"
-	"github.com/brandonrc/bifrost/test/requirements/target"
+	"github.com/brandonrc/bifrost/test/requirements/target/inproc"
 )
 
+// These are inproc's own smoke tests: they bind to the in-process target
+// explicitly, whatever REQ_TARGET says. Through target.Get they ran against
+// the kind cluster on the first L3 lane and provisioned a real RayCluster.
 func TestInprocCreateConvergesToRunning(t *testing.T) {
-	tgt := target.Get(t)
+	tgt := inproc.New(t)
 	ctx := context.Background()
 	id := req.Name("smoke")
 
@@ -44,7 +47,7 @@ func TestInprocCreateConvergesToRunning(t *testing.T) {
 }
 
 func TestInprocPrincipalsAreDistinct(t *testing.T) {
-	tgt := target.Get(t)
+	tgt := inproc.New(t)
 	ctx := context.Background()
 	a, _ := tgt.As("dev-a").API().ListClustersWithResponse(ctx)
 	if a.StatusCode() != 200 {

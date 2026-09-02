@@ -81,6 +81,8 @@ jobs:
         env:
           REQ_TARGET: kind
           REQ_CONTROL_PLANE_SELECTOR: app.kubernetes.io/name=bifrost-pack
+          # Head-only clusters: see fixture.WorkerReplicas.
+          REQ_WORKER_REPLICAS: "0"
         run: |
           # One run id for every package (-p 1 runs them one at a time), so
           # preflight's leaked-cluster check and postflight's sweep agree.

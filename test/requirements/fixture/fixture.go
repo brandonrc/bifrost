@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/brandonrc/bifrost/pkg/client"
@@ -31,8 +32,24 @@ func RayImage() string {
 	return "rayproject/ray:2.56.0"
 }
 
-// ClusterBody is the canonical minimal cluster: one 1-CPU head, one 1-CPU
-// worker. ttl nil = no max-age reaper.
+// WorkerReplicas is how many workers the canonical cluster asks for:
+// REQ_WORKER_REPLICAS, default 1. The kind lane sets 0 — a 4-vCPU runner
+// cannot fit two head+worker clusters at 1 CPU each next to Calico,
+// KubeRay and Kueue, and the requirements under test are about the head
+// (its Service, its NetworkPolicy, its Jobs API), not about workers.
+func WorkerReplicas() int {
+	if v := os.Getenv("REQ_WORKER_REPLICAS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			panic("fixture: REQ_WORKER_REPLICAS must be a non-negative integer, got " + v)
+		}
+		return n
+	}
+	return 1
+}
+
+// ClusterBody is the canonical minimal cluster: one 1-CPU head and
+// WorkerReplicas() 1-CPU workers. ttl nil = no max-age reaper.
 func ClusterBody(id, project string, ttl *int64) client.CreateClusterJSONRequestBody {
 	return ClusterBodyWithImage(id, project, RayImage(), ttl)
 }
@@ -46,8 +63,8 @@ func ClusterBodyWithImage(id, project, image string, ttl *int64) client.CreateCl
 	}
 	raw := fmt.Sprintf(`{"id":%q,"spec":{"name":%q,"project":%q,"ray_version":"2.56.0","image":%q,
 		"head_cpu":"1","head_memory":"2Gi","ttl_seconds":%s,
-		"worker_groups":[{"name":"w","cpu":"1","memory":"2Gi","gpu":null,"min_replicas":1,"max_replicas":1,"replicas":1}]}}`,
-		id, id, project, image, ttlJSON)
+		"worker_groups":[{"name":"w","cpu":"1","memory":"2Gi","gpu":null,"min_replicas":%[6]d,"max_replicas":%[6]d,"replicas":%[6]d}]}}`,
+		id, id, project, image, ttlJSON, WorkerReplicas())
 	var body client.CreateClusterJSONRequestBody
 	if err := json.Unmarshal([]byte(raw), &body); err != nil {
 		panic("fixture: ClusterBody: " + err.Error())
