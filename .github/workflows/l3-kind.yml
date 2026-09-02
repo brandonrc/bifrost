@@ -71,7 +71,13 @@ jobs:
 
       - name: Deploy Bifrost
         run: |
-          kubectl apply -f test/requirements/target/cluster/kind/manifests.yaml
+          # Kueue's mutating webhook for Deployments can still be coming up
+          # right after `helm install --wait` returns; the first apply then
+          # fails with "failed calling webhook mdeployment.kb.io". Retry.
+          for i in $(seq 1 12); do
+            kubectl apply -f test/requirements/target/cluster/kind/manifests.yaml && break
+            echo "apply failed (attempt $i), retrying"; sleep 5
+          done
           kubectl -n bifrost rollout status deploy/bifrost --timeout=180s
           for i in $(seq 1 30); do curl -sf "$BIFROST_URL/healthz" && break; sleep 2; done
           curl -sf "$BIFROST_URL/api/v1/version"
@@ -89,7 +95,7 @@ jobs:
           export REQ_RUN_ID="t$(printf '%x' "$GITHUB_RUN_ID")"
           CGO_ENABLED=1 go test -race -count=1 -p 1 -timeout 40m -json ./test/requirements/... > l3.json
       - name: Traceability (L3 lane)
-        if: always()
+        if: always() && steps.suite.conclusion != 'skipped'
         run: go run ./test/requirements/cmd/reqreport -in l3.json -lane l3 -out l3-report -allow-untested
 
       - name: Cluster state on failure
@@ -100,7 +106,7 @@ jobs:
           kubectl -n bifrost logs deploy/bifrost --tail=400 || true
           kubectl -n kuberay logs deploy/kuberay-operator --tail=200 || true
       - name: Upload results
-        if: always()
+        if: always() && steps.suite.conclusion != 'skipped'
         uses: actions/upload-artifact@v4
         with:
           name: l3-kind
