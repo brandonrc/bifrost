@@ -100,6 +100,7 @@ func New(t testing.TB, opts ...Option) req.Target {
 		Local:             local,
 		Provisioner:       newFakeProvisioner(),
 		ReconcileInterval: 25 * time.Millisecond,
+		MeteringInterval:  100 * time.Millisecond,
 	}
 	for _, o := range opts {
 		o(&cfg)

@@ -62,7 +62,7 @@ func dummy(s *openapi3.SchemaRef) any {
 //     schema's required fields, not specifically the one this subtest
 //     omitted.
 //   - a MultiError-wrapped case, e.g. LoginRequest, CreateTokenRequest,
-//     UpsertAssignment, PutAllocation — `validation failed due to: at '':
+//     UpsertAssignment, PutAllocation — `validation failed due to: at ”:
 //     missing property 'role'` (single-quoted, reversed wording, no schema
 //     dump — "Schema:\n  null").
 func missingPropertyReasons(field string) (dumped, wrapped string) {

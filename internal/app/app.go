@@ -36,6 +36,9 @@ type Config struct {
 	// Admission is the administrator's image allowlist and worker cap
 	// (requirement 7); zero value = unrestricted.
 	Admission api.Admission
+	// MeteringInterval is how often usage samples are recorded
+	// (requirement 14); 0 = controller.DefaultMeteringInterval.
+	MeteringInterval time.Duration
 }
 
 // App is a wired control plane that has not yet opened a socket.
@@ -85,7 +88,8 @@ func (a *App) RunLoops(ctx context.Context) {
 	go func() {
 		defer wg.Done()
 		if err := controller.RunReconciler(ctx, a.Store, a.cfg.Provisioner, controller.Options{
-			Interval: a.cfg.ReconcileInterval,
+			Interval:         a.cfg.ReconcileInterval,
+			MeteringInterval: a.cfg.MeteringInterval,
 		}); err != nil {
 			slog.Error("reconcile loop exited", "error", err)
 		}

@@ -39,6 +39,7 @@ import (
 // --audit-log (a second JSONL sink alongside slog; the audit trail's
 // durable form is already the Store via RecordAudit, T11/T12).
 type serveOptions struct {
+	MeteringInterval        time.Duration
 	AllowedImages           string
 	MaxWorkers              int
 	Bind                    string
@@ -80,6 +81,8 @@ func newServeCmd() *cobra.Command {
 	f.BoolVar(&opts.Autoscaling, "ray-autoscaling", false,
 		"New clusters default to KubeRay in-tree-autoscaler ownership of worker replicas (ADR-0007); "+
 			"per-cluster Kueue-elastic pools always get it regardless of this flag")
+	f.DurationVar(&opts.MeteringInterval, "metering-interval", controller.DefaultMeteringInterval,
+		"How often a usage sample is recorded per running cluster (requirement 14)")
 	f.StringVar(&opts.AllowedImages, "allowed-images", "",
 		"Comma-separated image prefixes a cluster may request (requirement 7: administrator-controlled images). Empty = any image")
 	f.IntVar(&opts.MaxWorkers, "max-workers", 0,
@@ -175,6 +178,7 @@ func buildServer(ctx context.Context, opts serveOptions) (*builtServer, error) {
 		Local:                localAuth,
 		AllowUnauthenticated: opts.DevAllowUnauthenticated,
 		ReconcileInterval:    opts.ReconcileInterval,
+		MeteringInterval:     opts.MeteringInterval,
 		Admission: api.Admission{
 			AllowedImagePrefixes: api.ParseImagePrefixes(opts.AllowedImages),
 			MaxWorkers:           opts.MaxWorkers,

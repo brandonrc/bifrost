@@ -159,6 +159,7 @@ spec:
             - --allow-insecure-transport
             - --namespace=bifrost
             - --reconcile-interval=10s
+            - --metering-interval=15s
             # Requirement 7 (administrator controls), asserted by r07: only
             # these image prefixes, at most 4 workers per cluster.
             - --allowed-images=rayproject/,registry.k8s.io/

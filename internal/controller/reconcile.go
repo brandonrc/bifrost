@@ -333,6 +333,12 @@ type Reconciler struct {
 	// bucket is the global actuation token bucket (#43); nil = unlimited.
 	bucket                  *tokenBucket
 	terminatedRetentionSecs uint64
+	// metering (requirement 14): how often Meter runs from the tick, when
+	// it last ran, and which clusters were last seen running (so a cluster
+	// leaving running gets one closing zero sample).
+	meteringInterval time.Duration
+	lastMeter        time.Time
+	metered          map[core.ClusterId]bool
 }
 
 // NewReconciler returns a Reconciler with no global rate cap (per-cluster
@@ -342,6 +348,8 @@ func NewReconciler(store Store, provisioner provision.Provisioner) *Reconciler {
 		store:                   store,
 		provisioner:             provisioner,
 		terminatedRetentionSecs: TerminatedRetentionSecs,
+		meteringInterval:        DefaultMeteringInterval,
+		metered:                 map[core.ClusterId]bool{},
 	}
 }
 
@@ -353,6 +361,8 @@ func NewReconcilerWithLimits(store Store, provisioner provision.Provisioner, lim
 		provisioner:             provisioner,
 		bucket:                  newTokenBucket(limits, 0),
 		terminatedRetentionSecs: TerminatedRetentionSecs,
+		meteringInterval:        DefaultMeteringInterval,
+		metered:                 map[core.ClusterId]bool{},
 	}
 }
 
@@ -927,6 +937,14 @@ func (r *Reconciler) Run(ctx context.Context, interval time.Duration) {
 				slog.Warn("reconcile failed", "cluster", res.ID, "error", res.Err)
 			}
 		}
+		if r.meteringInterval > 0 && time.Since(r.lastMeter) >= r.meteringInterval {
+			r.lastMeter = time.Now()
+			if n, err := r.Meter(ctx, NowUnix()); err != nil {
+				slog.Warn("metering pass failed", "error", err)
+			} else if n > 0 {
+				slog.Debug("usage samples recorded", "samples", n)
+			}
+		}
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -1040,6 +1058,9 @@ type Options struct {
 	// TerminatedRetentionSecs overrides the tombstone retention window;
 	// nil = TerminatedRetentionSecs.
 	TerminatedRetentionSecs *uint64
+	// MeteringInterval is how often usage samples are recorded
+	// (requirement 14). DefaultMeteringInterval when 0; negative disables.
+	MeteringInterval time.Duration
 }
 
 // RunReconciler constructs a Reconciler from store/provisioner/opts, runs
@@ -1058,6 +1079,9 @@ func RunReconciler(ctx context.Context, store Store, provisioner provision.Provi
 	}
 	if opts.TerminatedRetentionSecs != nil {
 		r.WithTerminatedRetention(*opts.TerminatedRetentionSecs)
+	}
+	if opts.MeteringInterval != 0 {
+		r.meteringInterval = opts.MeteringInterval
 	}
 
 	switch quarantined, err := r.DetectStaleRestore(ctx); {
