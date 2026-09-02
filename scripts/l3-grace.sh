@@ -28,7 +28,8 @@ BIFROST_URL_REMOTE=${BIFROST_URL:-https://bifrost-api.100-89-230-107.sslip.io}
 # that predates the validation middleware they would persist junk records
 # (docs/defects/2026-09-02-required-fields-unenforced.md), so they stay off
 # the grace lane until grace runs an image that carries the fix.
-pkgs=$(go list ./test/requirements/... | grep -E '/test/requirements/r[0-9]{2}_[a-z0-9_]+$')
+# r17_slurm is an AST guard over the source tree, which grace does not have.
+pkgs=$(go list ./test/requirements/... | grep -E '/test/requirements/r[0-9]{2}_[a-z0-9_]+$' | grep -v '/r17_slurm$')
 
 rm -rf .l3 && mkdir -p .l3/bin .l3/out
 for p in $pkgs; do
