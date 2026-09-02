@@ -20,7 +20,7 @@ func TestNewServesHealthzAndVersion(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GET %s: %v", p, err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("GET %s = %d, want 200", p, resp.StatusCode)
 		}
