@@ -18,3 +18,10 @@
 {"Action":"run","Test":"TestE/sub_fail"}
 {"Action":"fail","Test":"TestE/sub_fail","Elapsed":0.05}
 {"Action":"fail","Test":"TestE","Elapsed":0.1}
+{"Action":"run","Test":"TestF"}
+{"Action":"output","Test":"TestF","Output":"    required_test.go:120: REQ: kind=covers req=8 reason=\"cleanup runs on pool teardown\"\n"}
+{"Action":"pass","Test":"TestF","Elapsed":0.1}
+{"Action":"run","Test":"TestG"}
+{"Action":"output","Test":"TestG","Output":"    req.go:230: REQ: kind=skip req=0 reason=\"target inproc has no Kubernetes\"\n"}
+{"Action":"output","Test":"TestG","Output":"    required_test.go:130: REQ: kind=covers req=8 reason=\"cleanup survives gateway restart\"\n"}
+{"Action":"skip","Test":"TestG","Elapsed":0}

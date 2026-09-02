@@ -34,6 +34,7 @@ type event struct {
 // correctly comes out failing.
 type testResult struct {
 	Name    string
+	File    string // the -in file this test was first seen in; see readEvents
 	Outcome string // pass|fail|skip
 	Lines   []req.Line
 }
@@ -48,7 +49,7 @@ type Row struct {
 	Failed      int      `json:"failed"`
 	Skipped     int      `json:"skipped"`
 	NotYetBuilt int      `json:"not_yet_built"`
-	Status      string   `json:"status"` // built|partial|not-yet-built|failing|untested
+	Status      string   `json:"status"` // built|partial|skipped|not-yet-built|failing|untested
 	TestNames   []string `json:"test_names"`
 	SkipReasons []string `json:"skip_reasons"`
 }
@@ -61,7 +62,9 @@ type Report struct {
 }
 
 // Build parses one or more `go test -json` streams and aggregates them into
-// a Report: one row per requirement in req.Requirements() order.
+// a Report: one row per requirement in req.Requirements() order. It returns
+// an error if the same test name appears in two different files (see
+// readEvents).
 func Build(files []string, lane string) (*Report, error) {
 	results := map[string]*testResult{}
 	var order []string
@@ -89,6 +92,16 @@ func Build(files []string, lane string) (*Report, error) {
 // parsing REQ lines out of "output" events and recording each test's final
 // outcome. results and order are shared accumulators across files so
 // -in a,b aggregates as one run.
+//
+// A test name recurring within the SAME file (run, then one or more output
+// events, then an outcome event) is normal -- that's how go test reports
+// one test -- and folds into the same testResult. The same name recurring
+// across DIFFERENT files is almost certainly two unrelated inputs
+// (different lanes, a stale rerun, a copy/paste) that happen to share a
+// name; silently merging their REQ lines would double-count Tests, and
+// whichever file's outcome event is read last would silently clobber the
+// other's, with no error and no sign of the lost coverage. So it's a hard
+// error instead.
 func readEvents(path string, results map[string]*testResult, order *[]string) error {
 	fh, err := os.Open(path)
 	if err != nil {
@@ -105,9 +118,11 @@ func readEvents(path string, results map[string]*testResult, order *[]string) er
 		}
 		r, ok := results[e.Test]
 		if !ok {
-			r = &testResult{Name: e.Test}
+			r = &testResult{Name: e.Test, File: path}
 			results[e.Test] = r
 			*order = append(*order, e.Test)
+		} else if r.File != path {
+			return fmt.Errorf("reqreport: test %q appears in both %s and %s", e.Test, r.File, path)
 		}
 		switch e.Action {
 		case "output":
@@ -169,7 +184,21 @@ func (r *Report) absorb(t *testResult, name string) {
 	}
 }
 
-// status is DERIVED from counts, never typed by hand (spec §2.4).
+// status is DERIVED from counts, never typed by hand (spec §2.4: "Built ⇔
+// every covering test passed ... Partial ⇔ some tests pass and at least one
+// NotYetBuilt remains. Not yet built ⇔ all tests carry the marker.
+// Untested ⇔ zero tests"). Checked in this order:
+//
+//   - untested:      Tests == 0
+//   - failing:       Failed > 0
+//   - not-yet-built: NotYetBuilt == Tests (every test carries the marker)
+//   - skipped:       Passed == 0 && Skipped > 0 && NotYetBuilt == 0 --
+//     tests exist and none failed, but none of them ran (passed) on this
+//     lane either. A populated row, not an untested-problem.
+//   - partial:       NotYetBuilt > 0 || Skipped > 0 -- something is
+//     outstanding: a marker remains, or a covering test didn't run.
+//   - built:         Passed == Tests -- every covering test passed. A
+//     skipped test did NOT pass, so a skip-only row is never built.
 func status(r Row) string {
 	switch {
 	case r.Tests == 0:
@@ -178,7 +207,9 @@ func status(r Row) string {
 		return "failing"
 	case r.NotYetBuilt == r.Tests:
 		return "not-yet-built"
-	case r.NotYetBuilt > 0:
+	case r.Passed == 0 && r.Skipped > 0 && r.NotYetBuilt == 0:
+		return "skipped"
+	case r.NotYetBuilt > 0 || r.Skipped > 0:
 		return "partial"
 	default:
 		return "built"
