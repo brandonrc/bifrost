@@ -259,3 +259,11 @@ func IDs(body []byte) []string {
 
 // Contains is strings.Contains for readable assertions.
 func Contains(hay, needle string) bool { return strings.Contains(hay, needle) }
+
+// EmptyPolicyUpdate is a PUT /api/v1/settings/policy body that changes
+// nothing — for authorization tests that must not alter platform policy.
+func EmptyPolicyUpdate() client.UpdatePolicyJSONRequestBody {
+	var body client.UpdatePolicyJSONRequestBody
+	_ = json.Unmarshal([]byte(`{}`), &body)
+	return body
+}

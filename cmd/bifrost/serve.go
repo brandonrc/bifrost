@@ -39,6 +39,8 @@ import (
 // --audit-log (a second JSONL sink alongside slog; the audit trail's
 // durable form is already the Store via RecordAudit, T11/T12).
 type serveOptions struct {
+	AllowedImages           string
+	MaxWorkers              int
 	Bind                    string
 	Registry                string
 	AuthConfig              string
@@ -78,6 +80,10 @@ func newServeCmd() *cobra.Command {
 	f.BoolVar(&opts.Autoscaling, "ray-autoscaling", false,
 		"New clusters default to KubeRay in-tree-autoscaler ownership of worker replicas (ADR-0007); "+
 			"per-cluster Kueue-elastic pools always get it regardless of this flag")
+	f.StringVar(&opts.AllowedImages, "allowed-images", "",
+		"Comma-separated image prefixes a cluster may request (requirement 7: administrator-controlled images). Empty = any image")
+	f.IntVar(&opts.MaxWorkers, "max-workers", 0,
+		"Cap on the sum of max_replicas across a cluster's worker groups (requirement 7). 0 = no cap")
 	f.BoolVar(&opts.LocalAuth, "local-auth", false,
 		"Enable local (IdP-free) username/password auth (ADR-0011); counts as configured authentication "+
 			"for the fail-closed non-loopback rule")
@@ -169,6 +175,10 @@ func buildServer(ctx context.Context, opts serveOptions) (*builtServer, error) {
 		Local:                localAuth,
 		AllowUnauthenticated: opts.DevAllowUnauthenticated,
 		ReconcileInterval:    opts.ReconcileInterval,
+		Admission: api.Admission{
+			AllowedImagePrefixes: api.ParseImagePrefixes(opts.AllowedImages),
+			MaxWorkers:           opts.MaxWorkers,
+		},
 	}
 	var liveClient *live.Client
 	if opts.Namespace != "" {

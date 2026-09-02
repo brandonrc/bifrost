@@ -109,13 +109,17 @@
       "n": 7,
       "title": "Group admins control profiles, images, CPU/mem/GPU, max workers",
       "priority": "CRITICAL",
-      "tests": 0,
-      "passed": 0,
+      "tests": 3,
+      "passed": 3,
       "failed": 0,
       "skipped": 0,
       "not_yet_built": 0,
-      "status": "untested",
-      "test_names": null,
+      "status": "built",
+      "test_names": [
+        "TestDeveloperCannotChangeAdmissionPolicy",
+        "TestDisallowedImageIsRefused",
+        "TestWorkerCapIsEnforced"
+      ],
       "skip_reasons": null
     },
     {

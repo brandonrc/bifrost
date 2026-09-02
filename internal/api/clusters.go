@@ -345,6 +345,12 @@ func (s *Server) CreateCluster(ctx context.Context, req CreateClusterRequestObje
 	if err != nil {
 		return nil, err
 	}
+	// Administrator's allowlist (requirement 7): image and worker cap.
+	// Checked before quota so a refused image never counts against anything.
+	if aerr := s.Admission.Check(&spec); aerr != nil {
+		s.denyCreate(ctx, identity, body.Id, aerr.reason, http.StatusBadRequest)
+		return nil, badRequest(aerr.message)
+	}
 	// Tier-2 owned session clusters: the authenticated caller is always
 	// the recorded owner, overriding any client-supplied value — the body
 	// is untrusted (ownership is who asked, not what they claim). nil

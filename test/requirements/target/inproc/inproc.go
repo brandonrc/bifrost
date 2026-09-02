@@ -18,6 +18,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/brandonrc/bifrost/internal/api"
 	"github.com/brandonrc/bifrost/internal/app"
 	"github.com/brandonrc/bifrost/internal/auth"
 	"github.com/brandonrc/bifrost/internal/controller"
@@ -61,9 +62,23 @@ type target struct {
 // auth.NewLocalAuthenticator) is untouched: it still always hashes at 12.
 const seedBcryptCost = bcrypt.MinCost
 
+// Option tunes the in-process control plane a test builds. Requirement
+// tests normally take the default (target.Get); tests about administrator
+// configuration build their own with inproc.New(t, inproc.WithAdmission(...)).
+type Option func(*app.Config)
+
+// WithAdmission sets the administrator's image allowlist and worker cap
+// (requirement 7) on the control plane under test. Plain values, not the
+// internal type: requirement tests may not import internal/.
+func WithAdmission(allowedImagePrefixes []string, maxWorkers int) Option {
+	return func(c *app.Config) {
+		c.Admission = api.Admission{AllowedImagePrefixes: allowedImagePrefixes, MaxWorkers: maxWorkers}
+	}
+}
+
 // New builds the in-process target and starts its reconcile loop. Callers
 // (target.Get) register Cleanup and srv.Close via t.Cleanup.
-func New(t testing.TB) req.Target {
+func New(t testing.TB, opts ...Option) req.Target {
 	t.Helper()
 	store := controller.NewMemoryStore()
 	ctx := context.Background()
@@ -80,12 +95,16 @@ func New(t testing.TB) req.Target {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, err := app.New(app.Config{
+	cfg := app.Config{
 		Store:             store,
 		Local:             local,
 		Provisioner:       newFakeProvisioner(),
 		ReconcileInterval: 25 * time.Millisecond,
-	})
+	}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	a, err := app.New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

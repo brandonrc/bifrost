@@ -33,6 +33,9 @@ type Config struct {
 	AllowUnauthenticated bool
 	// ReconcileInterval <= 0 means controller.DefaultReconcileInterval.
 	ReconcileInterval time.Duration
+	// Admission is the administrator's image allowlist and worker cap
+	// (requirement 7); zero value = unrestricted.
+	Admission api.Admission
 }
 
 // App is a wired control plane that has not yet opened a socket.
@@ -57,6 +60,7 @@ func New(cfg Config) (*App, error) {
 		Local:              cfg.Local,
 		Provisioner:        cfg.Provisioner,
 		ServiceProvisioner: cfg.ServiceProvisioner,
+		Admission:          cfg.Admission,
 	}
 	handler := api.NewHandler(server, api.HandlerOptions{
 		Validator:            cfg.Validator,
