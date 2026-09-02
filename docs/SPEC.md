@@ -26,16 +26,16 @@ ALL rows ship. Priority governs **sequence**, never scope-cut.
 | 4 | Serving in separate resource pool from compute clusters | CRITICAL | In flight (Kueue pools) |
 | 5 | UI runs jobs via ephemeral RayJob (cluster created per job, removed after) | CRITICAL | **Gap** |
 | 6 | Self-serve private clusters (dask-gateway UX): request RayCluster from gateway, Ray Client address back, no shared heads/workers/object store, list/stop own clusters, idle cleanup, approved options only, own-cluster dashboard access | CRITICAL | **Built** (lifecycle controller, registry, + Wave 2-C connect handoff & own-cluster dashboard proxy). Caveat: connect resolves the **in-cluster** head service; remote/off-cluster connect deferred (needs an owner-scoped address endpoint) |
-| 7 | Group admins control profiles, images, CPU/mem/GPU, max workers | CRITICAL | Partial (policy/quota, flavors) |
+| 7 | Group admins control profiles, images, CPU/mem/GPU, max workers | CRITICAL | **Partial** — `PolicyConfig` carries Prices/Quotas/Budgets/GPUDefaultSharing, so CPU/mem/GPU and max-workers are controllable. **Profiles and images are not**: there is no image allowlist or profile type anywhere. Note the Wave 1 exit below claims req 7 *closed*; that claim is wrong and this row is the accurate one. Blocks the admin half of req 10. |
 | 8 | Automatic cleanup even after gateway failure; ownership recorded; state recovered on restart | CRITICAL | **Built** (persistent Store, observation-first reconcile) |
 | 9 | Start/stop clusters from JupyterLab (extension) | CRITICAL | **Built** (bifrost-jupyter, Wave 2-C: start/stop/suspend/resume panel, status, prod OIDC) |
 | 10 | Use nebi environments on the cluster | CRITICAL | Blocked on nebi + Artifact Keeper |
 | 11 | Pass environment variables to the cluster (JupyterLab extension) | CRITICAL | **Built** (Wave 2-C: env-var editor -> Ray Job `runtime_env.env_vars`) |
 | 12 | Private storage (e.g. S3) from the cluster | CRITICAL | Needs exploration |
 | 13 | Group capacity via shared resource pools; fair queueing; admin quotas/weights | LOW | In flight (Kueue) |
-| 14 | Usage visibility: who requested what, duration, estimated cost | LOW | **Built** (metering, price sheets) |
+| 14 | Usage visibility: who requested what, duration, estimated cost | LOW | **Not built** — read path only. `RecordUsageSamples` exists on all three stores and **nothing calls it**; `serve.go` names the metering loop an explicit Wave 3 scope-out. `UsageReport` reads solely from `UsageSamples`, so it is a correct reader over a permanently empty table. Verified on Grace 2026-09-02 after hours of live clusters: `{"budgets":[],"groups":[]}`. Price-sheet/cost math (`policy.ResourceHours`) is real and unit-tested; it has no producer. |
 | 15 | Cluster health / pending-reasons without direct K8s access | LOW | **Built** (5 observability ops) |
-| 16 | Same UX across Ray and Dask (ports-and-adapters compute contract) | LOW | **Built** (EngineRouter, Dask adapter) |
+| 16 | Same UX across Ray and Dask (ports-and-adapters compute contract) | LOW | **Not built** — neither named component exists. There is no `EngineRouter` in the tree (the only two matches are comments describing "a *future* multi-engine EngineRouter"), and `internal/provision/` holds kuberay/kueue/observe/status only — no Dask provisioner. `EngineDask` exists as a core enum value and wire translation, which is the engine-agnostic *seam*, not an adapter. |
 | 17 | Same UX across Kubernetes and Slurm | LOW | Not built (design must not foreclose) |
 | 18 | NIST security baseline operation + audit evidence | LOW | Partial — audit hash chain **built**; UBI9-micro container image **built** (`Dockerfile`, non-root, static, digest-pinned). FIPS variant **not built** (no `GOFIPS140`/`crypto/fips140` anywhere — see the Testing section, which already says "later"). STIG hardening **not built**. |
 
@@ -201,6 +201,15 @@ Wave 1 (CRITICAL parity — reqs 3, 6, 7, 8) is **complete**: Tasks 1-16 of
   swapped from `@brandonrc/mobula-client` to `@brandonrc/bifrost-client`
   with the remaining legacy-string sweep; an `internal/api/openapi.json`-
   vs-`bifrost-api` spec-sync CI gate added (`ci.yml`'s `spec-sync` job).
+
+> **Correction (2026-09-02).** The paragraph below is left as written for
+> the record, but two of its claims are false and the requirement table
+> above is authoritative where they disagree. Req **7** is *not* closed —
+> profiles and images cannot be controlled at all. And the LOW rows it
+> "banks" overstate req **14**: only the read side exists, which the
+> paragraph itself concedes two sentences later when it puts the metering
+> write-loop in Wave 3. A requirement whose producer is unwritten is not
+> closed by its reader.
 
 Requirements closed: **3** (RBAC + gateway blocking direct Ray Serve/
 dashboard/Jobs/GCS access — T7/T8 auth, T10 middleware, T13/T14 gateway),
