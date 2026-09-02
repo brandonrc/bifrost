@@ -73,6 +73,9 @@ func TestEveryRequirementTestDeclaresCoverage(t *testing.T) {
 			if !ok || !strings.HasPrefix(fn.Name.Name, "Test") || fn.Recv != nil {
 				continue
 			}
+			if fn.Name.Name == "TestMain" {
+				continue // setup, not a requirement test
+			}
 			found := false
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
 				if sel, ok := n.(*ast.SelectorExpr); ok {
