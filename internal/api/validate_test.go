@@ -85,3 +85,59 @@ func TestCreateClusterInvalidK8sNameIs400(t *testing.T) {
 		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+const validCreateClusterBody = `{"id":"ok-1","spec":{"name":"ok-1","project":"p","image":"i","ray_version":"2.56.0","head_cpu":"1","head_memory":"1Gi","worker_groups":[]}}`
+
+// The contract declares application/json as the only media type CreateCluster
+// accepts, so ValidateRequests enforces it — a compatibility change from the
+// generated decoder's previous permissiveness (it decoded the body regardless
+// of Content-Type). This pins that: a missing or wrong Content-Type is
+// refused with 400 naming the header, and the declared type's optional
+// `charset` parameter (RFC 9110 media-type syntax, e.g. what a browser's
+// fetch() or a proxy commonly appends) is still accepted.
+func TestBodyOperationsRequireJSONContentType(t *testing.T) {
+	post := func(t *testing.T, contentType string, setHeader bool) *httptest.ResponseRecorder {
+		t.Helper()
+		s := api.NewServer()
+		s.Store = controller.NewMemoryStore()
+		h := apitest.NewHandler(s)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/clusters", strings.NewReader(validCreateClusterBody))
+		if setHeader {
+			req.Header.Set("Content-Type", contentType)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+
+	t.Run("missing Content-Type is refused", func(t *testing.T) {
+		rec := post(t, "", false)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+		}
+		var e api.ErrorResponse
+		_ = json.Unmarshal(rec.Body.Bytes(), &e)
+		if !strings.Contains(e.Message, "Content-Type") {
+			t.Errorf("400 body should name Content-Type; got %q", e.Message)
+		}
+	})
+
+	t.Run("non-JSON Content-Type is refused", func(t *testing.T) {
+		rec := post(t, "text/plain", true)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+		}
+		var e api.ErrorResponse
+		_ = json.Unmarshal(rec.Body.Bytes(), &e)
+		if !strings.Contains(e.Message, "Content-Type") {
+			t.Errorf("400 body should name Content-Type; got %q", e.Message)
+		}
+	})
+
+	t.Run("application/json with a charset parameter is accepted", func(t *testing.T) {
+		rec := post(t, "application/json; charset=utf-8", true)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
+		}
+	})
+}

@@ -49,6 +49,17 @@ func loadContract() {
 // returned 201 and persisted an empty-id record that no route could delete:
 // Go's encoding/json zero-fills missing fields, and `required` was enforced
 // only where a handler happened to hand-check.
+//
+// A side effect of enforcing the contract in full: the declared request
+// media type is now enforced too. A body operation whose Content-Type is
+// missing or is not the type(s) the contract declares (application/json,
+// for every operation this contract defines a body for) is refused with
+// 400 before the handler runs — a deliberate change from the generated
+// strict-server's previous decoder, which decoded the body regardless of
+// Content-Type. Concretely: `curl -d '{"id":...}'` without an explicit
+// `-H 'Content-Type: application/json'` now gets 400, not 201 — curl's
+// default Content-Type for `-d` is application/x-www-form-urlencoded. A
+// media-type parameter (e.g. `; charset=utf-8`) is still accepted.
 func ValidateRequests(next http.Handler) http.Handler {
 	loadContract()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
