@@ -17,10 +17,10 @@ func TestBuildServerGatewayOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildServer: %v", err)
 	}
-	if built.handler == nil {
+	if built.app.Handler == nil {
 		t.Fatal("buildServer returned a nil handler")
 	}
-	if built.store == nil {
+	if built.app.Store == nil {
 		t.Fatal("buildServer returned a nil store (--store defaults to memory)")
 	}
 	t.Cleanup(func() { _ = built.closeStore() })
@@ -32,7 +32,7 @@ func TestBuildServerGatewayOnly(t *testing.T) {
 	// request exercises the "dev caller on the default loopback bind"
 	// path, distinct from TestServeHandlerFailsClosedOnNonLoopbackPeer.
 	req.RemoteAddr = "127.0.0.1:54321"
-	built.handler.ServeHTTP(rec, req)
+	built.app.Handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /healthz = %d, want 200 (body %q)", rec.Code, rec.Body.String())
 	}
@@ -54,7 +54,7 @@ func TestServeHandlerFailsClosedOnNonLoopbackPeer(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	req.RemoteAddr = "203.0.113.5:12345" // TEST-NET-3, definitely not loopback
-	built.handler.ServeHTTP(rec, req)
+	built.app.Handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("non-loopback peer, no auth configured: status = %d, want %d", rec.Code, http.StatusForbidden)
 	}
@@ -73,7 +73,7 @@ func TestServeHandlerAllowUnauthenticatedLiftsTheGuard(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	req.RemoteAddr = "203.0.113.5:12345"
-	built.handler.ServeHTTP(rec, req)
+	built.app.Handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("--dev-allow-unauthenticated: status = %d, want 200 (got body %q)", rec.Code, rec.Body.String())
 	}

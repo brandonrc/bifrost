@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/brandonrc/bifrost/internal/api"
+	"github.com/brandonrc/bifrost/internal/app"
 	"github.com/brandonrc/bifrost/internal/auth"
 	"github.com/brandonrc/bifrost/internal/controller"
 	"github.com/brandonrc/bifrost/internal/core"
@@ -88,8 +89,7 @@ func newServeCmd() *cobra.Command {
 // test (serve_test.go) can call buildServer directly without binding a
 // real socket.
 type builtServer struct {
-	handler    http.Handler
-	store      controller.Store
+	app        *app.App
 	closeStore func() error
 	validator  *auth.Validator
 	local      *auth.LocalAuthenticator
@@ -102,11 +102,11 @@ type builtServer struct {
 	live *live.Client
 }
 
-// buildServer wires store -> registry -> auth -> (optional) live k8s
-// client -> api.Server -> api.NewHandler, without opening any listener —
-// the fail-closed bind guard (CheckBindAllowed) and the actual
-// http.Server both live in runServe, which is the only caller that needs
-// a real socket.
+// buildServer resolves store -> registry -> auth -> (optional) live k8s
+// client, then hands them to app.New to build the api.Server and handler,
+// without opening any listener — the fail-closed bind guard
+// (CheckBindAllowed) and the actual http.Server both live in runServe,
+// which is the only caller that needs a real socket.
 func buildServer(ctx context.Context, opts serveOptions) (*builtServer, error) {
 	kind, err := parseStoreKind(opts.StoreKind)
 	if err != nil {
@@ -162,13 +162,15 @@ func buildServer(ctx context.Context, opts serveOptions) (*builtServer, error) {
 		slog.Info("local auth enabled (ADR-0011): /api/v1/auth/login")
 	}
 
-	var liveClient *live.Client
-	server := &api.Server{
-		Store:     store,
-		Registry:  registry,
-		Validator: validator,
-		Local:     localAuth,
+	cfg := app.Config{
+		Store:                store,
+		Registry:             registry,
+		Validator:            validator,
+		Local:                localAuth,
+		AllowUnauthenticated: opts.DevAllowUnauthenticated,
+		ReconcileInterval:    opts.ReconcileInterval,
 	}
+	var liveClient *live.Client
 	if opts.Namespace != "" {
 		restCfg, err := ctrlconfig.GetConfig()
 		if err != nil {
@@ -179,22 +181,17 @@ func buildServer(ctx context.Context, opts serveOptions) (*builtServer, error) {
 			return fail(err)
 		}
 		liveClient = c
-		server.Provisioner = c
-		server.ServiceProvisioner = live.NewServiceClient(c)
+		cfg.Provisioner = c
+		cfg.ServiceProvisioner = live.NewServiceClient(c)
 		slog.Info("cluster lifecycle controller + services enabled", "namespace", opts.Namespace)
 	}
 
-	handler := api.NewHandler(server, api.HandlerOptions{
-		Validator:            validator,
-		Local:                localAuth,
-		Registry:             registry,
-		Store:                store,
-		AllowUnauthenticated: opts.DevAllowUnauthenticated,
-	})
-
+	a, err := app.New(cfg)
+	if err != nil {
+		return fail(err)
+	}
 	return &builtServer{
-		handler:    handler,
-		store:      store,
+		app:        a,
 		closeStore: closeStore,
 		validator:  validator,
 		local:      localAuth,
@@ -240,24 +237,9 @@ func runServe(ctx context.Context, opts serveOptions) error {
 		return err
 	}
 
-	if built.live != nil {
-		go func() {
-			if err := controller.RunReconciler(ctx, built.store, built.live, controller.Options{
-				Interval: opts.ReconcileInterval,
-			}); err != nil {
-				slog.Error("reconcile loop exited", "error", err)
-			}
-		}()
-		go func() {
-			if err := controller.RunPoolReconciler(ctx, built.store, built.live, controller.PoolOptions{
-				Interval: opts.ReconcileInterval,
-			}); err != nil {
-				slog.Error("pool reconcile loop exited", "error", err)
-			}
-		}()
-	}
+	go built.app.RunLoops(ctx)
 
-	srv := &http.Server{Addr: opts.Bind, Handler: built.handler}
+	srv := &http.Server{Addr: opts.Bind, Handler: built.app.Handler}
 	serveErr := make(chan error, 1)
 	go func() {
 		slog.Info("bifrost serve listening", "bind", opts.Bind)
