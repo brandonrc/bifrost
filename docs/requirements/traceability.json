@@ -73,13 +73,15 @@
       "n": 6,
       "title": "Self-serve private clusters (dask-gateway UX)",
       "priority": "CRITICAL",
-      "tests": 0,
-      "passed": 0,
+      "tests": 1,
+      "passed": 1,
       "failed": 0,
       "skipped": 0,
       "not_yet_built": 0,
-      "status": "untested",
-      "test_names": null,
+      "status": "built",
+      "test_names": [
+        "TestDashboardNginxResolvesUpstreamAtRequestTime"
+      ],
       "skip_reasons": null
     },
     {
@@ -99,13 +101,16 @@
       "n": 8,
       "title": "Automatic cleanup even after gateway failure; ownership recorded; state recovered on restart",
       "priority": "CRITICAL",
-      "tests": 0,
-      "passed": 0,
+      "tests": 2,
+      "passed": 2,
       "failed": 0,
       "skipped": 0,
       "not_yet_built": 0,
-      "status": "untested",
-      "test_names": null,
+      "status": "built",
+      "test_names": [
+        "TestDashboardNginxResolvesUpstreamAtRequestTime",
+        "TestImageTagIsRequired"
+      ],
       "skip_reasons": null
     },
     {
