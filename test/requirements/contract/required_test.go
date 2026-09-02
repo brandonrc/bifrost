@@ -47,6 +47,28 @@ func dummy(s *openapi3.SchemaRef) any {
 	}
 }
 
+// missingPropertyReasons returns the exact reason phrasings
+// openapi3filter emits for a missing required property. Two shapes were
+// observed across this contract's body schemas — both bind to the field
+// name precisely enough that no OTHER required field's name can satisfy
+// either substring:
+//
+//   - a single SchemaError naming the property inline, e.g. CreateUserRequest,
+//     CreateCluster, CreatePool, DeployService — `Error at "/role": property
+//     "role" is missing`. These responses also carry a full JSON dump of the
+//     enclosing schema (every property name, and the full `required` list) —
+//     which is why a bare `strings.Contains(raw, field)` was vacuous for
+//     these operations: it passed for a 400 caused by omitting ANY of the
+//     schema's required fields, not specifically the one this subtest
+//     omitted.
+//   - a MultiError-wrapped case, e.g. LoginRequest, CreateTokenRequest,
+//     UpsertAssignment, PutAllocation — `validation failed due to: at '':
+//     missing property 'role'` (single-quoted, reversed wording, no schema
+//     dump — "Schema:\n  null").
+func missingPropertyReasons(field string) (dumped, wrapped string) {
+	return fmt.Sprintf("property %q is missing", field), fmt.Sprintf("missing property '%s'", field)
+}
+
 func TestEveryRequiredFieldIsEnforced(t *testing.T) {
 	tgt := target.Get(t).As("admin")
 	req.Covers(t, 3, "the contract's required fields are enforced before any handler runs")
@@ -75,8 +97,21 @@ func TestEveryRequiredFieldIsEnforced(t *testing.T) {
 				if resp.StatusCode != http.StatusBadRequest {
 					t.Fatalf("%s %s without %q = %d, want 400; body=%s", op.Method, op.Path, field, resp.StatusCode, raw)
 				}
-				if !strings.Contains(string(raw), field) {
-					t.Errorf("400 body should name the missing field %q; got %s", field, raw)
+				// The response is JSON: its "message" string is
+				// backslash-escaped (e.g. \"role\"), so match against the
+				// DECODED message, not the raw bytes — a literal-quote
+				// pattern can never hit an escaped byte sequence.
+				var envelope struct {
+					Message string `json:"message"`
+				}
+				_ = json.Unmarshal(raw, &envelope)
+				dumped, wrapped := missingPropertyReasons(field)
+				if !strings.Contains(envelope.Message, dumped) && !strings.Contains(envelope.Message, wrapped) {
+					snippet := raw
+					if len(snippet) > 300 {
+						snippet = snippet[:300]
+					}
+					t.Errorf("400 body should give openapi3filter's missing-property reason for %q (want %q or %q); got: %s", field, dumped, wrapped, snippet)
 				}
 			})
 			checked++
