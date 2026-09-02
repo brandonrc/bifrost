@@ -44,19 +44,28 @@ func TestOwnerNotebookPodConnectsToItsCluster(t *testing.T) {
 	}
 
 	head := fmt.Sprintf("%s-head-svc.%s.svc", id, tgt.Namespace())
+	// The job is retried up to three times when Ray reports FAILED with no
+	// output of its own: on a 4-vCPU CI runner the head's job agent can
+	// still be warming up when the first submission lands. A job that runs
+	// and prints the wrong thing is never retried — that would be a bug.
 	script := fmt.Sprintf(`
 import sys, time
 from ray.job_submission import JobSubmissionClient
 c = JobSubmissionClient("http://%[1]s:8265")
-jid = c.submit_job(entrypoint="python -c 'import ray; ray.init(); print(\"REQ-JOB-OK\", ray.cluster_resources().get(\"CPU\"))'")
-status = None
-for _ in range(120):
-    status = str(c.get_job_status(jid))
-    if status in ("SUCCEEDED", "FAILED", "STOPPED"):
+status, logs = None, ""
+for attempt in range(3):
+    jid = c.submit_job(entrypoint="python -c 'import ray; ray.init(); print(\"REQ-JOB-OK\", ray.cluster_resources().get(\"CPU\"))'")
+    for _ in range(120):
+        status = str(c.get_job_status(jid))
+        if status in ("SUCCEEDED", "FAILED", "STOPPED"):
+            break
+        time.sleep(2)
+    logs = c.get_job_logs(jid)
+    info = c.get_job_info(jid)
+    print("attempt", attempt, "job", status, "message:", getattr(info, "message", None)); print(logs[-300:])
+    if status == "SUCCEEDED" or logs.strip():
         break
-    time.sleep(2)
-logs = c.get_job_logs(jid)
-print("job", status); print(logs[-300:])
+    time.sleep(5)
 if status != "SUCCEEDED" or "REQ-JOB-OK" not in logs:
     sys.exit(2)
 import ray

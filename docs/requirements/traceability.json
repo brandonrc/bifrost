@@ -5,34 +5,38 @@
       "n": 1,
       "title": "Deploy models from within Jupyter",
       "priority": "CRITICAL",
-      "tests": 0,
+      "tests": 1,
       "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "not_yet_built": 0,
-      "status": "untested",
-      "test_names": null,
+      "not_yet_built": 1,
+      "status": "not-yet-built",
+      "test_names": [
+        "TestDeployServiceConvergesToServing"
+      ],
       "skip_reasons": null
     },
     {
       "n": 2,
       "title": "Groups share models privately",
       "priority": "HIGH",
-      "tests": 0,
+      "tests": 1,
       "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "not_yet_built": 0,
-      "status": "untested",
-      "test_names": null,
+      "not_yet_built": 1,
+      "status": "not-yet-built",
+      "test_names": [
+        "TestNonMemberCannotReadAnotherGroupsService"
+      ],
       "skip_reasons": null
     },
     {
       "n": 3,
       "title": "RBAC for model serving and cluster access; direct Ray Serve/dashboard/Jobs/GCS access blocked",
       "priority": "HIGH",
-      "tests": 8,
-      "passed": 5,
+      "tests": 12,
+      "passed": 9,
       "failed": 0,
       "skipped": 3,
       "not_yet_built": 0,
@@ -43,8 +47,12 @@
         "TestCrossOwnerHeadPortsAreUnreachable",
         "TestDashboardRuntimeSSOConfig",
         "TestDeveloperCannotCreateCluster",
+        "TestDisabledUserCannotLogInAndWrongPasswordIs401",
         "TestEveryNonPublicOperationRequiresAToken",
         "TestEveryRequiredFieldIsEnforced",
+        "TestLogoutInvalidatesTheSession",
+        "TestPermissionMatrix",
+        "TestPersonalAccessTokenLifecycle",
         "TestProjectOperatorCannotEscalateOrReadPlatformState"
       ],
       "skip_reasons": [
@@ -57,34 +65,38 @@
       "n": 4,
       "title": "Serving in separate resource pool from compute clusters",
       "priority": "CRITICAL",
-      "tests": 0,
+      "tests": 1,
       "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "not_yet_built": 0,
-      "status": "untested",
-      "test_names": null,
+      "not_yet_built": 1,
+      "status": "not-yet-built",
+      "test_names": [
+        "TestServingHasItsOwnPool"
+      ],
       "skip_reasons": null
     },
     {
       "n": 5,
       "title": "UI runs jobs via ephemeral RayJob",
       "priority": "CRITICAL",
-      "tests": 0,
+      "tests": 1,
       "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "not_yet_built": 0,
-      "status": "untested",
-      "test_names": null,
+      "not_yet_built": 1,
+      "status": "not-yet-built",
+      "test_names": [
+        "TestSubmitCreatesAnEphemeralCluster"
+      ],
       "skip_reasons": null
     },
     {
       "n": 6,
       "title": "Self-serve private clusters (dask-gateway UX)",
       "priority": "CRITICAL",
-      "tests": 8,
-      "passed": 5,
+      "tests": 11,
+      "passed": 8,
       "failed": 0,
       "skipped": 3,
       "not_yet_built": 0,
@@ -92,6 +104,9 @@
       "test_names": [
         "TestCreateConvergesAndDeleteRemovesEverything",
         "TestDashboardNginxResolvesUpstreamAtRequestTime",
+        "TestDeletedClusterTombstoneAndPurge",
+        "TestIdleClusterIsReaped",
+        "TestInvalidSpecIsRefusedWith400",
         "TestListShowsOnlyOwnProjectClusters",
         "TestOwnerNotebookPodConnectsToItsCluster",
         "TestStopAnothersClusterIsRefused",
@@ -109,8 +124,8 @@
       "n": 7,
       "title": "Group admins control profiles, images, CPU/mem/GPU, max workers",
       "priority": "CRITICAL",
-      "tests": 3,
-      "passed": 3,
+      "tests": 4,
+      "passed": 4,
       "failed": 0,
       "skipped": 0,
       "not_yet_built": 0,
@@ -118,6 +133,7 @@
       "test_names": [
         "TestDeveloperCannotChangeAdmissionPolicy",
         "TestDisallowedImageIsRefused",
+        "TestProjectQuotaRefusesOverCommit",
         "TestWorkerCapIsEnforced"
       ],
       "skip_reasons": null
@@ -198,26 +214,30 @@
       "n": 12,
       "title": "Private storage (e.g. S3) from the cluster",
       "priority": "CRITICAL",
-      "tests": 0,
+      "tests": 1,
       "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "not_yet_built": 0,
-      "status": "untested",
-      "test_names": null,
+      "not_yet_built": 1,
+      "status": "not-yet-built",
+      "test_names": [
+        "TestClusterSpecCanReferenceStorageCredentials"
+      ],
       "skip_reasons": null
     },
     {
       "n": 13,
       "title": "Group capacity via shared resource pools; fair queueing; admin quotas/weights",
       "priority": "LOW",
-      "tests": 0,
-      "passed": 0,
+      "tests": 1,
+      "passed": 1,
       "failed": 0,
       "skipped": 0,
       "not_yet_built": 0,
-      "status": "untested",
-      "test_names": null,
+      "status": "built",
+      "test_names": [
+        "TestPoolAndAllocationLifecycle"
+      ],
       "skip_reasons": null
     },
     {
@@ -240,28 +260,33 @@
       "n": 15,
       "title": "Cluster health / pending-reasons without direct K8s access",
       "priority": "LOW",
-      "tests": 1,
+      "tests": 2,
       "passed": 1,
       "failed": 0,
-      "skipped": 0,
+      "skipped": 1,
       "not_yet_built": 0,
-      "status": "built",
+      "status": "partial",
       "test_names": [
-        "TestObservabilityOpsOwnVsOther"
+        "TestObservabilityOpsOwnVsOther",
+        "TestUnschedulableClusterSurfacesTheReason"
       ],
-      "skip_reasons": null
+      "skip_reasons": [
+        "target inproc has no Kubernetes"
+      ]
     },
     {
       "n": 16,
       "title": "Same UX across Ray and Dask",
       "priority": "LOW",
-      "tests": 0,
+      "tests": 1,
       "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "not_yet_built": 0,
-      "status": "untested",
-      "test_names": null,
+      "not_yet_built": 1,
+      "status": "not-yet-built",
+      "test_names": [
+        "TestDaskClusterIsProvisioned"
+      ],
       "skip_reasons": null
     },
     {
@@ -283,17 +308,19 @@
       "n": 18,
       "title": "NIST security baseline operation + audit evidence",
       "priority": "LOW",
-      "tests": 4,
-      "passed": 3,
+      "tests": 6,
+      "passed": 5,
       "failed": 0,
       "skipped": 1,
       "not_yet_built": 0,
       "status": "partial",
       "test_names": [
         "TestAuditChainVerifiesAfterEvents",
+        "TestAuditStatusMatchesOutcome",
         "TestControlPlaneRunsNonRootReadOnly",
         "TestDeniedRequestIsAudited",
-        "TestEveryRequiredFieldIsEnforced"
+        "TestEveryRequiredFieldIsEnforced",
+        "TestNoSecretMaterialInResponses"
       ],
       "skip_reasons": [
         "target inproc has no Kubernetes"
