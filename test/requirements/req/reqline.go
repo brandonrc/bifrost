@@ -20,7 +20,11 @@ type Line struct {
 
 const linePrefix = "REQ: "
 
-var lineRe = regexp.MustCompile(`^\s*REQ: kind=(\w+) req=(\d+) reason=("(?:[^"\\]|\\.)*")(?: outcome=(\w+))?\s*$`)
+// go's t.Log/t.Logf decorate each line with the caller's "file:line: "
+// before the message when running under `go test` (with or without -v);
+// tolerate that optional decoration so ParseLine can read real test output,
+// not just Line.Format's own bare output.
+var lineRe = regexp.MustCompile(`^\s*(?:[\w./\\-]+\.go:\d+: )?REQ: kind=(\w+) req=(\d+) reason=("(?:[^"\\]|\\.)*")(?: outcome=(\w+))?\s*$`)
 
 // Format renders the line. Reason is %q-quoted so it may contain spaces.
 func (l Line) Format() string {
