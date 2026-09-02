@@ -28,7 +28,6 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      COVERAGE_THRESHOLD: "80"
       BIFROST_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
     steps:
       - uses: actions/checkout@v4
@@ -42,7 +41,8 @@ jobs:
         run: CGO_ENABLED=0 go build ./...
       - name: race tests + coverage (incl. live Postgres store backend)
         run: CGO_ENABLED=1 go test -race -count=2 -covermode=atomic -coverprofile=coverage.txt ./...
-      - run: ./scripts/coverage-gate.sh
+      - name: tiered coverage ratchet (spec §4)
+        run: go run ./test/requirements/cmd/covreport -profile coverage.txt
   vuln:
     runs-on: ubuntu-latest
     steps:

@@ -1,0 +1,6 @@
+mode: atomic
+github.com/brandonrc/bifrost/internal/core/a.go:1.1,2.2 2 1
+github.com/brandonrc/bifrost/internal/core/a.go:3.1,4.2 2 0
+github.com/brandonrc/bifrost/internal/api/b.go:1.1,2.2 4 3
+github.com/brandonrc/bifrost/internal/api/zz_generated_api.go:1.1,2.2 100 0
+github.com/brandonrc/bifrost/cmd/bifrost/main.go:1.1,2.2 10 0
