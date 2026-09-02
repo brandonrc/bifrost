@@ -1,0 +1,65 @@
+# Role x operation matrix (spec §5, #3): for every non-public operation in
+# the frozen contract, what each seeded principal may do. TestPermissionMatrix
+# walks the contract and asserts the server agrees; a mismatch in either
+# direction is the failure. Edit this file deliberately, in the same change
+# that alters the server's authorization.
+#
+# Vocabulary:
+#   allow  - not 401/403 (400/404/409 count: the caller got past authorization)
+#   deny   - 403
+#   scoped - project-scoped: 2xx/400/404/409 on own project, 403/404 on another's
+# anon is always 401 on these operations (TestEveryNonPublicOperationRequiresAToken).
+# Principals: admin (global admin), operator (global operator), dev-a
+# (local developer holding operator on project team-a), dev-b (same, team-b).
+operations:
+  # --- clusters (target Cluster: read viewer+, write/delete operator+, project-scoped)
+  list_clusters:    {admin: allow, operator: allow, dev-a: allow,  dev-b: allow}
+  create_cluster:   {admin: allow, operator: allow, dev-a: scoped, dev-b: scoped}
+  get_cluster:      {admin: allow, operator: allow, dev-a: scoped, dev-b: scoped}
+  delete_cluster:   {admin: allow, operator: allow, dev-a: scoped, dev-b: scoped}
+  suspend_cluster:  {admin: allow, operator: allow, dev-a: scoped, dev-b: scoped}
+  resume_cluster:   {admin: allow, operator: allow, dev-a: scoped, dev-b: scoped}
+  cluster_events:   {admin: allow, operator: allow, dev-a: scoped, dev-b: scoped}
+  cluster_jobs:     {admin: allow, operator: allow, dev-a: scoped, dev-b: scoped}
+  cluster_logs:     {admin: allow, operator: allow, dev-a: scoped, dev-b: scoped}
+  cluster_metrics:  {admin: allow, operator: allow, dev-a: scoped, dev-b: scoped}
+  cluster_nodes:    {admin: allow, operator: allow, dev-a: scoped, dev-b: scoped}
+  # The gateway registry names every cluster host and whether it holds a token: administrators only.
+  list_registry:    {admin: allow, operator: deny,  dev-a: deny,   dev-b: deny}
+  # --- jobs (target Job: developer full, operator read)
+  list_jobs:        {admin: allow, operator: allow, dev-a: allow, dev-b: allow}
+  # --- services (target Service: developer full, operator read)
+  list_services:    {admin: allow, operator: allow, dev-a: allow, dev-b: allow}
+  deploy_service:   {admin: allow, operator: deny,  dev-a: allow, dev-b: allow}
+  get_service:      {admin: allow, operator: allow, dev-a: allow, dev-b: allow}
+  delete_service:   {admin: allow, operator: deny,  dev-a: allow, dev-b: allow}
+  # --- pools (target Pool: read developer+, mutations admin only)
+  list_pools:        {admin: allow, operator: allow, dev-a: allow, dev-b: allow}
+  create_pool:       {admin: allow, operator: deny,  dev-a: deny,  dev-b: deny}
+  get_pool:          {admin: allow, operator: allow, dev-a: allow, dev-b: allow}
+  delete_pool:       {admin: allow, operator: deny,  dev-a: deny,  dev-b: deny}
+  list_allocations:  {admin: allow, operator: allow, dev-a: allow, dev-b: allow}
+  put_allocation:    {admin: allow, operator: deny,  dev-a: deny,  dev-b: deny}
+  delete_allocation: {admin: allow, operator: deny,  dev-a: deny,  dev-b: deny}
+  pool_usage:        {admin: allow, operator: allow, dev-a: allow, dev-b: allow}
+  # --- governance, audit, usage
+  get_policy:        {admin: allow, operator: deny, dev-a: deny, dev-b: deny}
+  update_policy:     {admin: allow, operator: deny, dev-a: deny, dev-b: deny}
+  list_audit_events: {admin: allow, operator: deny, dev-a: deny, dev-b: deny}
+  verify_audit_trail: {admin: allow, operator: deny, dev-a: deny, dev-b: deny}
+  usage_report:      {admin: allow, operator: allow, dev-a: allow, dev-b: allow}
+  metrics:           {admin: allow, operator: allow, dev-a: allow, dev-b: allow}
+  # --- identity, tokens, users, access
+  identity:          {admin: allow, operator: allow, dev-a: allow, dev-b: allow}
+  logout:            {admin: allow, operator: allow, dev-a: allow, dev-b: allow}
+  list_tokens:       {admin: allow, operator: allow, dev-a: allow, dev-b: allow}
+  create_token:      {admin: allow, operator: allow, dev-a: allow, dev-b: allow}
+  revoke_token:      {admin: allow, operator: allow, dev-a: allow, dev-b: allow}
+  list_users:        {admin: allow, operator: deny, dev-a: deny, dev-b: deny}
+  create_user:       {admin: allow, operator: deny, dev-a: deny, dev-b: deny}
+  update_user:       {admin: allow, operator: deny, dev-a: deny, dev-b: deny}
+  list_assignments:  {admin: allow, operator: deny, dev-a: deny, dev-b: deny}
+  upsert_assignment: {admin: allow, operator: deny, dev-a: deny, dev-b: deny}
+  delete_assignment: {admin: allow, operator: deny, dev-a: deny, dev-b: deny}
+  # Role mappings are access-control configuration, read by administrators only.
+  list_roles:        {admin: allow, operator: deny, dev-a: deny, dev-b: deny}

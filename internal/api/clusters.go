@@ -345,6 +345,23 @@ func (s *Server) CreateCluster(ctx context.Context, req CreateClusterRequestObje
 	if err != nil {
 		return nil, err
 	}
+	// Shape validation the contract cannot express: every quantity must
+	// parse as a Kubernetes quantity and every worker group's replica bounds
+	// must be coherent. Without this a spec such as head_cpu "lots" is
+	// accepted with 201 and then fails in the provisioner on every tick — a
+	// cluster the user can see but that can never be built (found by
+	// r06's TestInvalidSpecIsRefusedWith400, 2026-09-02).
+	if _, _, derr := policy.ClusterDemand(&spec); derr != nil {
+		s.denyCreate(ctx, identity, body.Id, "invalid_spec", http.StatusBadRequest)
+		return nil, badRequest("invalid spec: " + derr.Error())
+	}
+	for _, g := range spec.WorkerGroups {
+		if g.MinReplicas > g.MaxReplicas || g.Replicas < g.MinReplicas || g.Replicas > g.MaxReplicas {
+			s.denyCreate(ctx, identity, body.Id, "invalid_spec", http.StatusBadRequest)
+			return nil, badRequest(fmt.Sprintf("invalid spec: worker group %q replicas=%d must lie within min_replicas=%d..max_replicas=%d",
+				g.Name, g.Replicas, g.MinReplicas, g.MaxReplicas))
+		}
+	}
 	// Administrator's allowlist (requirement 7): image and worker cap.
 	// Checked before quota so a refused image never counts against anything.
 	if aerr := s.Admission.Check(&spec); aerr != nil {
