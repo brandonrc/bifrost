@@ -217,31 +217,28 @@ func TestSuspendResumeByGlobalOperator(t *testing.T) {
 	fixture.WaitObserved(t, tgt, "admin", id, "running")
 }
 
-// Found on grace 2026-09-02: the project operator who may create and delete
-// their cluster is refused suspend/resume, because lifecycleCommand demands
-// GLOBAL cluster write (ported verbatim from clusters.rs) where create and
-// delete are project-scoped. bifrost-jupyter exposes suspend/resume to
-// exactly this user, so the panel's buttons 403 for them. This flips from
-// not-yet-built to built when lifecycleCommand is scoped to the cluster's
-// project.
+// Found on grace 2026-09-02 and fixed the same day: the project operator who
+// may create and delete their cluster was refused suspend/resume, because
+// lifecycleCommand demanded GLOBAL cluster write (ported verbatim from
+// clusters.rs) where create and delete were project-scoped. bifrost-jupyter
+// shows those buttons to exactly this user.
 func TestSuspendResumeByProjectOperator(t *testing.T) {
 	tgt := target.Get(t)
-	req.NotYetBuilt(t, 6, "suspend/resume are global-operator only; the project operator who owns the cluster gets 403", func(b *req.B) {
-		ctx := context.Background()
-		id := req.Name("psr")
-		fixture.MustCreate(b, tgt, "dev-a", id, "team-a")
-		fixture.WaitObserved(b, tgt, "dev-a", id, "running")
-		sus, err := tgt.As("dev-a").API().SuspendClusterWithResponse(ctx, id)
-		if err != nil || sus.StatusCode() != http.StatusAccepted {
-			b.Fatalf("project operator suspend own cluster: err=%v status=%v body=%s", err, sus.StatusCode(), sus.Body)
-		}
-		fixture.WaitObserved(b, tgt, "dev-a", id, "suspended")
-		res, err := tgt.As("dev-a").API().ResumeClusterWithResponse(ctx, id)
-		if err != nil || res.StatusCode() != http.StatusAccepted {
-			b.Fatalf("project operator resume own cluster: err=%v status=%v body=%s", err, res.StatusCode(), res.Body)
-		}
-		fixture.WaitObserved(b, tgt, "dev-a", id, "running")
-	})
+	req.Covers(t, 6, "the project operator who owns a cluster can suspend and resume it, like create and delete")
+	ctx := context.Background()
+	id := req.Name("psr")
+	fixture.MustCreate(t, tgt, "dev-a", id, "team-a")
+	fixture.WaitObserved(t, tgt, "dev-a", id, "running")
+	sus, err := tgt.As("dev-a").API().SuspendClusterWithResponse(ctx, id)
+	if err != nil || sus.StatusCode() != http.StatusAccepted {
+		t.Fatalf("project operator suspend own cluster: err=%v status=%v body=%s", err, sus.StatusCode(), sus.Body)
+	}
+	fixture.WaitObserved(t, tgt, "dev-a", id, "suspended")
+	res, err := tgt.As("dev-a").API().ResumeClusterWithResponse(ctx, id)
+	if err != nil || res.StatusCode() != http.StatusAccepted {
+		t.Fatalf("project operator resume own cluster: err=%v status=%v body=%s", err, res.StatusCode(), res.Body)
+	}
+	fixture.WaitObserved(t, tgt, "dev-a", id, "running")
 }
 
 func contains(xs []string, x string) bool {

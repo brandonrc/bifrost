@@ -366,6 +366,40 @@ func TestSuspendResume_RequiresWritePermission(t *testing.T) {
 	mustHTTPError(t, err, 403)
 }
 
+// A project-scoped operator may suspend and resume the clusters of their
+// own project and no other's — the rule create and delete already follow.
+// Found on grace 2026-09-02: the port demanded global write here.
+func TestSuspendResume_ProjectScopedOperator(t *testing.T) {
+	store := controller.NewMemoryStore()
+	ctx := context.Background()
+	for _, c := range []struct{ id, project string }{{"c1", "p1"}, {"c2", "p2"}} {
+		gen, err := store.UpsertDesired(ctx, core.ClusterId(c.id), core.ClusterSpec{Name: c.id, Project: c.project, RayVersion: "x", Image: "x", HeadCpu: "1", HeadMemory: "1Gi"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		setObserved(t, store, core.ClusterId(c.id), core.ClusterStateRunning, gen)
+	}
+	s := &Server{Store: store}
+	op := testIdentity("dev", auth.RoleDeveloper)
+	op.ProjectRoles = []auth.RoleScope{{Role: auth.RoleOperator, Scope: "project:p1"}}
+
+	if _, err := s.SuspendCluster(ctxWithIdentity(op), SuspendClusterRequestObject{Id: "c1"}); err != nil {
+		t.Fatalf("project operator suspend own project's cluster: %v", err)
+	}
+	got, _ := store.Get(ctx, "c1")
+	if got.Desired != controller.DesiredSuspended {
+		t.Fatalf("desired = %s, want suspended", got.Desired)
+	}
+	setObserved(t, store, "c1", core.ClusterStateSuspended, got.Generation)
+	if _, err := s.ResumeCluster(ctxWithIdentity(op), ResumeClusterRequestObject{Id: "c1"}); err != nil {
+		t.Fatalf("project operator resume own project's cluster: %v", err)
+	}
+	_, err := s.SuspendCluster(ctxWithIdentity(op), SuspendClusterRequestObject{Id: "c2"})
+	mustHTTPError(t, err, 403)
+	_, err = s.SuspendCluster(ctxWithIdentity(op), SuspendClusterRequestObject{Id: "nope"})
+	mustHTTPError(t, err, 403)
+}
+
 func TestSuspendCluster_QueueOwnedIs409(t *testing.T) {
 	store := controller.NewMemoryStore()
 	ctx := context.Background()

@@ -31,22 +31,24 @@
       "n": 3,
       "title": "RBAC for model serving and cluster access; direct Ray Serve/dashboard/Jobs/GCS access blocked",
       "priority": "HIGH",
-      "tests": 7,
+      "tests": 8,
       "passed": 5,
       "failed": 0,
-      "skipped": 2,
+      "skipped": 3,
       "not_yet_built": 0,
       "status": "partial",
       "test_names": [
         "TestCNIEnforcesNetworkPolicy",
         "TestCreateInAnotherProjectIsRefused",
         "TestCrossOwnerHeadPortsAreUnreachable",
+        "TestDashboardRuntimeSSOConfig",
         "TestDeveloperCannotCreateCluster",
         "TestEveryNonPublicOperationRequiresAToken",
         "TestEveryRequiredFieldIsEnforced",
         "TestProjectOperatorCannotEscalateOrReadPlatformState"
       ],
       "skip_reasons": [
+        "bifrost-pack chart not checked out (set PACK_CHART)",
         "target inproc lacks capability probes",
         "target inproc lacks capability calico"
       ]
@@ -82,10 +84,10 @@
       "title": "Self-serve private clusters (dask-gateway UX)",
       "priority": "CRITICAL",
       "tests": 8,
-      "passed": 4,
+      "passed": 5,
       "failed": 0,
       "skipped": 3,
-      "not_yet_built": 1,
+      "not_yet_built": 0,
       "status": "partial",
       "test_names": [
         "TestCreateConvergesAndDeleteRemovesEverything",
