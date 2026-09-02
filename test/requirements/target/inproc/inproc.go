@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/brandonrc/bifrost/internal/app"
@@ -46,7 +47,19 @@ type target struct {
 	principal string
 	tokens    *sync.Map // principal -> bearer token
 	cancel    context.CancelFunc
+	t         testing.TB
 }
+
+// seedBcryptCost is the bcrypt work factor inproc hashes seed passwords and
+// issued tokens at: bcrypt.MinCost, not auth's production bcryptCost (12).
+// Spec §3 caps the whole L2 requirement-test lane at under 3 minutes
+// (merge-blocking); at cost 12 under -race a single bcrypt op runs ~2.2s,
+// and a fresh inproc.New pays for several (4 seed hashes + a token
+// hash/verify per login + a verify per authenticated request) — that
+// alone blew the budget once the P1 suite reached ~52 tests each starting
+// a fresh target. Production (cmd/bifrost/serve.go, via
+// auth.NewLocalAuthenticator) is untouched: it still always hashes at 12.
+const seedBcryptCost = bcrypt.MinCost
 
 // New builds the in-process target and starts its reconcile loop. Callers
 // (target.Get) register Cleanup and srv.Close via t.Cleanup.
@@ -55,7 +68,7 @@ func New(t testing.TB) req.Target {
 	store := controller.NewMemoryStore()
 	ctx := context.Background()
 	for name, p := range principals {
-		hash, err := auth.HashPassword(password(name))
+		hash, err := auth.HashPasswordWithCost(password(name), seedBcryptCost)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -63,9 +76,13 @@ func New(t testing.TB) req.Target {
 			t.Fatalf("seed %s: %v", name, err)
 		}
 	}
+	local, err := auth.NewLocalAuthenticatorWithCost(store, 86_400, 90, seedBcryptCost)
+	if err != nil {
+		t.Fatal(err)
+	}
 	a, err := app.New(app.Config{
 		Store:             store,
-		Local:             auth.NewLocalAuthenticator(store, 86_400, 90),
+		Local:             local,
 		Provisioner:       newFakeProvisioner(),
 		ReconcileInterval: 25 * time.Millisecond,
 	})
@@ -76,7 +93,7 @@ func New(t testing.TB) req.Target {
 	go a.RunLoops(loopCtx)
 	srv := httptest.NewServer(a.Handler)
 
-	tg := &target{srv: srv, store: store, principal: "admin", tokens: &sync.Map{}, cancel: cancel}
+	tg := &target{srv: srv, store: store, principal: "admin", tokens: &sync.Map{}, cancel: cancel, t: t}
 	// Project-scoped assignments are made through the API as admin, so the
 	// seeding itself exercises the real access path.
 	for name, p := range principals {
@@ -134,7 +151,16 @@ func (tg *target) As(p string) req.Target {
 	return &cp
 }
 
+// token returns the current principal's cached bearer token, logging in
+// (and caching the result) on first use. On a login failure it fails the
+// test via tg.t.Fatalf rather than panicking — a flaky login must fail the
+// one test that hit it, not crash the whole L2 binary out from under every
+// other test running in the package. Fatalf unwinds via runtime.Goexit,
+// which only stops the calling goroutine: token (and its callers, API and
+// Authorize) must therefore run on the goroutine tg.t was constructed
+// against, same as any other *testing.T method.
 func (tg *target) token(ctx context.Context) string {
+	tg.t.Helper()
 	if tg.principal == "anon" {
 		return ""
 	}
@@ -148,7 +174,8 @@ func (tg *target) token(ctx context.Context) string {
 	_ = json.Unmarshal([]byte(fmt.Sprintf(`{"username":%q,"password":%q}`, tg.principal, password(tg.principal))), &body)
 	resp, err := c.LoginWithResponse(ctx, body)
 	if err != nil || resp.StatusCode() != http.StatusOK {
-		panic(fmt.Sprintf("inproc: login %s failed: %v %s", tg.principal, err, bodyStr(resp)))
+		tg.t.Fatalf("inproc: login %s failed: %v %s", tg.principal, err, bodyStr(resp))
+		return ""
 	}
 	var m struct {
 		Token string `json:"token"`
@@ -165,7 +192,13 @@ func bodyStr(r *client.LoginHTTPResponse) string {
 	return string(r.Body)
 }
 
+// API returns a client authenticated as the current principal, performing
+// a real login on first use. Must be called from the test goroutine tg.t
+// was constructed against: on failure it fails via tg.t.Fatalf, which (via
+// runtime.Goexit) only unwinds the calling goroutine — same constraint
+// *testing.T carries everywhere else.
 func (tg *target) API() *client.ClientWithResponses {
+	tg.t.Helper()
 	tok := tg.token(context.Background())
 	c, err := client.NewClientWithResponses(tg.srv.URL, client.WithRequestEditorFn(func(_ context.Context, r *http.Request) error {
 		if tok != "" {
@@ -174,7 +207,8 @@ func (tg *target) API() *client.ClientWithResponses {
 		return nil
 	}))
 	if err != nil {
-		panic(err)
+		tg.t.Fatalf("inproc: build API client: %v", err)
+		return nil
 	}
 	return c
 }
