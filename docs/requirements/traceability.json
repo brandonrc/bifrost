@@ -48,9 +48,9 @@
         "TestProjectOperatorCannotEscalateOrReadPlatformState"
       ],
       "skip_reasons": [
-        "bifrost-pack chart not checked out (set PACK_CHART)",
         "target inproc lacks capability probes",
-        "target inproc lacks capability calico"
+        "target inproc lacks capability calico",
+        "bifrost-pack chart not checked out (set PACK_CHART)"
       ]
     },
     {
@@ -168,14 +168,18 @@
       "n": 10,
       "title": "Use nebi environments on the cluster",
       "priority": "CRITICAL",
-      "tests": 0,
+      "tests": 1,
       "passed": 0,
       "failed": 0,
-      "skipped": 0,
+      "skipped": 1,
       "not_yet_built": 0,
-      "status": "untested",
-      "test_names": null,
-      "skip_reasons": null
+      "status": "skipped",
+      "test_names": [
+        "TestImageWithoutWgetReachesRunning"
+      ],
+      "skip_reasons": [
+        "target inproc has no Kubernetes"
+      ]
     },
     {
       "n": 11,

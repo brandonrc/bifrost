@@ -1,5 +1,12 @@
 # Provisioned RayClusters never report ready on images without `wget`
 
+**Status: FIXED 2026-09-02** (`internal/provision/kuberay.go` `rayProbe`):
+the pod templates carry explicit python-based liveness/readiness probes, so
+KubeRay no longer injects its wget defaults. Verified on grace: a cluster
+from `localhost:32000/checkmaite-api:2.56.0-r1` reached running in 80 s with
+zero restarts. Existing clusters keep their old probes until their spec
+generation changes (re-POST / re-create) — the documented migration path.
+
 **Found**: 2026-09-02, on Grace, provisioning a cluster through the live API.
 **Severity**: High for req #10. The cluster *works*; it just never says so.
 

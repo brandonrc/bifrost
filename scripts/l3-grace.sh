@@ -55,6 +55,7 @@ for t in *.test; do
   echo "=== $name" >&2
   REQ_TARGET=grace REQ_RUN_ID=$RUN_ID BIFROST_URL=$URL BIFROST_INSECURE_TLS=1 \
   BIFROST_ADMIN_PASSWORD=$PW REQ_CONTROL_PLANE_SELECTOR=app.kubernetes.io/name=bifrost-pack \
+  REQ_NOWGET_RAY_IMAGE=${REQ_NOWGET_RAY_IMAGE:-localhost:32000/checkmaite-api:2.56.0-r1} \
     ./$t -test.v=test2json -test.timeout 40m > "$name.out" 2>&1 || status=1
   tail -3 "$name.out" >&2
 done
