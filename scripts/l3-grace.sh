@@ -42,7 +42,8 @@ ssh -o BatchMode=yes "$HOST" "mkdir -p ~/$REMOTE_DIR"
 scp -q .l3/bin/*.test "$HOST:~/$REMOTE_DIR/"
 
 # Run every binary in one ssh session; the admin password never leaves grace.
-ssh -o BatchMode=yes "$HOST" bash -s -- "$REMOTE_DIR" "$RUN_ID" "$BIFROST_URL_REMOTE" "$KUBECONFIG_REMOTE" <<'REMOTE'
+remote_status=0
+ssh -o BatchMode=yes "$HOST" bash -s -- "$REMOTE_DIR" "$RUN_ID" "$BIFROST_URL_REMOTE" "$KUBECONFIG_REMOTE" <<'REMOTE' || remote_status=$?
 set -u
 DIR=$1 RUN_ID=$2 URL=$3 KC=$4
 export KUBECONFIG=$KC
@@ -59,7 +60,6 @@ for t in *.test; do
 done
 exit $status
 REMOTE
-remote_status=$?
 
 scp -q "$HOST:~/$REMOTE_DIR/*.out" .l3/out/
 : > "$OUT"

@@ -33,7 +33,7 @@ func TestOwnershipIsRecordedOnKubernetesObjects(t *testing.T) {
 	req.NeedK8s(t, tgt)
 	ctx := context.Background()
 	k, _ := tgt.K8s()
-	id := req.Name("own")
+	id := req.Name("lbl") // unique across packages: one run id spans them all
 	fixture.MustCreate(t, tgt, "dev-a", id, "team-a")
 	fixture.WaitObserved(t, tgt, "dev-a", id, "running")
 

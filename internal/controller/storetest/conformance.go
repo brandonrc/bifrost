@@ -160,6 +160,39 @@ func runClusterConformance(t *testing.T, store controller.Store) {
 	ctx := context.Background()
 	id := core.ClusterId("demo")
 
+	t.Run("UpsertOntoTerminatedRecordIsAFreshCreate", func(t *testing.T) {
+		// Not in store.rs — found on grace 2026-09-02: re-creating a deleted
+		// id answered 201 and left desired=terminated, a zombie that never
+		// provisions. Store.UpsertDesired's contract: a terminated record is
+		// re-created, not edited.
+		rid := core.ClusterId("revive")
+		if _, err := store.UpsertDesired(ctx, rid, clusterSpecFixture("revive", 1)); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.SetDesired(ctx, rid, controller.DesiredTerminated); err != nil {
+			t.Fatal(err)
+		}
+		before, _ := store.Get(ctx, rid)
+		if before == nil || before.Desired != controller.DesiredTerminated || before.TerminatedAt == nil {
+			t.Fatalf("precondition: %+v", before)
+		}
+		gen, err := store.UpsertDesired(ctx, rid, clusterSpecFixture("revive", 1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gen != before.Generation+1 {
+			t.Fatalf("revive generation = %d, want %d (a new apply)", gen, before.Generation+1)
+		}
+		got, _ := store.Get(ctx, rid)
+		if got == nil || got.Desired != controller.DesiredRunning || got.TerminatedAt != nil ||
+			got.ObservedState != nil || got.ObservedGeneration != 0 || got.FailureCount != 0 || got.Condition != nil {
+			t.Fatalf("revived record is not fresh: %+v", got)
+		}
+		if removed, err := store.RemoveCluster(ctx, rid); err != nil || !removed {
+			t.Fatalf("remove revive record: removed=%v err=%v", removed, err)
+		}
+	})
+
 	t.Run("UpsertDesiredGenerationTracking", func(t *testing.T) {
 		// store.rs:40-51.
 		if gen, err := store.UpsertDesired(ctx, id, clusterSpecFixture("demo", 1)); err != nil || gen != 1 {
