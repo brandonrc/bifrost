@@ -130,6 +130,17 @@ type ClusterSpec struct {
 	// from the client body); nil for clusters created without an owner
 	// (e.g. admin/service paths).
 	Owner *string `json:"owner"`
+	// Profile is the profile catalog name (#7) whose shape fills this
+	// spec's zero-valued shape fields at admission; nil = none.
+	Profile *string `json:"profile"`
+	// Storage names storage catalog entries (#12) delivered to the
+	// cluster's pods. Names only — the catalog is resolved server-side
+	// into StorageResolved.
+	Storage []string `json:"storage"`
+	// StorageResolved is the server-computed resolution of Storage against
+	// the catalog at admission time (never retroactive). Persisted, never
+	// echoed: ClusterView carries no spec.
+	StorageResolved []ResolvedStorage `json:"storage_resolved,omitempty"`
 }
 
 // clusterSpecAlias breaks the recursion Unmarshal/MarshalJSON would
@@ -154,9 +165,9 @@ func (c *ClusterSpec) UnmarshalJSON(data []byte) error {
 // Engine (a ClusterSpec built as a Go struct literal without setting
 // Engine, never having round-tripped through UnmarshalJSON) would
 // otherwise marshal as `"engine":""`, which the frozen OpenAPI contract's
-// Engine enum schema rejects. WorkerGroups gets the same "nil is not a
-// valid Vec" treatment as AuditEvent.GrantedRoles (nil -> `[]`, never
-// `null`).
+// Engine enum schema rejects. WorkerGroups and Storage get the same "nil
+// is not a valid Vec" treatment as AuditEvent.GrantedRoles (nil -> `[]`,
+// never `null`).
 func (c ClusterSpec) MarshalJSON() ([]byte, error) {
 	a := clusterSpecAlias(c)
 	if a.Engine == "" {
@@ -164,6 +175,9 @@ func (c ClusterSpec) MarshalJSON() ([]byte, error) {
 	}
 	if a.WorkerGroups == nil {
 		a.WorkerGroups = []WorkerGroup{}
+	}
+	if a.Storage == nil {
+		a.Storage = []string{}
 	}
 	return json.Marshal(a)
 }

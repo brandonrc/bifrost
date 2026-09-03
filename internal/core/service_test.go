@@ -67,3 +67,22 @@ func TestServiceSpecMarshalsZeroValueUpgradeAsDefault(t *testing.T) {
 		t.Fatalf("upgrade = %v, want %q", v["upgrade"], UpgradeStrategyCanary)
 	}
 }
+
+func TestServiceSpecMarshalsNilStorageAsEmptyAndOmitsEmptyResolved(t *testing.T) {
+	var spec ServiceSpec
+	b, err := json.Marshal(spec)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var v map[string]any
+	if err := json.Unmarshal(b, &v); err != nil {
+		t.Fatalf("unmarshal to map: %v", err)
+	}
+	storage, ok := v["storage"].([]any)
+	if !ok || len(storage) != 0 {
+		t.Fatalf("storage = %v, want []", v["storage"])
+	}
+	if _, present := v["storage_resolved"]; present {
+		t.Fatalf("storage_resolved must be omitted when empty: %s", b)
+	}
+}
