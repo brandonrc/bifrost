@@ -56,16 +56,18 @@ func JobDeploymentIsTerminal(deploymentStatus string) bool {
 // rules a cluster of the same shape would be.
 func ClusterSpecForJob(id core.ClusterId, spec *core.RayJobSpec) core.ClusterSpec {
 	return core.ClusterSpec{
-		Name:         string(id),
-		Project:      spec.Project,
-		Engine:       core.EngineRay,
-		RayVersion:   spec.RayVersion,
-		Image:        spec.Image,
-		HeadCpu:      spec.HeadCpu,
-		HeadMemory:   spec.HeadMemory,
-		WorkerGroups: spec.WorkerGroups,
-		Owner:        spec.Owner,
-		Profile:      spec.Profile,
+		Name:            string(id),
+		Project:         spec.Project,
+		Engine:          core.EngineRay,
+		RayVersion:      spec.RayVersion,
+		Image:           spec.Image,
+		HeadCpu:         spec.HeadCpu,
+		HeadMemory:      spec.HeadMemory,
+		WorkerGroups:    spec.WorkerGroups,
+		Owner:           spec.Owner,
+		Profile:         spec.Profile,
+		Storage:         spec.Storage,
+		StorageResolved: spec.StorageResolved,
 	}
 }
 

@@ -39,18 +39,14 @@ func newJobID() string {
 }
 
 // rayJobSpecFromWire converts the wire RayJobSpec into core.RayJobSpec.
-// Shape defaults and profile expansion happen afterwards in SubmitJob
-// (finishJobSpec), so a profile can fill what the client left empty. It
-// refuses what this build does not deliver yet: storage resolution (#12,
-// package G) is wired by its own package; until then a request naming a
-// storage entry is refused rather than silently ignored. Owner is left
-// unset — SubmitJob stamps it from the identity, never from the body.
+// Shape defaults, profile expansion and storage resolution happen
+// afterwards in SubmitJob (finishJobSpec), so a profile can fill what the
+// client left empty and storage names are checked against the catalog
+// (#12). Owner is left unset — SubmitJob stamps it from the identity,
+// never from the body.
 func rayJobSpecFromWire(w *RayJobSpec) (core.RayJobSpec, error) {
 	if w.Entrypoint == "" {
 		return core.RayJobSpec{}, badRequest("entrypoint is required")
-	}
-	if w.Storage != nil && len(*w.Storage) > 0 {
-		return core.RayJobSpec{}, badRequest("storage is not configured")
 	}
 	var groups []core.WorkerGroup
 	if w.WorkerGroups != nil {
@@ -64,6 +60,9 @@ func rayJobSpecFromWire(w *RayJobSpec) (core.RayJobSpec, error) {
 		Entrypoint:   w.Entrypoint,
 		Image:        w.Image,
 		WorkerGroups: groups,
+	}
+	if w.Storage != nil {
+		spec.Storage = append([]string(nil), (*w.Storage)...)
 	}
 	if w.Profile != nil && *w.Profile != "" {
 		name := *w.Profile
@@ -133,6 +132,14 @@ func (s *Server) finishJobSpec(ctx context.Context, id core.ClusterId, spec *cor
 	if aerr := admission.Check(&view); aerr != nil {
 		return aerr.reason, badRequest(aerr.message)
 	}
+	// Storage (requirement 12): names are resolved against the catalog after
+	// admission, exactly as CreateCluster does, and the resolution rides the
+	// job spec so a later catalog edit is never retroactive.
+	resolved, serr := s.resolveStorage(ctx, view.Project, view.Storage)
+	if serr != nil {
+		return "storage_rejected", serr
+	}
+	spec.StorageResolved = resolved
 	spec.Image, spec.RayVersion = view.Image, view.RayVersion
 	spec.HeadCpu, spec.HeadMemory = view.HeadCpu, view.HeadMemory
 	spec.WorkerGroups = view.WorkerGroups
