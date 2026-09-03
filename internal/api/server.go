@@ -90,6 +90,19 @@ type Server struct {
 	// ServiceProvisioner backs services.go (the Ray Serve CRUD proxy). nil
 	// means no service backend is configured.
 	ServiceProvisioner provision.ServiceProvisioner
+	// JobProvisioner backs the ephemeral RayJob operations (requirement
+	// 5). nil means no job backend is configured.
+	JobProvisioner provision.JobProvisioner
+	// GatewayDomain is the DNS suffix dynamically registered clusters are
+	// exposed under (`<name>.<GatewayDomain>`, plan ruling D1); "" = no
+	// dynamic gateway.
+	GatewayDomain string
+	// GatewayExternalBase is the scheme/prefix clients reach the gateway
+	// through (e.g. "https://"), used to build `gateway_url`; "" = none.
+	GatewayExternalBase string
+	// ServicesPerProject caps concurrently deployed services per project
+	// (plan ruling D8); app.New defaults it to 1.
+	ServicesPerProject int
 	// ObsHTTPClient is the southbound HTTP client cluster_obs.go's jobs and
 	// metrics proxies use to reach a cluster's Ray dashboard/Job API. nil
 	// falls back to obsHTTPClient()'s default (timeouts + no

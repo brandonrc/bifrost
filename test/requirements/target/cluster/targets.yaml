@@ -6,11 +6,15 @@
 #   probes    tests may run probe pods in the consumer namespace
 #   restart   tests may kill the control-plane pod and watch it recover
 #   consumers the real consumer packs (data-science-pack, checkmaite) are present
+#   gateway   the control plane runs with --gateway-domain (REQ_GATEWAY_DOMAIN
+#             names it), so dynamically registered clusters are reachable via
+#             a Host header against the NodePort; grace gets it once its
+#             overlay sets the flag
 kind:
   namespace: bifrost
   probeNamespace: jupyter
   contexts: ["^kind-"]
-  capabilities: [calico, probes, restart]
+  capabilities: [calico, probes, restart, gateway]
 grace:
   namespace: bifrost
   probeNamespace: jupyter

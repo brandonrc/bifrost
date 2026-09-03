@@ -23,6 +23,14 @@ func errNoSuchCluster(id string) error {
 	return storeErrorf("no such cluster %s", id)
 }
 
+func errNoSuchService(name string) error {
+	return storeErrorf("no such service %s", name)
+}
+
+func errNoSuchRayJob(id string) error {
+	return storeErrorf("no such job %s", id)
+}
+
 func errNoSuchPool(name string) error {
 	return storeErrorf("no such pool %s", name)
 }

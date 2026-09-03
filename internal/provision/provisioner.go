@@ -97,6 +97,36 @@ type ObservedService struct {
 	State core.ClusterState
 	// Url is the service's external Serve endpoint base URL, if ready.
 	Url *string
+	// Project is the owning project as stamped on the backing resource
+	// (requirement 2: project-scoped services); "" when the backend does
+	// not carry one.
+	Project string
+}
+
+// ObservedJob is the observed state of an ephemeral Ray job as read back
+// from its backing resource (a KubeRay RayJob's status, on Kubernetes).
+// Vocabularies are the backend's verbatim — Ray's job status and
+// KubeRay's deployment status — because the controller records what it
+// sees (ADR-0006-equivalent) and the API normalizes.
+type ObservedJob struct {
+	ID core.ClusterId
+	// JobStatus is Ray's job status (PENDING | RUNNING | SUCCEEDED |
+	// FAILED | STOPPED); "" until Ray reports one.
+	JobStatus string
+	// DeploymentStatus is KubeRay's job deployment status (Initializing |
+	// Running | Complete | Failed | Suspended | ...); "" until observed.
+	DeploymentStatus string
+	// ClusterName is the backing RayCluster's name while it exists.
+	ClusterName *string
+	// DashboardURL is the backing cluster's Ray dashboard/Jobs API base,
+	// reachable from the control plane, when known.
+	DashboardURL *string
+	// Message is the backend's last status message, when any.
+	Message *string
+	// StartTime/EndTime are unix seconds; nil until the job starts /
+	// finishes.
+	StartTime *uint64
+	EndTime   *uint64
 }
 
 // PoolObservation is a pool's quota ledger as read back from Kueue's
@@ -270,4 +300,31 @@ type ServiceProvisioner interface {
 	Delete(ctx context.Context, name string) error
 
 	List(ctx context.Context) ([]ObservedService, error)
+}
+
+// JobProvisioner manages ephemeral Ray jobs (RayJob CRs) — requirement 5.
+// Distinct from [Provisioner] because KubeRay's RayJob controller owns the
+// cluster's lifetime: it provisions the cluster, submits the entrypoint,
+// and tears the cluster down after the job finishes, so Bifrost applies
+// intent and observes rather than driving each step.
+type JobProvisioner interface {
+	// ApplyJob creates or updates the backing resources for spec under id
+	// (server-side apply: idempotent for identical desired state).
+	// generation is stamped on the resource for drift detection; queue
+	// nominates the Kueue LocalQueue the job's cluster is admitted
+	// through, nil leaves the manifest queue-free.
+	ApplyJob(ctx context.Context, id core.ClusterId, spec *core.RayJobSpec, generation uint64, queue *QueueAssignment) error
+
+	// ObserveJob reads current state without mutating anything. Returns
+	// a [ProvisionErrNotFound] error when the backend has no resource for
+	// id.
+	ObserveJob(ctx context.Context, id core.ClusterId) (ObservedJob, error)
+
+	// DeleteJob stops the job and tears its cluster down. Idempotent;
+	// succeeds if already gone.
+	DeleteJob(ctx context.Context, id core.ClusterId) error
+
+	// ListJobs returns every job this backend manages (field-manager
+	// scoped).
+	ListJobs(ctx context.Context) ([]ObservedJob, error)
 }

@@ -64,6 +64,8 @@ import (
 //	}
 func RunConformance(t *testing.T, newStore func() controller.Store) {
 	t.Run("Clusters", func(t *testing.T) { runClusterConformance(t, newStore()) })
+	t.Run("Services", func(t *testing.T) { runServiceConformance(t, newStore()) })
+	t.Run("RayJobs", func(t *testing.T) { runRayJobConformance(t, newStore()) })
 	t.Run("Pools", func(t *testing.T) { runPoolConformance(t, newStore()) })
 	t.Run("Usage", func(t *testing.T) { runUsageConformance(t, newStore()) })
 	t.Run("Audit", func(t *testing.T) { runAuditConformance(t, newStore()) })
@@ -133,6 +135,9 @@ func poolSpecFixture(name string, weight float64) core.PoolSpec {
 		Cohort:            "research",
 		FairSharingWeight: weight,
 		Elastic:           true,
+		// Explicit default, like clusterSpecFixture's Engine: a SQL round
+		// trip writes the default, so DeepEqual needs it set here too.
+		Purpose: core.DefaultPoolPurpose,
 	}
 }
 
@@ -659,6 +664,12 @@ func usageSampleFixture(ts uint64, project, pool, resource string, qty float64) 
 	return controller.UsageSample{Ts: ts, Project: project, Pool: pool, Resource: resource, Quantity: qty, Source: source}
 }
 
+func ownedUsageSample(ts uint64, project, owner string, qty float64) controller.UsageSample {
+	s := usageSampleFixture(ts, project, "gpu", "cpu", qty)
+	s.Owner = owner
+	return s
+}
+
 func runUsageConformance(t *testing.T, store controller.Store) {
 	ctx := context.Background()
 
@@ -678,7 +689,7 @@ func runUsageConformance(t *testing.T, store controller.Store) {
 	}
 
 	t.Run("RecordAndListOrderedByTs", func(t *testing.T) {
-		all, err := store.UsageSamples(ctx, nil, nil, 0, ^uint64(0))
+		all, err := store.UsageSamples(ctx, nil, nil, nil, 0, ^uint64(0))
 		if err != nil {
 			t.Fatalf("usage samples: %v", err)
 		}
@@ -696,14 +707,14 @@ func runUsageConformance(t *testing.T, store controller.Store) {
 	})
 
 	t.Run("RangeQueryInclusive", func(t *testing.T) {
-		window, err := store.UsageSamples(ctx, nil, nil, 150, 200)
+		window, err := store.UsageSamples(ctx, nil, nil, nil, 150, 200)
 		if err != nil || len(window) != 5 {
 			t.Fatalf("range query: len=%d err=%v, want 5, nil", len(window), err)
 		}
 	})
 
 	t.Run("ProjectFilter", func(t *testing.T) {
-		a, err := store.UsageSamples(ctx, strPtr("proj-a"), nil, 0, ^uint64(0))
+		a, err := store.UsageSamples(ctx, strPtr("proj-a"), nil, nil, 0, ^uint64(0))
 		if err != nil || len(a) != 5 {
 			t.Fatalf("project filter: len=%d err=%v, want 5, nil", len(a), err)
 		}
@@ -715,7 +726,7 @@ func runUsageConformance(t *testing.T, store controller.Store) {
 	})
 
 	t.Run("PoolFilter", func(t *testing.T) {
-		gpu, err := store.UsageSamples(ctx, nil, strPtr("gpu"), 0, ^uint64(0))
+		gpu, err := store.UsageSamples(ctx, nil, strPtr("gpu"), nil, 0, ^uint64(0))
 		if err != nil || len(gpu) != 5 {
 			t.Fatalf("pool filter: len=%d err=%v, want 5, nil", len(gpu), err)
 		}
@@ -727,7 +738,7 @@ func runUsageConformance(t *testing.T, store controller.Store) {
 	})
 
 	t.Run("CombinedFiltersAndSourceRoundTrip", func(t *testing.T) {
-		one, err := store.UsageSamples(ctx, strPtr("proj-a"), strPtr("gpu"), 100, 100)
+		one, err := store.UsageSamples(ctx, strPtr("proj-a"), strPtr("gpu"), nil, 100, 100)
 		if err != nil || len(one) != 1 {
 			t.Fatalf("combined filter: len=%d err=%v, want 1, nil", len(one), err)
 		}
@@ -737,7 +748,7 @@ func runUsageConformance(t *testing.T, store controller.Store) {
 		if one[0].Source != controller.UsageSourceKueueLedger {
 			t.Fatalf("Source = %v, want KueueLedger", one[0].Source)
 		}
-		c, err := store.UsageSamples(ctx, strPtr("proj-c"), nil, 0, ^uint64(0))
+		c, err := store.UsageSamples(ctx, strPtr("proj-c"), nil, nil, 0, ^uint64(0))
 		if err != nil || len(c) != 1 {
 			t.Fatalf("proj-c filter: len=%d err=%v, want 1, nil", len(c), err)
 		}
@@ -747,11 +758,52 @@ func runUsageConformance(t *testing.T, store controller.Store) {
 	})
 
 	t.Run("EmptyRangeNoMatch", func(t *testing.T) {
-		if v, err := store.UsageSamples(ctx, nil, nil, 1000, 2000); err != nil || len(v) != 0 {
+		if v, err := store.UsageSamples(ctx, nil, nil, nil, 1000, 2000); err != nil || len(v) != 0 {
 			t.Fatalf("empty range: len=%d err=%v, want 0, nil", len(v), err)
 		}
-		if v, err := store.UsageSamples(ctx, strPtr("ghost"), nil, 0, ^uint64(0)); err != nil || len(v) != 0 {
+		if v, err := store.UsageSamples(ctx, strPtr("ghost"), nil, nil, 0, ^uint64(0)); err != nil || len(v) != 0 {
 			t.Fatalf("ghost project: len=%d err=%v, want 0, nil", len(v), err)
+		}
+	})
+
+	t.Run("OwnerRoundTripAndFilter", func(t *testing.T) {
+		// Requirement 14 per-user attribution (not in store.rs): owner
+		// persists, filters, and "" is the unattributed bucket every
+		// pre-owner sample lands in.
+		owned := []controller.UsageSample{
+			ownedUsageSample(5000, "proj-a", "alice", 1.0),
+			ownedUsageSample(5001, "proj-a", "bob", 2.0),
+			ownedUsageSample(5002, "proj-a", "alice", 3.0),
+			ownedUsageSample(5003, "proj-b", "alice", 4.0),
+		}
+		if err := store.RecordUsageSamples(ctx, owned); err != nil {
+			t.Fatalf("record owned samples: %v", err)
+		}
+		alice, err := store.UsageSamples(ctx, nil, nil, strPtr("alice"), 5000, 6000)
+		if err != nil || len(alice) != 3 {
+			t.Fatalf("owner filter: len=%d err=%v, want 3, nil", len(alice), err)
+		}
+		for _, s := range alice {
+			if s.Owner != "alice" {
+				t.Fatalf("sample owner = %q, want alice", s.Owner)
+			}
+		}
+		both, err := store.UsageSamples(ctx, strPtr("proj-a"), nil, strPtr("alice"), 5000, 6000)
+		if err != nil || len(both) != 2 || both[0].Quantity != 1.0 || both[1].Quantity != 3.0 {
+			t.Fatalf("project+owner filter: %+v err=%v", both, err)
+		}
+		all, err := store.UsageSamples(ctx, nil, nil, nil, 5000, 6000)
+		if err != nil || len(all) != 4 {
+			t.Fatalf("nil owner must not filter: len=%d err=%v", len(all), err)
+		}
+		unattributed, err := store.UsageSamples(ctx, nil, nil, strPtr(""), 0, ^uint64(0))
+		if err != nil || len(unattributed) != len(samples) {
+			t.Fatalf("empty-owner filter: len=%d err=%v, want the %d ownerless samples", len(unattributed), err, len(samples))
+		}
+		for _, s := range unattributed {
+			if s.Owner != "" {
+				t.Fatalf("unattributed sample has owner %q", s.Owner)
+			}
 		}
 	})
 }
@@ -1321,6 +1373,23 @@ func policyFixture(cpuPrice float64, seed bool) *controller.StoredPolicy {
 			"ml-team": {WindowSecs: 604_800, Limits: map[string]float64{"nvidia.com/gpu": 100.0}},
 		},
 		FromFileSeed: seed,
+		// #7/#12 (plan ruling D7): the profile, admission and storage
+		// catalogs ride the same row. Non-nil so a SQL round trip
+		// (nil -> `[]`/`{}` -> empty non-nil) stays DeepEqual.
+		Profiles: []core.Profile{{
+			Name: "small", Description: strPtr("one cpu worker"), Image: "rayproject/ray:2.57.0", RayVersion: "2.57.0",
+			HeadCpu: "1", HeadMemory: "2Gi",
+			WorkerGroups: []core.WorkerGroup{{Name: "cpu", Cpu: "1", Memory: "2Gi", MinReplicas: 0, MaxReplicas: 2, Replicas: 1}},
+			MaxWorkers:   u32Ptr(2), TtlSeconds: u64Ptr(3600), Projects: []string{"ml-team"},
+		}},
+		Admission: map[string]core.AdmissionRule{
+			"*":       {AllowedImages: []string{"rayproject/ray:2.57.0"}, MaxWorkers: 8},
+			"ml-team": {AllowedImages: []string{}, MaxWorkers: 4},
+		},
+		Storage: []core.StorageEntry{
+			{Name: "s3-creds", SecretName: "ml-team-s3", Mode: core.StorageModeEnv, Projects: []string{"ml-team"}},
+			{Name: "data", SecretName: "shared-data", Mode: core.StorageModeFile, MountPath: strPtr("/mnt/data"), Projects: []string{}},
+		},
 	}
 }
 
@@ -1377,6 +1446,11 @@ func runPolicySeedConformance(t *testing.T, store controller.Store) {
 		Quotas:       map[string]map[string]float64{"demo": {"cpu": 5.0}},
 		Budgets:      map[string]controller.StoredBudget{},
 		FromFileSeed: true,
+		// Empty non-nil for the same reason as Budgets: the SQL stores read
+		// `[]`/`{}` back as empty non-nil.
+		Profiles:  []core.Profile{},
+		Admission: map[string]core.AdmissionRule{},
+		Storage:   []core.StorageEntry{},
 	}
 
 	inserted, err := store.SeedPolicy(ctx, seed)
@@ -1506,13 +1580,19 @@ func runNonNilEmptyConformance(t *testing.T, store controller.Store) {
 	if v, err := store.ListJobs(ctx); err != nil || v == nil {
 		t.Fatalf("ListJobs: %v %v", v, err)
 	}
+	if v, err := store.ListServices(ctx); err != nil || v == nil {
+		t.Fatalf("ListServices: %v %v", v, err)
+	}
+	if v, err := store.ListRayJobs(ctx); err != nil || v == nil {
+		t.Fatalf("ListRayJobs: %v %v", v, err)
+	}
 	if v, err := store.ListPools(ctx); err != nil || v == nil {
 		t.Fatalf("ListPools: %v %v", v, err)
 	}
 	if v, err := store.ListAllocations(ctx, "pool"); err != nil || v == nil {
 		t.Fatalf("ListAllocations: %v %v", v, err)
 	}
-	if v, err := store.UsageSamples(ctx, nil, nil, 0, ^uint64(0)); err != nil || v == nil {
+	if v, err := store.UsageSamples(ctx, nil, nil, nil, 0, ^uint64(0)); err != nil || v == nil {
 		t.Fatalf("UsageSamples: %v %v", v, err)
 	}
 	if rows, next, err := store.ListAudit(ctx, core.AuditFilter{}); err != nil || rows == nil || next != nil {
@@ -1550,4 +1630,292 @@ func runSetDesiredValidationConformance(t *testing.T, store controller.Store) {
 	if got.Desired != controller.DesiredRunning {
 		t.Fatalf("Desired = %v, want unaffected DesiredRunning", got.Desired)
 	}
+}
+
+// --- Services (requirements 1/2; not in store.rs — services had no row
+// there) ---
+
+func serviceSpecFixture(name string, replicas uint32) core.ServiceSpec {
+	return core.ServiceSpec{
+		Name: name, Project: "demo", RayVersion: "2.57.0", Image: "rayproject/ray:2.57.0",
+		ServeConfigV2: "applications: []", HeadCpu: "1", HeadMemory: "2Gi",
+		WorkerReplicas: replicas, WorkerCpu: "1", WorkerMemory: "2Gi",
+		Upgrade: core.DefaultUpgradeStrategy,
+	}
+}
+
+func runServiceConformance(t *testing.T, store controller.Store) {
+	ctx := context.Background()
+	name := "svc"
+
+	t.Run("UpsertGenerationTrackingAndOwnerStampedOnCreate", func(t *testing.T) {
+		if gen, err := store.UpsertService(ctx, name, serviceSpecFixture(name, 1), strPtr("alice")); err != nil || gen != 1 {
+			t.Fatalf("first upsert: gen=%d err=%v, want 1, nil", gen, err)
+		}
+		if gen, err := store.UpsertService(ctx, name, serviceSpecFixture(name, 1), strPtr("bob")); err != nil || gen != 1 {
+			t.Fatalf("unchanged upsert: gen=%d err=%v, want 1, nil", gen, err)
+		}
+		if gen, err := store.UpsertService(ctx, name, serviceSpecFixture(name, 3), strPtr("bob")); err != nil || gen != 2 {
+			t.Fatalf("changed upsert: gen=%d err=%v, want 2, nil", gen, err)
+		}
+		got, err := store.GetService(ctx, name)
+		if err != nil || got == nil {
+			t.Fatalf("get: %v %v", got, err)
+		}
+		if got.Name != name || got.Generation != 2 || got.Desired != controller.DesiredRunning || got.Spec.WorkerReplicas != 3 {
+			t.Fatalf("stored service = %+v", got)
+		}
+		if got.Owner == nil || *got.Owner != "alice" {
+			t.Fatalf("Owner = %v, want alice (stamped on create, kept on update)", got.Owner)
+		}
+		if got.ObservedState != nil || got.ObservedURL != nil || got.TerminatedAt != nil || got.CreatedAt == 0 {
+			t.Fatalf("fresh service observation/timestamps wrong: %+v", got)
+		}
+	})
+
+	t.Run("StorageChangeBumpsGeneration", func(t *testing.T) {
+		spec := serviceSpecFixture(name, 3)
+		spec.Storage = []string{"s3-creds"}
+		if gen, err := store.UpsertService(ctx, name, spec, nil); err != nil || gen != 3 {
+			t.Fatalf("storage upsert: gen=%d err=%v, want 3, nil", gen, err)
+		}
+		got, _ := store.GetService(ctx, name)
+		if got == nil || len(got.Spec.Storage) != 1 || got.Spec.Storage[0] != "s3-creds" {
+			t.Fatalf("storage did not persist: %+v", got)
+		}
+	})
+
+	t.Run("ObservationRoundTrip", func(t *testing.T) {
+		if err := store.RecordServiceObservation(ctx, name, clusterStatePtr(core.ClusterStateRunning), strPtr("http://svc-serve-svc:8000")); err != nil {
+			t.Fatalf("record observation: %v", err)
+		}
+		got, _ := store.GetService(ctx, name)
+		if got == nil || got.ObservedState == nil || *got.ObservedState != core.ClusterStateRunning ||
+			got.ObservedURL == nil || *got.ObservedURL != "http://svc-serve-svc:8000" {
+			t.Fatalf("observation = %+v", got)
+		}
+		if err := store.RecordServiceObservation(ctx, name, nil, nil); err != nil {
+			t.Fatalf("clear observation: %v", err)
+		}
+		got, _ = store.GetService(ctx, name)
+		if got == nil || got.ObservedState != nil || got.ObservedURL != nil {
+			t.Fatalf("observation not cleared: %+v", got)
+		}
+		if err := store.RecordServiceObservation(ctx, "ghost", clusterStatePtr(core.ClusterStateRunning), nil); err != nil {
+			t.Fatalf("observation of unknown service must be a no-op, got %v", err)
+		}
+	})
+
+	t.Run("ListOrderedByName", func(t *testing.T) {
+		if _, err := store.UpsertService(ctx, "alpha", serviceSpecFixture("alpha", 1), nil); err != nil {
+			t.Fatal(err)
+		}
+		all, err := store.ListServices(ctx)
+		if err != nil || len(all) != 2 || all[0].Name != "alpha" || all[1].Name != name {
+			t.Fatalf("list = %+v err=%v", all, err)
+		}
+	})
+
+	t.Run("SetDesiredStampsTerminatedAtAndRejectsUnknown", func(t *testing.T) {
+		if err := store.SetServiceDesired(ctx, name, controller.DesiredTerminated); err != nil {
+			t.Fatalf("set desired: %v", err)
+		}
+		got, _ := store.GetService(ctx, name)
+		if got == nil || got.Desired != controller.DesiredTerminated || got.TerminatedAt == nil {
+			t.Fatalf("terminated service = %+v", got)
+		}
+		if err := store.SetServiceDesired(ctx, name, controller.DesiredRunning); err != nil {
+			t.Fatalf("set desired running: %v", err)
+		}
+		if got, _ = store.GetService(ctx, name); got == nil || got.TerminatedAt != nil {
+			t.Fatalf("TerminatedAt must clear when leaving terminated: %+v", got)
+		}
+		err := store.SetServiceDesired(ctx, "ghost", controller.DesiredTerminated)
+		if err == nil || !strings.Contains(err.Error(), "no such service ghost") {
+			t.Fatalf("unknown service: %v", err)
+		}
+		if err := store.SetServiceDesired(ctx, name, controller.DesiredState("bogus")); err == nil {
+			t.Fatal("invalid desired state must be rejected")
+		}
+	})
+
+	t.Run("UpsertOntoTerminatedRecordIsAFreshCreate", func(t *testing.T) {
+		if err := store.SetServiceDesired(ctx, name, controller.DesiredTerminated); err != nil {
+			t.Fatal(err)
+		}
+		_ = store.RecordServiceObservation(ctx, name, clusterStatePtr(core.ClusterStateTerminating), nil)
+		before, _ := store.GetService(ctx, name)
+		gen, err := store.UpsertService(ctx, name, serviceSpecFixture(name, 3), strPtr("carol"))
+		if err != nil || gen != before.Generation+1 {
+			t.Fatalf("revive: gen=%d err=%v, want %d", gen, err, before.Generation+1)
+		}
+		got, _ := store.GetService(ctx, name)
+		if got == nil || got.Desired != controller.DesiredRunning || got.TerminatedAt != nil ||
+			got.ObservedState != nil || got.Owner == nil || *got.Owner != "carol" {
+			t.Fatalf("revived service is not fresh: %+v", got)
+		}
+	})
+
+	t.Run("RemoveReportsWhetherARowExisted", func(t *testing.T) {
+		if removed, err := store.RemoveService(ctx, name); err != nil || !removed {
+			t.Fatalf("remove: removed=%v err=%v", removed, err)
+		}
+		if removed, err := store.RemoveService(ctx, name); err != nil || removed {
+			t.Fatalf("second remove: removed=%v err=%v, want false", removed, err)
+		}
+		if got, err := store.GetService(ctx, name); err != nil || got != nil {
+			t.Fatalf("get after remove: %v %v, want nil, nil", got, err)
+		}
+	})
+}
+
+// --- Ephemeral Ray jobs (requirement 5; not in store.rs) ---
+
+func rayJobSpecFixture(project string) core.RayJobSpec {
+	ttl := uint32(30)
+	return core.RayJobSpec{
+		Project: project, Entrypoint: "python -c 1", Image: "rayproject/ray:2.57.0", RayVersion: "2.57.0",
+		HeadCpu: "1", HeadMemory: "2Gi",
+		WorkerGroups:            []core.WorkerGroup{{Name: "cpu", Cpu: "1", Memory: "2Gi", MaxReplicas: 1, Replicas: 1}},
+		Storage:                 []string{"s3-creds"},
+		TtlSecondsAfterFinished: &ttl,
+	}
+}
+
+func runRayJobConformance(t *testing.T, store controller.Store) {
+	ctx := context.Background()
+	id := core.ClusterId("job-1")
+
+	t.Run("UpsertCreatesRunningRowWithSubmittedAt", func(t *testing.T) {
+		if err := store.UpsertRayJob(ctx, id, rayJobSpecFixture("team-a"), strPtr("alice")); err != nil {
+			t.Fatalf("upsert: %v", err)
+		}
+		got, err := store.GetRayJob(ctx, id)
+		if err != nil || got == nil {
+			t.Fatalf("get: %v %v", got, err)
+		}
+		if got.ID != id || got.Desired != controller.DesiredRunning || got.SubmittedAt == 0 ||
+			got.Status != "" || got.DeploymentStatus != "" || got.ClusterName != nil || got.StartedAt != nil {
+			t.Fatalf("fresh job = %+v", got)
+		}
+		if got.Owner == nil || *got.Owner != "alice" || got.Spec.Project != "team-a" ||
+			got.Spec.TtlSecondsAfterFinishedOrDefault() != 30 || len(got.Spec.Storage) != 1 {
+			t.Fatalf("spec/owner did not round-trip: %+v", got)
+		}
+	})
+
+	t.Run("ReUpsertReplacesSpecAndOwnerOnly", func(t *testing.T) {
+		before, _ := store.GetRayJob(ctx, id)
+		if err := store.UpsertRayJob(ctx, id, rayJobSpecFixture("team-b"), strPtr("bob")); err != nil {
+			t.Fatalf("re-upsert: %v", err)
+		}
+		got, _ := store.GetRayJob(ctx, id)
+		if got == nil || got.Spec.Project != "team-b" || got.Owner == nil || *got.Owner != "bob" {
+			t.Fatalf("re-upsert did not replace spec/owner: %+v", got)
+		}
+		if got.SubmittedAt != before.SubmittedAt || got.Desired != before.Desired {
+			t.Fatalf("re-upsert must keep submitted_at/desired: before=%+v after=%+v", before, got)
+		}
+	})
+
+	t.Run("ObservationOverwritesEveryField", func(t *testing.T) {
+		obs := controller.RayJobObservation{
+			Status: "RUNNING", DeploymentStatus: "Running",
+			ClusterName: strPtr("job-1-raycluster-abcde"), DashboardURL: strPtr("http://job-1-head-svc:8265"),
+			Message: strPtr("submitted"), StartedAt: u64Ptr(1000),
+		}
+		if err := store.RecordRayJobObservation(ctx, id, obs); err != nil {
+			t.Fatalf("record observation: %v", err)
+		}
+		got, _ := store.GetRayJob(ctx, id)
+		if got == nil || got.Status != "RUNNING" || got.DeploymentStatus != "Running" ||
+			got.ClusterName == nil || *got.ClusterName != "job-1-raycluster-abcde" ||
+			got.DashboardURL == nil || *got.DashboardURL != "http://job-1-head-svc:8265" ||
+			got.Message == nil || *got.Message != "submitted" ||
+			got.StartedAt == nil || *got.StartedAt != 1000 || got.FinishedAt != nil {
+			t.Fatalf("observation = %+v", got)
+		}
+		done := controller.RayJobObservation{Status: "SUCCEEDED", DeploymentStatus: "Complete", StartedAt: u64Ptr(1000), FinishedAt: u64Ptr(1200)}
+		if err := store.RecordRayJobObservation(ctx, id, done); err != nil {
+			t.Fatal(err)
+		}
+		got, _ = store.GetRayJob(ctx, id)
+		if got == nil || got.Status != "SUCCEEDED" || got.ClusterName != nil || got.Message != nil ||
+			got.FinishedAt == nil || *got.FinishedAt != 1200 {
+			t.Fatalf("terminal observation must overwrite (nil clears): %+v", got)
+		}
+		if err := store.RecordRayJobObservation(ctx, "ghost", done); err != nil {
+			t.Fatalf("observation of unknown job must be a no-op, got %v", err)
+		}
+	})
+
+	t.Run("AttemptBackoffRoundTrip", func(t *testing.T) {
+		if err := store.RecordRayJobAttempt(ctx, id, 3, 4242); err != nil {
+			t.Fatalf("record attempt: %v", err)
+		}
+		got, _ := store.GetRayJob(ctx, id)
+		if got == nil || got.FailureCount != 3 || got.NextAttemptAt != 4242 {
+			t.Fatalf("backoff = %+v", got)
+		}
+		if err := store.RecordRayJobAttempt(ctx, id, 0, 0); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ = store.GetRayJob(ctx, id); got == nil || got.FailureCount != 0 || got.NextAttemptAt != 0 {
+			t.Fatalf("backoff not cleared: %+v", got)
+		}
+		if err := store.RecordRayJobAttempt(ctx, "ghost", 1, 1); err != nil {
+			t.Fatalf("attempt on unknown job must be a no-op, got %v", err)
+		}
+	})
+
+	t.Run("ListMostRecentFirstTiesById", func(t *testing.T) {
+		// Every upsert in one test run lands in the same second, so the
+		// id tiebreak is what makes the order observable here.
+		for _, other := range []core.ClusterId{"job-0", "job-2"} {
+			if err := store.UpsertRayJob(ctx, other, rayJobSpecFixture("team-a"), nil); err != nil {
+				t.Fatal(err)
+			}
+		}
+		all, err := store.ListRayJobs(ctx)
+		if err != nil || len(all) != 3 {
+			t.Fatalf("list: len=%d err=%v", len(all), err)
+		}
+		for i := 1; i < len(all); i++ {
+			a, b := all[i-1], all[i]
+			if a.SubmittedAt < b.SubmittedAt || (a.SubmittedAt == b.SubmittedAt && a.ID > b.ID) {
+				t.Fatalf("list order violated at %d: %s(%d) before %s(%d)", i, a.ID, a.SubmittedAt, b.ID, b.SubmittedAt)
+			}
+		}
+		if all[len(all)-1].Owner != nil {
+			t.Fatalf("nil owner must round-trip as nil: %+v", all[len(all)-1])
+		}
+	})
+
+	t.Run("SetDesiredAndRejectUnknown", func(t *testing.T) {
+		if err := store.SetRayJobDesired(ctx, id, controller.DesiredTerminated); err != nil {
+			t.Fatalf("set desired: %v", err)
+		}
+		if got, _ := store.GetRayJob(ctx, id); got == nil || got.Desired != controller.DesiredTerminated {
+			t.Fatalf("desired = %+v", got)
+		}
+		err := store.SetRayJobDesired(ctx, "ghost", controller.DesiredTerminated)
+		if err == nil || !strings.Contains(err.Error(), "no such job ghost") {
+			t.Fatalf("unknown job: %v", err)
+		}
+		if err := store.SetRayJobDesired(ctx, id, controller.DesiredState("bogus")); err == nil {
+			t.Fatal("invalid desired state must be rejected")
+		}
+	})
+
+	t.Run("RemoveReportsWhetherARowExisted", func(t *testing.T) {
+		if removed, err := store.RemoveRayJob(ctx, id); err != nil || !removed {
+			t.Fatalf("remove: removed=%v err=%v", removed, err)
+		}
+		if removed, err := store.RemoveRayJob(ctx, id); err != nil || removed {
+			t.Fatalf("second remove: removed=%v err=%v, want false", removed, err)
+		}
+		if got, err := store.GetRayJob(ctx, id); err != nil || got != nil {
+			t.Fatalf("get after remove: %v %v, want nil, nil", got, err)
+		}
+	})
 }

@@ -108,20 +108,40 @@ type PoolSpec struct {
 	// the policy package, not here (core validates shape; tenancy is
 	// known only at the API edge, where allocations live).
 	GpuSharing *GpuSharing `json:"gpu_sharing,omitempty"`
+	// Purpose is what this pool's capacity is for (#4): compute (the
+	// default when absent) admits interactive clusters and jobs; serving
+	// admits only RayService-backed services. Zero value means compute —
+	// compare with Purpose.OrDefault(), never `== ""`.
+	Purpose PoolPurpose `json:"purpose"`
 }
 
-// poolSpecAlias breaks the recursion MarshalJSON would otherwise cause by
-// re-entering PoolSpec's own MarshalJSON.
+// poolSpecAlias breaks the recursion Unmarshal/MarshalJSON would otherwise
+// cause by re-entering PoolSpec's own methods.
 type poolSpecAlias PoolSpec
+
+// UnmarshalJSON applies Purpose's absent-means-compute default: a PoolSpec
+// whose `purpose` key is missing from the JSON object (every pool
+// persisted before #4) deserializes as a compute pool.
+func (p *PoolSpec) UnmarshalJSON(data []byte) error {
+	aux := (*poolSpecAlias)(p)
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	aux.Purpose = aux.Purpose.OrDefault()
+	return nil
+}
 
 // MarshalJSON substitutes an empty slice for a nil Flavors, mirroring
 // Rust's Vec::default(), which serde always writes as `[]`, never `null`
-// (the frozen contract's PoolSpec schema types `flavors` as an array).
+// (the frozen contract's PoolSpec schema types `flavors` as an array), and
+// writes a zero-value Purpose as its default so the PoolPurpose enum
+// schema never sees `""` (the ClusterSpec.Engine precedent).
 func (p PoolSpec) MarshalJSON() ([]byte, error) {
 	a := poolSpecAlias(p)
 	if a.Flavors == nil {
 		a.Flavors = []FlavorSpec{}
 	}
+	a.Purpose = a.Purpose.OrDefault()
 	return json.Marshal(a)
 }
 

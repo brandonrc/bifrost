@@ -224,11 +224,102 @@ func (s *FailingStore) RecordUsageSamples(ctx context.Context, samples []UsageSa
 	return s.inner.RecordUsageSamples(ctx, samples)
 }
 
-func (s *FailingStore) UsageSamples(ctx context.Context, project, pool *string, from, to uint64) ([]UsageSample, error) {
+func (s *FailingStore) UsageSamples(ctx context.Context, project, pool, owner *string, from, to uint64) ([]UsageSample, error) {
 	if err := s.check("UsageSamples"); err != nil {
 		return nil, err
 	}
-	return s.inner.UsageSamples(ctx, project, pool, from, to)
+	return s.inner.UsageSamples(ctx, project, pool, owner, from, to)
+}
+
+func (s *FailingStore) UpsertService(ctx context.Context, name string, spec core.ServiceSpec, owner *string) (uint64, error) {
+	if err := s.check("UpsertService"); err != nil {
+		return 0, err
+	}
+	return s.inner.UpsertService(ctx, name, spec, owner)
+}
+
+func (s *FailingStore) GetService(ctx context.Context, name string) (*StoredService, error) {
+	if err := s.check("GetService"); err != nil {
+		return nil, err
+	}
+	return s.inner.GetService(ctx, name)
+}
+
+func (s *FailingStore) ListServices(ctx context.Context) ([]StoredService, error) {
+	if err := s.check("ListServices"); err != nil {
+		return nil, err
+	}
+	return s.inner.ListServices(ctx)
+}
+
+func (s *FailingStore) SetServiceDesired(ctx context.Context, name string, desired DesiredState) error {
+	if err := s.check("SetServiceDesired"); err != nil {
+		return err
+	}
+	return s.inner.SetServiceDesired(ctx, name, desired)
+}
+
+func (s *FailingStore) RecordServiceObservation(ctx context.Context, name string, observed *core.ClusterState, url *string) error {
+	if err := s.check("RecordServiceObservation"); err != nil {
+		return err
+	}
+	return s.inner.RecordServiceObservation(ctx, name, observed, url)
+}
+
+func (s *FailingStore) RemoveService(ctx context.Context, name string) (bool, error) {
+	if err := s.check("RemoveService"); err != nil {
+		return false, err
+	}
+	return s.inner.RemoveService(ctx, name)
+}
+
+func (s *FailingStore) UpsertRayJob(ctx context.Context, id core.ClusterId, spec core.RayJobSpec, owner *string) error {
+	if err := s.check("UpsertRayJob"); err != nil {
+		return err
+	}
+	return s.inner.UpsertRayJob(ctx, id, spec, owner)
+}
+
+func (s *FailingStore) GetRayJob(ctx context.Context, id core.ClusterId) (*StoredRayJob, error) {
+	if err := s.check("GetRayJob"); err != nil {
+		return nil, err
+	}
+	return s.inner.GetRayJob(ctx, id)
+}
+
+func (s *FailingStore) ListRayJobs(ctx context.Context) ([]StoredRayJob, error) {
+	if err := s.check("ListRayJobs"); err != nil {
+		return nil, err
+	}
+	return s.inner.ListRayJobs(ctx)
+}
+
+func (s *FailingStore) SetRayJobDesired(ctx context.Context, id core.ClusterId, desired DesiredState) error {
+	if err := s.check("SetRayJobDesired"); err != nil {
+		return err
+	}
+	return s.inner.SetRayJobDesired(ctx, id, desired)
+}
+
+func (s *FailingStore) RecordRayJobObservation(ctx context.Context, id core.ClusterId, obs RayJobObservation) error {
+	if err := s.check("RecordRayJobObservation"); err != nil {
+		return err
+	}
+	return s.inner.RecordRayJobObservation(ctx, id, obs)
+}
+
+func (s *FailingStore) RecordRayJobAttempt(ctx context.Context, id core.ClusterId, failureCount uint32, nextAttemptAt uint64) error {
+	if err := s.check("RecordRayJobAttempt"); err != nil {
+		return err
+	}
+	return s.inner.RecordRayJobAttempt(ctx, id, failureCount, nextAttemptAt)
+}
+
+func (s *FailingStore) RemoveRayJob(ctx context.Context, id core.ClusterId) (bool, error) {
+	if err := s.check("RemoveRayJob"); err != nil {
+		return false, err
+	}
+	return s.inner.RemoveRayJob(ctx, id)
 }
 
 func (s *FailingStore) GetPolicy(ctx context.Context) (*StoredPolicy, error) {

@@ -129,3 +129,33 @@ func TestClusterSpecMarshalsZeroValueEngineAsDefault(t *testing.T) {
 		t.Fatalf("worker_groups = %v, want []", v["worker_groups"])
 	}
 }
+
+func TestClusterSpecMarshalsNilStorageAsEmptyAndOmitsEmptyResolved(t *testing.T) {
+	var spec ClusterSpec
+	b, err := json.Marshal(spec)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var v map[string]any
+	if err := json.Unmarshal(b, &v); err != nil {
+		t.Fatalf("unmarshal to map: %v", err)
+	}
+	storage, ok := v["storage"].([]any)
+	if !ok || len(storage) != 0 {
+		t.Fatalf("storage = %v, want []", v["storage"])
+	}
+	if _, present := v["storage_resolved"]; present {
+		t.Fatalf("storage_resolved must be omitted when empty: %s", b)
+	}
+	if v["profile"] != nil {
+		t.Fatalf("profile = %v, want null", v["profile"])
+	}
+	// Pre-#7/#12 stored specs carry neither key and must still load.
+	var legacy ClusterSpec
+	if err := json.Unmarshal([]byte(`{"name":"n","project":"p"}`), &legacy); err != nil {
+		t.Fatalf("legacy unmarshal: %v", err)
+	}
+	if legacy.Profile != nil || legacy.Storage != nil || legacy.StorageResolved != nil {
+		t.Fatalf("legacy spec should have zero-valued new fields: %+v", legacy)
+	}
+}

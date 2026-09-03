@@ -184,6 +184,27 @@ func (h *k8sHandle) postflight(ctx context.Context, prefix, probeNS string) erro
 				left = append(left, "raycluster/"+rc.Name)
 			}
 		}
+		// RayJobs (#5) and RayServices (#1/#2) are owned kinds too: a test
+		// that leaks one would otherwise leak silently, since their child
+		// RayClusters are named by KubeRay, not by the run prefix.
+		var rjs rayv1.RayJobList
+		if err := h.raw.List(ctx, &rjs, ctrlclient.InNamespace(h.ns)); err != nil {
+			return false, err
+		}
+		for _, rj := range rjs.Items {
+			if strings.HasPrefix(rj.Labels[clusterIDLabel], prefix) || strings.HasPrefix(rj.Name, prefix) {
+				left = append(left, "rayjob/"+rj.Name)
+			}
+		}
+		var rss rayv1.RayServiceList
+		if err := h.raw.List(ctx, &rss, ctrlclient.InNamespace(h.ns)); err != nil {
+			return false, err
+		}
+		for _, rs := range rss.Items {
+			if strings.HasPrefix(rs.Labels[clusterIDLabel], prefix) || strings.HasPrefix(rs.Name, prefix) {
+				left = append(left, "rayservice/"+rs.Name)
+			}
+		}
 		var pods corev1.PodList
 		if err := h.raw.List(ctx, &pods, ctrlclient.InNamespace(h.ns)); err != nil {
 			return false, err

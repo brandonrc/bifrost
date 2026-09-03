@@ -82,7 +82,56 @@ func NewSqliteStore(ctx context.Context, path string) (*SqliteStore, error) {
 		_ = db.Close()
 		return nil, storeErrorf("apply sqlite schema: %v", err)
 	}
+	if err := applySqliteColumnMigrations(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return &SqliteStore{db: db}, nil
+}
+
+// applySqliteColumnMigrations runs every sqliteColumnMigrations entry
+// whose column is missing (see store_sqlite_schema.go).
+func applySqliteColumnMigrations(ctx context.Context, db *sql.DB) error {
+	for _, m := range sqliteColumnMigrations {
+		has, err := sqliteHasColumn(ctx, db, m.Table, m.Column)
+		if err != nil {
+			return err
+		}
+		if has {
+			continue
+		}
+		if _, err := db.ExecContext(ctx, m.Statement); err != nil {
+			return storeErrorf("migrate %s.%s: %v", m.Table, m.Column, err)
+		}
+	}
+	return nil
+}
+
+func sqliteHasColumn(ctx context.Context, db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return false, storeErrorf("inspect %s: %v", table, err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			cid        int64
+			name, typ  string
+			notNull    int64
+			defaultVal *string
+			pk         int64
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultVal, &pk); err != nil {
+			return false, storeErrorf("inspect %s: %v", table, err)
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, storeErrorf("inspect %s: %v", table, err)
+	}
+	return false, nil
 }
 
 // Close releases the underlying database handle. Deliberately not part of
@@ -780,14 +829,14 @@ func (s *SqliteStore) RecordUsageSamples(ctx context.Context, samples []UsageSam
 	defer func() { _ = tx.Rollback() }()
 
 	stmt, err := tx.PrepareContext(ctx,
-		"INSERT INTO usage_samples (ts, project, pool, resource, quantity, source) VALUES (?, ?, ?, ?, ?, ?)")
+		"INSERT INTO usage_samples (ts, project, pool, resource, quantity, source, owner) VALUES (?, ?, ?, ?, ?, ?, ?)")
 	if err != nil {
 		return storeErrorf("prepare usage insert: %v", err)
 	}
 	defer func() { _ = stmt.Close() }()
 
 	for _, smp := range samples {
-		if _, err := stmt.ExecContext(ctx, clampI64(smp.Ts), smp.Project, smp.Pool, smp.Resource, smp.Quantity, smp.Source.AsStr()); err != nil {
+		if _, err := stmt.ExecContext(ctx, clampI64(smp.Ts), smp.Project, smp.Pool, smp.Resource, smp.Quantity, smp.Source.AsStr(), smp.Owner); err != nil {
 			return storeErrorf("insert usage sample: %v", err)
 		}
 	}
@@ -797,14 +846,15 @@ func (s *SqliteStore) RecordUsageSamples(ctx context.Context, samples []UsageSam
 	return nil
 }
 
-func (s *SqliteStore) UsageSamples(ctx context.Context, project, pool *string, from, to uint64) ([]UsageSample, error) {
+func (s *SqliteStore) UsageSamples(ctx context.Context, project, pool, owner *string, from, to uint64) ([]UsageSample, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT ts, project, pool, resource, quantity, source FROM usage_samples
+		SELECT ts, project, pool, resource, quantity, source, owner FROM usage_samples
 		WHERE ts >= ? AND ts <= ?
 		AND (? IS NULL OR project = ?)
 		AND (? IS NULL OR pool = ?)
+		AND (? IS NULL OR owner = ?)
 		ORDER BY ts ASC
-	`, clampI64(from), clampI64(to), project, project, pool, pool)
+	`, clampI64(from), clampI64(to), project, project, pool, pool, owner, owner)
 	if err != nil {
 		return nil, storeErrorf("usage samples: %v", err)
 	}
@@ -813,12 +863,12 @@ func (s *SqliteStore) UsageSamples(ctx context.Context, project, pool *string, f
 	out := make([]UsageSample, 0)
 	for rows.Next() {
 		var (
-			ts                            int64
-			projectVal, poolVal, resource string
-			quantity                      float64
-			sourceStr                     string
+			ts                                      int64
+			projectVal, poolVal, resource, ownerVal string
+			quantity                                float64
+			sourceStr                               string
 		)
-		if err := rows.Scan(&ts, &projectVal, &poolVal, &resource, &quantity, &sourceStr); err != nil {
+		if err := rows.Scan(&ts, &projectVal, &poolVal, &resource, &quantity, &sourceStr, &ownerVal); err != nil {
 			return nil, storeErrorf("usage samples: %v", err)
 		}
 		source, err := ParseUsageSource(sourceStr)
@@ -827,7 +877,7 @@ func (s *SqliteStore) UsageSamples(ctx context.Context, project, pool *string, f
 		}
 		out = append(out, UsageSample{
 			Ts: uint64(ts), Project: projectVal, Pool: poolVal, Resource: resource,
-			Quantity: quantity, Source: source,
+			Quantity: quantity, Source: source, Owner: ownerVal,
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -1479,4 +1529,364 @@ func (s *SqliteStore) DeleteRoleAssignment(ctx context.Context, principal, role,
 		return errNoSuchAssignment(principal, role, scope)
 	}
 	return nil
+}
+
+// --- Services ---
+
+const serviceColumns = "name, spec_json, owner, generation, desired, observed_state, observed_url, created_at, terminated_at"
+
+// scanService maps a services row (serviceColumns order) onto a
+// StoredService; shared with PostgresStore like scanCluster.
+func scanService(row rowScanner) (StoredService, error) {
+	var (
+		name, specJSON string
+		owner          *string
+		generation     int64
+		desiredStr     string
+		observedJSON   *string
+		observedURL    *string
+		createdAt      int64
+		terminatedAt   *int64
+	)
+	if err := row.Scan(&name, &specJSON, &owner, &generation, &desiredStr, &observedJSON,
+		&observedURL, &createdAt, &terminatedAt); err != nil {
+		return StoredService{}, err
+	}
+	var spec core.ServiceSpec
+	if err := json.Unmarshal([]byte(specJSON), &spec); err != nil {
+		return StoredService{}, jsonErr(err)
+	}
+	desired, err := ParseDesiredState(desiredStr)
+	if err != nil {
+		return StoredService{}, err
+	}
+	var observedState *core.ClusterState
+	if observedJSON != nil {
+		var st core.ClusterState
+		if err := json.Unmarshal([]byte(*observedJSON), &st); err != nil {
+			return StoredService{}, jsonErr(err)
+		}
+		observedState = &st
+	}
+	return StoredService{
+		Name: name, Spec: spec, Owner: owner, Generation: uint64(generation), Desired: desired,
+		ObservedState: observedState, ObservedURL: observedURL,
+		CreatedAt: uint64(createdAt), TerminatedAt: intPtrToU64Ptr(terminatedAt),
+	}, nil
+}
+
+// UpsertService follows UpsertDesired's transaction shape (BEGIN
+// IMMEDIATE via the DSN) and its terminated-record-is-a-fresh-create rule.
+func (s *SqliteStore) UpsertService(ctx context.Context, name string, spec core.ServiceSpec, owner *string) (uint64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, storeErrorf("begin transaction: %v", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var revive bool
+	generation, err := func() (uint64, error) {
+		var curJSON, curDesired string
+		var curGen int64
+		err := tx.QueryRowContext(ctx, "SELECT spec_json, generation, desired FROM services WHERE name = ?", name).
+			Scan(&curJSON, &curGen, &curDesired)
+		switch {
+		case err == nil:
+			if curDesired == DesiredTerminated.AsStr() {
+				revive = true
+				return uint64(curGen) + 1, nil
+			}
+			var cur core.ServiceSpec
+			if uerr := json.Unmarshal([]byte(curJSON), &cur); uerr != nil {
+				return 0, jsonErr(uerr)
+			}
+			if serviceSpecChanged(&cur, &spec) {
+				return uint64(curGen) + 1, nil
+			}
+			return uint64(curGen), nil
+		case errors.Is(err, sql.ErrNoRows):
+			return 1, nil
+		default:
+			return 0, storeErrorf("read service: %v", err)
+		}
+	}()
+	if err != nil {
+		return 0, err
+	}
+	specJSON, err := json.Marshal(spec)
+	if err != nil {
+		return 0, jsonErr(err)
+	}
+	if revive {
+		_, err = tx.ExecContext(ctx, `
+			UPDATE services SET spec_json = ?, owner = ?, generation = ?, desired = 'running',
+				observed_state = NULL, observed_url = NULL, created_at = ?, terminated_at = NULL
+			WHERE name = ?
+		`, string(specJSON), owner, int64(generation), int64(NowUnix()), name)
+	} else {
+		// owner is stamped on insert only: a spec edit does not change who
+		// owns the service.
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO services (name, spec_json, owner, generation, desired, created_at)
+			VALUES (?, ?, ?, ?, 'running', ?)
+			ON CONFLICT(name) DO UPDATE SET
+				spec_json = excluded.spec_json,
+				generation = excluded.generation
+		`, name, string(specJSON), owner, int64(generation), int64(NowUnix()))
+	}
+	if err != nil {
+		return 0, storeErrorf("upsert service: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, storeErrorf("commit: %v", err)
+	}
+	return generation, nil
+}
+
+func (s *SqliteStore) GetService(ctx context.Context, name string) (*StoredService, error) {
+	row := s.db.QueryRowContext(ctx, "SELECT "+serviceColumns+" FROM services WHERE name = ?", name)
+	c, err := scanService(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+func (s *SqliteStore) ListServices(ctx context.Context) ([]StoredService, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT "+serviceColumns+" FROM services ORDER BY name ASC")
+	if err != nil {
+		return nil, storeErrorf("list services: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := make([]StoredService, 0)
+	for rows.Next() {
+		c, err := scanService(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, storeErrorf("list services: %v", err)
+	}
+	return out, nil
+}
+
+func (s *SqliteStore) SetServiceDesired(ctx context.Context, name string, desired DesiredState) error {
+	if !desired.isValid() {
+		return errBadDesiredState(string(desired))
+	}
+	isTerminated := desired == DesiredTerminated
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE services SET desired = ?,
+		 terminated_at = CASE WHEN ? THEN COALESCE(terminated_at, ?) ELSE NULL END
+		 WHERE name = ?`,
+		desired.AsStr(), isTerminated, int64(NowUnix()), name)
+	if err != nil {
+		return storeErrorf("set service desired: %v", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return storeErrorf("set service desired: %v", err)
+	}
+	if n == 0 {
+		return errNoSuchService(name)
+	}
+	return nil
+}
+
+func (s *SqliteStore) RecordServiceObservation(ctx context.Context, name string, observed *core.ClusterState, url *string) error {
+	observedJSON, err := marshalOptionalState(observed)
+	if err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx,
+		"UPDATE services SET observed_state = ?, observed_url = ? WHERE name = ?",
+		observedJSON, url, name); err != nil {
+		return storeErrorf("record service observation: %v", err)
+	}
+	return nil
+}
+
+func (s *SqliteStore) RemoveService(ctx context.Context, name string) (bool, error) {
+	res, err := s.db.ExecContext(ctx, "DELETE FROM services WHERE name = ?", name)
+	if err != nil {
+		return false, storeErrorf("remove service: %v", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, storeErrorf("remove service: %v", err)
+	}
+	return n > 0, nil
+}
+
+// marshalOptionalState JSON-encodes an optional ClusterState for an
+// observed_state column (nil stays SQL NULL).
+func marshalOptionalState(observed *core.ClusterState) (*string, error) {
+	if observed == nil {
+		return nil, nil
+	}
+	b, err := json.Marshal(*observed)
+	if err != nil {
+		return nil, jsonErr(err)
+	}
+	str := string(b)
+	return &str, nil
+}
+
+// --- Ephemeral Ray jobs ---
+
+const rayJobColumns = "id, spec_json, owner, desired, status, deployment_status, cluster_name, dashboard_url, " +
+	"message, submitted_at, started_at, finished_at, failure_count, next_attempt_at"
+
+// scanRayJob maps a ray_jobs row (rayJobColumns order) onto a
+// StoredRayJob; shared with PostgresStore.
+func scanRayJob(row rowScanner) (StoredRayJob, error) {
+	var (
+		id, specJSON             string
+		owner                    *string
+		desiredStr               string
+		status, deploymentStatus string
+		clusterName, dashboard   *string
+		message                  *string
+		submittedAt              int64
+		startedAt, finishedAt    *int64
+		failureCount             int64
+		nextAttemptAt            int64
+	)
+	if err := row.Scan(&id, &specJSON, &owner, &desiredStr, &status, &deploymentStatus, &clusterName, &dashboard,
+		&message, &submittedAt, &startedAt, &finishedAt, &failureCount, &nextAttemptAt); err != nil {
+		return StoredRayJob{}, err
+	}
+	var spec core.RayJobSpec
+	if err := json.Unmarshal([]byte(specJSON), &spec); err != nil {
+		return StoredRayJob{}, jsonErr(err)
+	}
+	desired, err := ParseDesiredState(desiredStr)
+	if err != nil {
+		return StoredRayJob{}, err
+	}
+	return StoredRayJob{
+		ID: core.ClusterId(id), Spec: spec, Owner: owner, Desired: desired,
+		Status: status, DeploymentStatus: deploymentStatus,
+		ClusterName: clusterName, DashboardURL: dashboard, Message: message,
+		SubmittedAt: uint64(submittedAt), StartedAt: intPtrToU64Ptr(startedAt), FinishedAt: intPtrToU64Ptr(finishedAt),
+		FailureCount: uint32(failureCount), NextAttemptAt: uint64(nextAttemptAt),
+	}, nil
+}
+
+func (s *SqliteStore) UpsertRayJob(ctx context.Context, id core.ClusterId, spec core.RayJobSpec, owner *string) error {
+	specJSON, err := json.Marshal(spec)
+	if err != nil {
+		return jsonErr(err)
+	}
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO ray_jobs (id, spec_json, owner, desired, submitted_at)
+		VALUES (?, ?, ?, 'running', ?)
+		ON CONFLICT(id) DO UPDATE SET
+			spec_json = excluded.spec_json,
+			owner = excluded.owner
+	`, string(id), string(specJSON), owner, int64(NowUnix()))
+	if err != nil {
+		return storeErrorf("upsert job: %v", err)
+	}
+	return nil
+}
+
+func (s *SqliteStore) GetRayJob(ctx context.Context, id core.ClusterId) (*StoredRayJob, error) {
+	row := s.db.QueryRowContext(ctx, "SELECT "+rayJobColumns+" FROM ray_jobs WHERE id = ?", string(id))
+	j, err := scanRayJob(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &j, nil
+}
+
+func (s *SqliteStore) ListRayJobs(ctx context.Context) ([]StoredRayJob, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT "+rayJobColumns+" FROM ray_jobs ORDER BY submitted_at DESC, id ASC")
+	if err != nil {
+		return nil, storeErrorf("list jobs: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := make([]StoredRayJob, 0)
+	for rows.Next() {
+		j, err := scanRayJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, j)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, storeErrorf("list jobs: %v", err)
+	}
+	return out, nil
+}
+
+func (s *SqliteStore) SetRayJobDesired(ctx context.Context, id core.ClusterId, desired DesiredState) error {
+	if !desired.isValid() {
+		return errBadDesiredState(string(desired))
+	}
+	res, err := s.db.ExecContext(ctx, "UPDATE ray_jobs SET desired = ? WHERE id = ?", desired.AsStr(), string(id))
+	if err != nil {
+		return storeErrorf("set job desired: %v", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return storeErrorf("set job desired: %v", err)
+	}
+	if n == 0 {
+		return errNoSuchRayJob(string(id))
+	}
+	return nil
+}
+
+func (s *SqliteStore) RecordRayJobObservation(ctx context.Context, id core.ClusterId, obs RayJobObservation) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE ray_jobs SET status = ?, deployment_status = ?, cluster_name = ?, dashboard_url = ?,
+			message = ?, started_at = ?, finished_at = ?
+		WHERE id = ?
+	`, obs.Status, obs.DeploymentStatus, obs.ClusterName, obs.DashboardURL, obs.Message,
+		u64PtrToIntPtr(obs.StartedAt), u64PtrToIntPtr(obs.FinishedAt), string(id))
+	if err != nil {
+		return storeErrorf("record job observation: %v", err)
+	}
+	return nil
+}
+
+func (s *SqliteStore) RecordRayJobAttempt(ctx context.Context, id core.ClusterId, failureCount uint32, nextAttemptAt uint64) error {
+	_, err := s.db.ExecContext(ctx,
+		"UPDATE ray_jobs SET failure_count = ?, next_attempt_at = ? WHERE id = ?",
+		int64(failureCount), int64(nextAttemptAt), string(id))
+	if err != nil {
+		return storeErrorf("record job attempt: %v", err)
+	}
+	return nil
+}
+
+func (s *SqliteStore) RemoveRayJob(ctx context.Context, id core.ClusterId) (bool, error) {
+	res, err := s.db.ExecContext(ctx, "DELETE FROM ray_jobs WHERE id = ?", string(id))
+	if err != nil {
+		return false, storeErrorf("remove job: %v", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, storeErrorf("remove job: %v", err)
+	}
+	return n > 0, nil
+}
+
+// u64PtrToIntPtr is intPtrToU64Ptr's inverse for nullable BIGINT/INTEGER
+// binds (clamped like every other uint64 the SQL stores write).
+func u64PtrToIntPtr(p *uint64) *int64 {
+	if p == nil {
+		return nil
+	}
+	v := clampI64(*p)
+	return &v
 }

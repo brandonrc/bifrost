@@ -339,6 +339,12 @@ type Reconciler struct {
 	meteringInterval time.Duration
 	lastMeter        time.Time
 	metered          map[core.ClusterId]bool
+	// Requirement 5 seams (see Options): carried by the reconciler so the
+	// RayJob loop can register the clusters it brings up with the gateway.
+	// Accepted and stored; nothing reads them until that loop lands.
+	registrar       Registrar
+	gatewayHostname func(core.ClusterId) string
+	jobProvisioner  provision.JobProvisioner
 }
 
 // NewReconciler returns a Reconciler with no global rate cap (per-cluster
@@ -1061,16 +1067,23 @@ type Options struct {
 	// MeteringInterval is how often usage samples are recorded
 	// (requirement 14). DefaultMeteringInterval when 0; negative disables.
 	MeteringInterval time.Duration
+	// Registrar receives gateway registrations for clusters the reconciler
+	// brings up and tears down (requirement 5: ephemeral RayJobs reachable
+	// through the gateway). nil = no dynamic registration.
+	Registrar Registrar
+	// GatewayHostname names the gateway hostname a cluster is registered
+	// under (plan ruling D1: `<name>.<--gateway-domain>`). nil = no
+	// dynamic registration.
+	GatewayHostname func(core.ClusterId) string
+	// JobProvisioner backs the ephemeral-job reconcile loop (requirement
+	// 5). nil = jobs are not reconciled.
+	JobProvisioner provision.JobProvisioner
 }
 
-// RunReconciler constructs a Reconciler from store/provisioner/opts, runs
-// the ADR-0007-equivalent stale-restore boot check once (logging its
-// outcome; a failed check is non-fatal, mirroring the Rust CLI's boot
-// wiring), then runs the control loop until ctx is done. Returns when the
-// loop stops; the returned error is always nil today (ctx cancellation is
-// a normal shutdown, not a failure) but is part of the signature for
-// future fatal-startup-error reporting.
-func RunReconciler(ctx context.Context, store Store, provisioner provision.Provisioner, opts Options) error {
+// newReconcilerFromOptions applies every Options field onto a fresh
+// Reconciler — RunReconciler's construction step, separated so tests can
+// check the wiring without running the loop.
+func newReconcilerFromOptions(store Store, provisioner provision.Provisioner, opts Options) *Reconciler {
 	var r *Reconciler
 	if opts.Limits != nil {
 		r = NewReconcilerWithLimits(store, provisioner, *opts.Limits)
@@ -1083,6 +1096,21 @@ func RunReconciler(ctx context.Context, store Store, provisioner provision.Provi
 	if opts.MeteringInterval != 0 {
 		r.meteringInterval = opts.MeteringInterval
 	}
+	r.registrar = opts.Registrar
+	r.gatewayHostname = opts.GatewayHostname
+	r.jobProvisioner = opts.JobProvisioner
+	return r
+}
+
+// RunReconciler constructs a Reconciler from store/provisioner/opts, runs
+// the ADR-0007-equivalent stale-restore boot check once (logging its
+// outcome; a failed check is non-fatal, mirroring the Rust CLI's boot
+// wiring), then runs the control loop until ctx is done. Returns when the
+// loop stops; the returned error is always nil today (ctx cancellation is
+// a normal shutdown, not a failure) but is part of the signature for
+// future fatal-startup-error reporting.
+func RunReconciler(ctx context.Context, store Store, provisioner provision.Provisioner, opts Options) error {
+	r := newReconcilerFromOptions(store, provisioner, opts)
 
 	switch quarantined, err := r.DetectStaleRestore(ctx); {
 	case err != nil:

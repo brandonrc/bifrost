@@ -94,15 +94,86 @@ func cloneWorkerGroups(gs []core.WorkerGroup) []core.WorkerGroup {
 	return out
 }
 
+func cloneResolvedStorage(rs []core.ResolvedStorage) []core.ResolvedStorage {
+	if rs == nil {
+		return nil
+	}
+	out := make([]core.ResolvedStorage, len(rs))
+	for i, r := range rs {
+		r.MountPath = clonePtr(r.MountPath)
+		out[i] = r
+	}
+	return out
+}
+
 // cloneClusterSpec deep-copies a core.ClusterSpec's container/pointer
 // fields: WorkerGroups (and each group's Gpu pointer), TtlSeconds,
-// IdleTimeoutSecs, Owner.
+// IdleTimeoutSecs, Owner, Profile, Storage, StorageResolved.
 func cloneClusterSpec(s core.ClusterSpec) core.ClusterSpec {
 	s.WorkerGroups = cloneWorkerGroups(s.WorkerGroups)
 	s.TtlSeconds = clonePtr(s.TtlSeconds)
 	s.IdleTimeoutSecs = clonePtr(s.IdleTimeoutSecs)
 	s.Owner = clonePtr(s.Owner)
+	s.Profile = clonePtr(s.Profile)
+	s.Storage = cloneStringSlice(s.Storage)
+	s.StorageResolved = cloneResolvedStorage(s.StorageResolved)
 	return s
+}
+
+// cloneServiceSpec deep-copies a core.ServiceSpec's container fields:
+// Storage and StorageResolved (everything else is plain scalars).
+func cloneServiceSpec(s core.ServiceSpec) core.ServiceSpec {
+	s.Storage = cloneStringSlice(s.Storage)
+	s.StorageResolved = cloneResolvedStorage(s.StorageResolved)
+	return s
+}
+
+// cloneRayJobSpec deep-copies a core.RayJobSpec's container/pointer
+// fields: WorkerGroups, Profile, Storage, StorageResolved,
+// TtlSecondsAfterFinished, Owner.
+func cloneRayJobSpec(s core.RayJobSpec) core.RayJobSpec {
+	s.WorkerGroups = cloneWorkerGroups(s.WorkerGroups)
+	s.Profile = clonePtr(s.Profile)
+	s.Storage = cloneStringSlice(s.Storage)
+	s.StorageResolved = cloneResolvedStorage(s.StorageResolved)
+	s.TtlSecondsAfterFinished = clonePtr(s.TtlSecondsAfterFinished)
+	s.Owner = clonePtr(s.Owner)
+	return s
+}
+
+// cloneStoredService deep-copies a StoredService's Spec plus its
+// Owner/ObservedState/ObservedURL/TerminatedAt pointers.
+func cloneStoredService(s StoredService) StoredService {
+	s.Spec = cloneServiceSpec(s.Spec)
+	s.Owner = clonePtr(s.Owner)
+	s.ObservedState = clonePtr(s.ObservedState)
+	s.ObservedURL = clonePtr(s.ObservedURL)
+	s.TerminatedAt = clonePtr(s.TerminatedAt)
+	return s
+}
+
+// cloneStoredRayJob deep-copies a StoredRayJob's Spec plus its six pointer
+// fields.
+func cloneStoredRayJob(j StoredRayJob) StoredRayJob {
+	j.Spec = cloneRayJobSpec(j.Spec)
+	j.Owner = clonePtr(j.Owner)
+	j.ClusterName = clonePtr(j.ClusterName)
+	j.DashboardURL = clonePtr(j.DashboardURL)
+	j.Message = clonePtr(j.Message)
+	j.StartedAt = clonePtr(j.StartedAt)
+	j.FinishedAt = clonePtr(j.FinishedAt)
+	return j
+}
+
+// cloneRayJobObservation deep-copies a RayJobObservation's five pointer
+// fields (ingress side of RecordRayJobObservation).
+func cloneRayJobObservation(o RayJobObservation) RayJobObservation {
+	o.ClusterName = clonePtr(o.ClusterName)
+	o.DashboardURL = clonePtr(o.DashboardURL)
+	o.Message = clonePtr(o.Message)
+	o.StartedAt = clonePtr(o.StartedAt)
+	o.FinishedAt = clonePtr(o.FinishedAt)
+	return o
 }
 
 func cloneFlavorSpec(f core.FlavorSpec) core.FlavorSpec {
@@ -167,13 +238,58 @@ func cloneBudgets(m map[string]StoredBudget) map[string]StoredBudget {
 	return out
 }
 
+func cloneProfiles(ps []core.Profile) []core.Profile {
+	if ps == nil {
+		return nil
+	}
+	out := make([]core.Profile, len(ps))
+	for i, p := range ps {
+		p.Description = clonePtr(p.Description)
+		p.WorkerGroups = cloneWorkerGroups(p.WorkerGroups)
+		p.MaxWorkers = clonePtr(p.MaxWorkers)
+		p.TtlSeconds = clonePtr(p.TtlSeconds)
+		p.IdleTimeoutSecs = clonePtr(p.IdleTimeoutSecs)
+		p.Projects = cloneStringSlice(p.Projects)
+		out[i] = p
+	}
+	return out
+}
+
+func cloneAdmission(m map[string]core.AdmissionRule) map[string]core.AdmissionRule {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]core.AdmissionRule, len(m))
+	for k, v := range m {
+		v.AllowedImages = cloneStringSlice(v.AllowedImages)
+		out[k] = v
+	}
+	return out
+}
+
+func cloneStorageEntries(es []core.StorageEntry) []core.StorageEntry {
+	if es == nil {
+		return nil
+	}
+	out := make([]core.StorageEntry, len(es))
+	for i, e := range es {
+		e.MountPath = clonePtr(e.MountPath)
+		e.Projects = cloneStringSlice(e.Projects)
+		out[i] = e
+	}
+	return out
+}
+
 // cloneStoredPolicy deep-copies a StoredPolicy's Prices/Quotas/Budgets
 // maps (Budgets nested one level further, into each StoredBudget's
-// Limits).
+// Limits) and its Profiles/Admission/Storage catalogs.
 func cloneStoredPolicy(p StoredPolicy) StoredPolicy {
 	p.Prices = cloneFloatMap(p.Prices)
 	p.Quotas = cloneQuotas(p.Quotas)
 	p.Budgets = cloneBudgets(p.Budgets)
+	p.Profiles = cloneProfiles(p.Profiles)
+	p.Admission = cloneAdmission(p.Admission)
+	p.Storage = cloneStorageEntries(p.Storage)
 	return p
 }
 

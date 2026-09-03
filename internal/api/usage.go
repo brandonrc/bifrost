@@ -62,7 +62,7 @@ func (s *Server) UsageReport(ctx context.Context, req UsageReportRequestObject) 
 
 	// Query from 0, not `from`: a sample BEFORE the window sets the level
 	// entering it (carry-in — see policy.ResourceHours).
-	samples, err := s.Store.UsageSamples(ctx, q.Project, q.Pool, 0, to)
+	samples, err := s.Store.UsageSamples(ctx, q.Project, q.Pool, nil, 0, to)
 	if err != nil {
 		return nil, wrapStoreErr(err)
 	}
@@ -263,7 +263,7 @@ func (s *Server) Metrics(ctx context.Context, _ MetricsRequestObject) (MetricsRe
 	if err := Authorize(ctx, s.Store, identity, auth.Read, auth.TargetCluster); err != nil {
 		return nil, err
 	}
-	samples, err := s.Store.UsageSamples(ctx, nil, nil, 0, controller.NowUnix())
+	samples, err := s.Store.UsageSamples(ctx, nil, nil, nil, 0, controller.NowUnix())
 	if err != nil {
 		return nil, wrapStoreErr(err)
 	}

@@ -222,7 +222,7 @@ func TestMemoryStoreListMethodsReturnNonNilEmpty(t *testing.T) {
 	if v, err := store.ListAllocations(ctx, "pool"); err != nil || v == nil {
 		t.Fatalf("ListAllocations: %v %v", v, err)
 	}
-	if v, err := store.UsageSamples(ctx, nil, nil, 0, 1<<62); err != nil || v == nil {
+	if v, err := store.UsageSamples(ctx, nil, nil, nil, 0, 1<<62); err != nil || v == nil {
 		t.Fatalf("UsageSamples: %v %v", v, err)
 	}
 	if rows, next, err := store.ListAudit(ctx, core.AuditFilter{}); err != nil || rows == nil || next != nil {

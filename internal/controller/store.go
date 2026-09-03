@@ -159,6 +159,8 @@ func specChanged(a, b *core.ClusterSpec) bool {
 		a.HeadMemory != b.HeadMemory ||
 		!uint64PtrEqual(a.TtlSeconds, b.TtlSeconds) ||
 		!uint64PtrEqual(a.IdleTimeoutSecs, b.IdleTimeoutSecs) ||
+		!stringPtrEqual(a.Profile, b.Profile) ||
+		!stringSliceEqual(a.Storage, b.Storage) ||
 		len(a.WorkerGroups) != len(b.WorkerGroups) {
 		return true
 	}
@@ -189,6 +191,124 @@ func stringPtrEqual(a, b *string) bool {
 		return a == b
 	}
 	return *a == *b
+}
+
+// stringSliceEqual treats nil and empty as equal: a spec built as a struct
+// literal (nil) and one read back from a spec_json column (`[]`) describe
+// the same desired state.
+func stringSliceEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// --- Stored service (requirement 1/2: services converge from the store) ---
+
+// StoredService is a persisted Serve service: the desired spec plus a
+// monotonic Generation that bumps whenever the spec changes, the owning
+// identity, and the last observation. Services were a stateless proxy to
+// the ServiceProvisioner before; with a row, the reconciler can converge
+// them (deploy on create, re-deploy on spec change, delete on
+// DesiredTerminated) and the API can scope them per project.
+type StoredService struct {
+	Name string
+	Spec core.ServiceSpec
+	// Owner is the authenticated identity that deployed the service,
+	// server-stamped; nil when unattributed.
+	Owner *string
+	// Generation bumps whenever Spec actually changes (see
+	// serviceSpecChanged).
+	Generation uint64
+	Desired    DesiredState
+	// ObservedState is nil until the reconciler has observed anything.
+	ObservedState *core.ClusterState
+	// ObservedURL is the service's Serve endpoint URL as last observed;
+	// nil until the backend reports one.
+	ObservedURL *string
+	// CreatedAt is unix seconds when the service was first created.
+	CreatedAt uint64
+	// TerminatedAt is unix seconds when Desired last became
+	// DesiredTerminated, or nil while the service is running. Same
+	// tombstone semantics as StoredCluster.TerminatedAt.
+	TerminatedAt *uint64
+}
+
+// serviceSpecChanged reports whether two service specs differ in a way
+// that should bump generation. core.ServiceSpec has no derived equality
+// in Go, so this compares every actuation-driving field.
+func serviceSpecChanged(a, b *core.ServiceSpec) bool {
+	return a.Name != b.Name ||
+		a.Project != b.Project ||
+		a.RayVersion != b.RayVersion ||
+		a.Image != b.Image ||
+		a.ServeConfigV2 != b.ServeConfigV2 ||
+		a.HeadCpu != b.HeadCpu ||
+		a.HeadMemory != b.HeadMemory ||
+		a.WorkerReplicas != b.WorkerReplicas ||
+		a.WorkerCpu != b.WorkerCpu ||
+		a.WorkerMemory != b.WorkerMemory ||
+		a.Upgrade != b.Upgrade ||
+		!stringSliceEqual(a.Storage, b.Storage)
+}
+
+// --- Stored ephemeral Ray job (requirement 5) ---
+
+// StoredRayJob is a persisted ephemeral job: the submitted spec, the
+// owning identity, the desired state (running until the user deletes it),
+// and the last KubeRay observation. Jobs have no generation: a spec is
+// submitted once and never edited — re-submitting an id replaces the spec
+// only while nothing has been observed for it.
+type StoredRayJob struct {
+	ID   core.ClusterId
+	Spec core.RayJobSpec
+	// Owner is the authenticated identity that submitted the job,
+	// server-stamped; nil when unattributed. Authoritative over
+	// Spec.Owner, which handlers may also stamp for symmetry with clusters.
+	Owner   *string
+	Desired DesiredState
+	// Status is Ray's job status verbatim (PENDING | RUNNING | SUCCEEDED |
+	// FAILED | STOPPED); "" until Ray reports one.
+	Status string
+	// DeploymentStatus is KubeRay's job deployment status verbatim
+	// (Initializing | Running | Complete | Failed | ...); "" until observed.
+	DeploymentStatus string
+	// ClusterName is the backing RayCluster's name while it exists.
+	ClusterName *string
+	// DashboardURL is the backing cluster's Ray dashboard/Jobs API base,
+	// reachable from the control plane, when known.
+	DashboardURL *string
+	// Message is the last status message from KubeRay/Ray, when any.
+	Message *string
+	// SubmittedAt is unix seconds when the job row was first created.
+	SubmittedAt uint64
+	// StartedAt/FinishedAt are unix seconds from the observation; nil
+	// until the job starts / reaches a terminal status.
+	StartedAt  *uint64
+	FinishedAt *uint64
+	// FailureCount/NextAttemptAt are the reconcile backoff state, same
+	// semantics as StoredCluster's.
+	FailureCount  uint32
+	NextAttemptAt uint64
+}
+
+// RayJobObservation is what the reconciler records after observing a job's
+// backing resource — the store-side shape of provision.ObservedJob, kept
+// separate so the store stays free of provisioner types (same posture as
+// StoredPool.ObservedJSON). Every field overwrites the stored value.
+type RayJobObservation struct {
+	Status           string
+	DeploymentStatus string
+	ClusterName      *string
+	DashboardURL     *string
+	Message          *string
+	StartedAt        *uint64
+	FinishedAt       *uint64
 }
 
 // --- Stored pool ---
@@ -222,6 +342,11 @@ func poolSpecChanged(a, b *core.PoolSpec) bool {
 
 func poolSpecEqual(a, b *core.PoolSpec) bool {
 	if a.Name != b.Name || a.Cohort != b.Cohort || a.FairSharingWeight != b.FairSharingWeight || a.Elastic != b.Elastic {
+		return false
+	}
+	// OrDefault: a struct-literal spec ("") and a JSON-round-tripped one
+	// ("compute") describe the same pool — see core.PoolSpec.Purpose.
+	if a.Purpose.OrDefault() != b.Purpose.OrDefault() {
 		return false
 	}
 	if !gpuSharingPtrEqual(a.GpuSharing, b.GpuSharing) {
@@ -331,7 +456,7 @@ func (s *UsageSource) UnmarshalJSON(data []byte) error {
 }
 
 // UsageSample is one point-in-time usage reading: Quantity units of
-// Resource attributed to (Project, Pool) at Ts. Append-only timeseries —
+// Resource attributed to (Project, Pool, Owner) at Ts. Append-only timeseries —
 // no primary key, no updates. An empty Project is the pool-level aggregate
 // row (not attributable to a single project); an empty Pool means the
 // project has no allocation.
@@ -343,6 +468,11 @@ type UsageSample struct {
 	Resource string      `json:"resource"`
 	Quantity float64     `json:"quantity"`
 	Source   UsageSource `json:"source"`
+	// Owner is the identity the sample is attributed to (requirement 14,
+	// per-user attribution): the owning cluster's/job's Owner. "" =
+	// unattributed (pool-level aggregate rows, ownerless clusters, and
+	// every sample recorded before the column existed).
+	Owner string `json:"owner"`
 }
 
 // --- Governance policy (settings API, Wave 3 consumer; stored types land now) ---
@@ -364,16 +494,28 @@ type StoredPolicy struct {
 	// FromFileSeed is true while the row is the untouched --policy boot
 	// seed.
 	FromFileSeed bool `json:"from_file_seed"`
+	// Profiles is the profile catalog (requirement 7, plan ruling D7):
+	// named cluster shapes a spec may refer to. Empty = no catalog.
+	Profiles []core.Profile `json:"profiles"`
+	// Admission maps project (or "*" for every project) -> per-project
+	// admission limits (requirement 7). Empty = only the deployment-wide
+	// --allowed-images/--max-workers apply.
+	Admission map[string]core.AdmissionRule `json:"admission"`
+	// Storage is the private-storage catalog (requirement 12): Secret
+	// references a spec may name. Empty = no catalog.
+	Storage []core.StorageEntry `json:"storage"`
 }
 
 // storedPolicyAlias breaks the recursion MarshalJSON would otherwise cause
 // by re-entering StoredPolicy's own MarshalJSON.
 type storedPolicyAlias StoredPolicy
 
-// MarshalJSON substitutes empty maps for nil Quotas/Budgets, mirroring
-// Rust's BTreeMap::default() (via #[serde(default)]), which serde always
-// writes as `{}`, never `null`. Prices stays nullable (Option<...>) — a
-// true "no price sheet" is meaningfully distinct from an empty one.
+// MarshalJSON substitutes empty maps for nil Quotas/Budgets/Admission and
+// empty slices for nil Profiles/Storage, mirroring Rust's
+// BTreeMap::default() / Vec::default() (via #[serde(default)]), which
+// serde always writes as `{}`/`[]`, never `null`. Prices stays nullable
+// (Option<...>) — a true "no price sheet" is meaningfully distinct from an
+// empty one.
 func (p StoredPolicy) MarshalJSON() ([]byte, error) {
 	a := storedPolicyAlias(p)
 	if a.Quotas == nil {
@@ -381,6 +523,15 @@ func (p StoredPolicy) MarshalJSON() ([]byte, error) {
 	}
 	if a.Budgets == nil {
 		a.Budgets = map[string]StoredBudget{}
+	}
+	if a.Profiles == nil {
+		a.Profiles = []core.Profile{}
+	}
+	if a.Admission == nil {
+		a.Admission = map[string]core.AdmissionRule{}
+	}
+	if a.Storage == nil {
+		a.Storage = []core.StorageEntry{}
 	}
 	return json.Marshal(a)
 }
@@ -716,9 +867,56 @@ type Store interface {
 	// rows.
 	RecordUsageSamples(ctx context.Context, samples []UsageSample) error
 	// UsageSamples reads usage samples in [from, to] (unix seconds,
-	// inclusive), ordered by ts ascending. project/pool filter when
-	// non-nil.
-	UsageSamples(ctx context.Context, project, pool *string, from, to uint64) ([]UsageSample, error)
+	// inclusive), ordered by ts ascending. project/pool/owner filter when
+	// non-nil (an owner of "" selects unattributed samples).
+	UsageSamples(ctx context.Context, project, pool, owner *string, from, to uint64) ([]UsageSample, error)
+
+	// --- Services (requirements 1/2) ---
+
+	// UpsertService creates or updates a service's desired spec, returning
+	// the (possibly bumped) generation — like clusters, generation only
+	// advances when the spec actually changes. owner is stamped on create
+	// and kept on update (a spec edit does not change who owns the
+	// service). A TERMINATED record is a fresh create (desired back to
+	// running, observation cleared, created_at now, owner replaced), for
+	// the same reason as UpsertDesired.
+	UpsertService(ctx context.Context, name string, spec core.ServiceSpec, owner *string) (uint64, error)
+	GetService(ctx context.Context, name string) (*StoredService, error)
+	// ListServices lists every service, ordered by name.
+	ListServices(ctx context.Context) ([]StoredService, error)
+	// SetServiceDesired flips desired state (e.g. request termination);
+	// errors naming the missing service. Stamps/clears TerminatedAt like
+	// SetDesired.
+	SetServiceDesired(ctx context.Context, name string, desired DesiredState) error
+	// RecordServiceObservation records the observed state and Serve URL.
+	// No-op for an unknown service.
+	RecordServiceObservation(ctx context.Context, name string, observed *core.ClusterState, url *string) error
+	// RemoveService hard-deletes a service row (tombstone purge). Returns
+	// true if a row was removed.
+	RemoveService(ctx context.Context, name string) (bool, error)
+
+	// --- Ephemeral Ray jobs (requirement 5) ---
+
+	// UpsertRayJob creates a job row (desired running, submitted_at now,
+	// no observation) or, for an existing id, replaces its spec and owner
+	// while keeping everything else.
+	UpsertRayJob(ctx context.Context, id core.ClusterId, spec core.RayJobSpec, owner *string) error
+	GetRayJob(ctx context.Context, id core.ClusterId) (*StoredRayJob, error)
+	// ListRayJobs lists every job, most recently submitted first (ties by
+	// id ascending).
+	ListRayJobs(ctx context.Context) ([]StoredRayJob, error)
+	// SetRayJobDesired flips desired state (DesiredTerminated = stop and
+	// tear down); errors naming the missing job.
+	SetRayJobDesired(ctx context.Context, id core.ClusterId, desired DesiredState) error
+	// RecordRayJobObservation overwrites the job's observed fields. No-op
+	// for an unknown job.
+	RecordRayJobObservation(ctx context.Context, id core.ClusterId, obs RayJobObservation) error
+	// RecordRayJobAttempt persists a job's backoff state, same semantics
+	// as RecordAttempt.
+	RecordRayJobAttempt(ctx context.Context, id core.ClusterId, failureCount uint32, nextAttemptAt uint64) error
+	// RemoveRayJob hard-deletes a job row. Returns true if a row was
+	// removed.
+	RemoveRayJob(ctx context.Context, id core.ClusterId) (bool, error)
 
 	// GetPolicy reads the persisted governance policy; nil when no policy
 	// row exists (never seeded, never edited).

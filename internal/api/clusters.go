@@ -311,7 +311,7 @@ func satSub(a, b uint64) uint64 {
 // Ported from mobula-api's usage.rs windowed_consumption.
 func (s *Server) windowedConsumption(ctx context.Context, project string, from, to uint64) (policy.ResourceMap, error) {
 	p := project
-	samples, err := s.Store.UsageSamples(ctx, &p, nil, 0, to)
+	samples, err := s.Store.UsageSamples(ctx, &p, nil, nil, 0, to)
 	if err != nil {
 		return nil, err
 	}

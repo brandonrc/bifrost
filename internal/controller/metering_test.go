@@ -29,7 +29,7 @@ func TestMeterRecordsRunningClustersAndClosesTheStep(t *testing.T) {
 	if err != nil || n == 0 {
 		t.Fatalf("meter running: n=%d err=%v", n, err)
 	}
-	samples, err := store.UsageSamples(ctx, nil, nil, 0, 2000)
+	samples, err := store.UsageSamples(ctx, nil, nil, nil, 0, 2000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestMeterRecordsRunningClustersAndClosesTheStep(t *testing.T) {
 	if n, err := r.Meter(ctx, 2200); err != nil || n != 0 {
 		t.Fatalf("meter after close must record nothing: n=%d err=%v", n, err)
 	}
-	samples, _ = store.UsageSamples(ctx, nil, nil, 0, 3000)
+	samples, _ = store.UsageSamples(ctx, nil, nil, nil, 0, 3000)
 	zeros := 0
 	for _, s := range samples {
 		if s.Ts == 1600 && s.Quantity == 0 {

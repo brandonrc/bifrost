@@ -68,6 +68,14 @@ type ServiceSpec struct {
 	WorkerCpu      string          `json:"worker_cpu"`
 	WorkerMemory   string          `json:"worker_memory"`
 	Upgrade        UpgradeStrategy `json:"upgrade"`
+	// Storage names storage catalog entries (#12) delivered to the
+	// service's pods. Names only — the catalog is resolved server-side
+	// into StorageResolved.
+	Storage []string `json:"storage"`
+	// StorageResolved is the server-computed resolution of Storage against
+	// the catalog at admission time (never retroactive). Persisted, never
+	// echoed: ServiceView carries no spec.
+	StorageResolved []ResolvedStorage `json:"storage_resolved,omitempty"`
 }
 
 // serviceSpecAlias breaks the recursion Unmarshal/MarshalJSON would
@@ -92,11 +100,15 @@ func (s *ServiceSpec) UnmarshalJSON(data []byte) error {
 // MarshalJSON is UnmarshalJSON's symmetric counterpart: a zero-value
 // Upgrade (a ServiceSpec built as a Go struct literal without setting
 // Upgrade) would otherwise marshal as `"upgrade":""`, which the frozen
-// OpenAPI contract's UpgradeStrategy enum schema rejects.
+// OpenAPI contract's UpgradeStrategy enum schema rejects. Storage gets the
+// package's "nil is not a valid Vec" treatment (nil -> `[]`, never `null`).
 func (s ServiceSpec) MarshalJSON() ([]byte, error) {
 	a := serviceSpecAlias(s)
 	if a.Upgrade == "" {
 		a.Upgrade = DefaultUpgradeStrategy
+	}
+	if a.Storage == nil {
+		a.Storage = []string{}
 	}
 	return json.Marshal(a)
 }
