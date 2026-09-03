@@ -358,3 +358,107 @@ func TestDeployService_NoIdentityStampsNoOwner(t *testing.T) {
 		t.Fatalf("row = %+v, want no owner", row)
 	}
 }
+
+// One service per project (requirement 2, ruling D8): a second name in the
+// same project is 409 and audited as a deny; a same-name redeploy and
+// another project's service are unaffected.
+func TestDeployService_SecondNameInProjectIs409(t *testing.T) {
+	s := newServiceServer(t)
+	dev := testIdentity("dev", auth.RoleDeveloper)
+	if err := deployAs(t, s, dev, "svc-a", minimalServiceSpec()); err != nil {
+		t.Fatal(err)
+	}
+	second := minimalServiceSpec()
+	second.Name = "svc-b"
+	err := deployAs(t, s, dev, "svc-b", second)
+	if err == nil {
+		t.Fatal("second service in the same project must be refused")
+	}
+	mustHTTPError(t, err, 409)
+	if row, _ := s.Store.GetService(context.Background(), "svc-b"); row != nil {
+		t.Fatalf("refused deploy must write no row, got %+v", row)
+	}
+	rows, _, aerr := s.Store.ListAudit(context.Background(), core.AuditFilter{})
+	if aerr != nil {
+		t.Fatal(aerr)
+	}
+	var denied bool
+	for _, row := range rows {
+		ev := row.Event
+		if ev.Decision == core.AuditDecisionDeny && ev.Reason != nil && *ev.Reason == "service_limit" &&
+			ev.Action != nil && *ev.Action == "deploy_service" && ev.Cluster != nil && *ev.Cluster == "svc-b" &&
+			ev.Status != nil && *ev.Status == 409 {
+			denied = true
+		}
+	}
+	if !denied {
+		t.Fatalf("no service_limit deny in the audit trail: %+v", rows)
+	}
+
+	// Same name is an update, another project is unaffected.
+	if err := deployAs(t, s, dev, "svc-a", minimalServiceSpec()); err != nil {
+		t.Fatalf("same-name redeploy: %v", err)
+	}
+	other := minimalServiceSpec()
+	other.Name, other.Project = "svc-c", "other"
+	if err := deployAs(t, s, dev, "svc-c", other); err != nil {
+		t.Fatalf("another project's first service: %v", err)
+	}
+}
+
+// Deleting the first service (desired terminated) frees the project's slot
+// at once — no wait for the tombstone — and --services-per-project raises
+// the cap.
+func TestDeployService_LimitFreesOnDeleteAndHonoursCap(t *testing.T) {
+	s := newServiceServer(t)
+	dev := testIdentity("dev", auth.RoleDeveloper)
+	if err := deployAs(t, s, dev, "svc-a", minimalServiceSpec()); err != nil {
+		t.Fatal(err)
+	}
+	second := minimalServiceSpec()
+	second.Name = "svc-b"
+	if _, err := s.DeleteService(ctxWithIdentity(dev), DeleteServiceRequestObject{Name: "svc-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := deployAs(t, s, dev, "svc-b", second); err != nil {
+		t.Fatalf("deploy after delete: %v", err)
+	}
+
+	third := minimalServiceSpec()
+	third.Name = "svc-c"
+	if err := deployAs(t, s, dev, "svc-c", third); err == nil {
+		t.Fatal("cap 1: third name must be refused while svc-b is live")
+	}
+	s.ServicesPerProject = 2
+	if err := deployAs(t, s, dev, "svc-c", third); err != nil {
+		t.Fatalf("cap 2 must admit a second live service: %v", err)
+	}
+	fourth := minimalServiceSpec()
+	fourth.Name = "svc-d"
+	err := deployAs(t, s, dev, "svc-d", fourth)
+	if err == nil {
+		t.Fatal("cap 2: a third live service must be refused")
+	}
+	mustHTTPError(t, err, 409)
+}
+
+// A global Developer role plus a project-scoped binding is narrowed to the
+// bound projects for deploy too (requirement 2): the seeded dev-b of the
+// requirement lane is exactly this shape and must not deploy into team-a.
+func TestDeployService_GlobalRoleNarrowedByScopedBinding(t *testing.T) {
+	s := newServiceServer(t)
+	devB := &auth.Identity{Subject: "dev-b", Roles: []auth.Role{auth.RoleDeveloper},
+		ProjectRoles: []auth.RoleScope{{Role: auth.RoleOperator, Scope: "project:team-b"}}}
+	specA := minimalServiceSpec()
+	specA.Project = "team-a"
+	err := deployAs(t, s, devB, "svc-a", specA)
+	if err == nil {
+		t.Fatal("a team-b developer must not deploy into team-a")
+	}
+	mustHTTPError(t, err, 403)
+	specB := minimalServiceSpec()
+	specB.Project = "team-b"
+	if err := deployAs(t, s, devB, "svc-a", specB); err != nil {
+		t.Fatalf("own project: %v", err)
+	}
+}

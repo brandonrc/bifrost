@@ -25,16 +25,21 @@
       "n": 2,
       "title": "Groups share models privately",
       "priority": "HIGH",
-      "tests": 1,
-      "passed": 0,
+      "tests": 4,
+      "passed": 3,
       "failed": 0,
-      "skipped": 0,
-      "not_yet_built": 1,
-      "status": "not-yet-built",
+      "skipped": 1,
+      "not_yet_built": 0,
+      "status": "partial",
       "test_names": [
-        "TestNonMemberCannotReadAnotherGroupsService"
+        "TestAnonymousServeRequestIs401AndNonMemberIs403",
+        "TestNonMemberCannotReadAnotherGroupsService",
+        "TestRedeploySameNameIsAnUpdate",
+        "TestSecondServiceInSameProjectIsRefusedUntilFirstIsGone"
       ],
-      "skip_reasons": null
+      "skip_reasons": [
+        "target inproc lacks capability gateway-serve"
+      ]
     },
     {
       "n": 3,
