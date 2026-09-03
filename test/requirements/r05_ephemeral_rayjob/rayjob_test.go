@@ -184,3 +184,34 @@ func TestRunningJobIsReachableThroughTheGateway(t *testing.T) {
 		})
 	}
 }
+
+// Requirement 12 meets requirement 5: a job may name catalogued storage and
+// gets it the same way a cluster does — as a Secret reference on its pods,
+// never as a value through the API. An unknown name is refused before
+// anything is created.
+func TestJobStorageReferenceIsResolvedLikeAClusters(t *testing.T) {
+	tgt := target.Get(t)
+	req.Covers(t, 12, "an ephemeral job may reference catalogued storage; unknown names are 400 and nothing is submitted")
+	ctx := context.Background()
+	id := req.Name("jst")
+	body := fixture.SubmitJobBody(id, "team-a", "python -c 1", nil)
+	names := []string{"no-such-storage-" + req.RunID()}
+	body.Spec.Storage = &names
+	resp, err := tgt.As("dev-a").API().SubmitJobWithResponse(ctx, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode() != http.StatusBadRequest {
+		t.Fatalf("submit with unknown storage = %d %s, want 400", resp.StatusCode(), resp.Body)
+	}
+	if g, err := tgt.As("admin").API().GetJobWithResponse(ctx, id); err != nil || g.StatusCode() != http.StatusNotFound {
+		t.Fatalf("a refused submit must persist nothing; get_job = %v", codeOf(g))
+	}
+}
+
+func codeOf(r interface{ StatusCode() int }) any {
+	if r == nil {
+		return nil
+	}
+	return r.StatusCode()
+}
