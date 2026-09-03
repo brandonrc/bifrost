@@ -45,7 +45,20 @@ Helm rev 14: `ghcr.io/brandonrc/bifrost:sha-0f34051` with `--gateway-domain=ray.
 job loops running; the dynamic registry lists the live cluster. There is **no wildcard HTTPRoute** for the gateway
 domain yet: `gateway_url` fields advertise hostnames Envoy will not route until the pack/NebariApp gains one (D1
 follow-up). The L3 grace lane therefore talks to the in-cluster Service (clusterIP `10.152.183.219:8484`) and sends
-Host headers directly. Redeploy to the final main sha once #13 publishes.
+Host headers directly.
+
+**2026-09-03 evening:** Helm rev 16 = `ghcr.io/brandonrc/bifrost:sha-ae5ae86` + bifrost-ui `sha-74065a7` (rev 15 "failed"
+only because the overlay had the backend sha as the UI tag; fixed in grace-deploy). The rev-16 lane before #21
+(`t6a99b393`) went red from r03 on: `TestPermissionMatrix` leaked the RayCluster/RayService/RayJob it created and every
+later postflight waited its full budget ("left objects behind: [] (deadline)"). After #21 the lane (`t6a99c1de`) is
+**68 pass / 0 fail** (skips: r01/r02 serve-fixture, r07 ×2 no allowlist; r16 NotYetBuilt by design).
+
+## Kind (run 33793544341 on 9e76334, sharded)
+
+governance green; rbac-selfserve 21/1 (owner-pod job supervisor OOM-killed at the 2Gi head on the head-only layout →
+#22 `REQ_HEAD_MEMORY=4Gi`); jobs-cleanup 9/4 (all r05: `deployment_status=Failed` with empty job status, no reason
+captured → #23 fails fast with the message and dumps the operator's RayJob lines); serving shard pending at time of
+writing. Next run on main ≥ 2aa728d is the one to read.
 
 ## Follow-ups (not done)
 

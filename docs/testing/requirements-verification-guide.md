@@ -4,7 +4,8 @@ A tester's guide to the eighteen Ray Software Pack requirements: what the
 automated lanes already prove, how to prove each row by hand against a live
 deployment (grace), and the caveats that remain with a concrete fix for each.
 
-Status as of 2026-09-03, `main` at `ae5ae86` (contract 0.2.0, 51 operations).
+Status as of 2026-09-03, `main` at `2aa728d` (contract 0.2.0, 51 operations). Grace lane `t6a99c1de` on the deployed
+`sha-ae5ae86`: 68 pass / 0 fail.
 
 ## 1. How proof works
 
