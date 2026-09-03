@@ -25,7 +25,7 @@ ALL rows ship. Priority governs **sequence**, never scope-cut.
 
 | # | User need | Priority | Mobula reference status |
 |---|---|---|---|
-| 1 | Deploy models from within Jupyter | CRITICAL | Partial (RayService + 4 service ops) |
+| 1 | Deploy models from within Jupyter | CRITICAL | **Built** (2026-09-03, `serve-converge`): `deploy_service` is store-backed (owner-stamped, project-scoped, 202 per D11) and the service reconciler converges the RayService — generation-annotated redeploys roll in place, readiness read from KubeRay 1.7 `Ready`/`UpgradeInProgress` conditions, running services registered with the gateway as `serve` endpoints (`gateway_url`). `r01_serve_from_jupyter` asserts deploy → running → delete on L2 and, on kind, a real in-wheel Serve app (`ray.serve._private.test_utils:get_pid_entrypoint`, no egress needed). **Caveat:** the HTTP round trip through the gateway (`TestServeEndpointAnswersThroughTheGateway`) is gated on a `serve-fixture` capability no target declares yet — it needs package B's gateway `serve` authorization and the D6 ConfigMap-mounted app fixture (package G). |
 | 2 | Groups share models privately (one shared RayService per group, every request authenticated, caller must belong to owning group) | HIGH | Partial |
 | 3 | RBAC for model serving and cluster access; direct Ray Serve/dashboard/Jobs/GCS access blocked | HIGH | **Built** (OIDC, deny-by-default RBAC, gateway) |
 | 4 | Serving in separate resource pool from compute clusters | CRITICAL | In flight (Kueue pools) |

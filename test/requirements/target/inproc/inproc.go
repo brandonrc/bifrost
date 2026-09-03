@@ -112,12 +112,13 @@ func New(t testing.TB, opts ...Option) req.Target {
 		t.Fatal(err)
 	}
 	cfg := app.Config{
-		Store:             store,
-		Local:             local,
-		Provisioner:       newFakeProvisioner(),
-		ReconcileInterval: 25 * time.Millisecond,
-		MeteringInterval:  100 * time.Millisecond,
-		GatewayDomain:     DefaultGatewayDomain,
+		Store:              store,
+		Local:              local,
+		Provisioner:        newFakeProvisioner(),
+		ServiceProvisioner: newFakeServiceProvisioner(),
+		ReconcileInterval:  25 * time.Millisecond,
+		MeteringInterval:   100 * time.Millisecond,
+		GatewayDomain:      DefaultGatewayDomain,
 	}
 	for _, o := range opts {
 		o(&cfg)
@@ -259,9 +260,11 @@ func (tg *target) API() *client.ClientWithResponses {
 	return c
 }
 
-// Cleanup deletes every cluster whose id carries the run prefix, as admin.
+// Cleanup deletes every cluster and service whose name carries the run
+// prefix, as admin.
 func (tg *target) Cleanup(ctx context.Context) error {
 	api := tg.As("admin").API()
+	prefix := req.RunID() + "-"
 	list, err := api.ListClustersWithResponse(ctx)
 	if err != nil {
 		return err
@@ -270,10 +273,24 @@ func (tg *target) Cleanup(ctx context.Context) error {
 		Id string `json:"id"`
 	}
 	_ = json.Unmarshal(list.Body, &items)
-	prefix := req.RunID() + "-"
 	for _, it := range items {
 		if strings.HasPrefix(it.Id, prefix) {
 			if _, err := api.DeleteClusterWithResponse(ctx, it.Id, nil); err != nil {
+				return err
+			}
+		}
+	}
+	services, err := api.ListServicesWithResponse(ctx)
+	if err != nil {
+		return err
+	}
+	var svcs []struct {
+		Name string `json:"name"`
+	}
+	_ = json.Unmarshal(services.Body, &svcs)
+	for _, it := range svcs {
+		if strings.HasPrefix(it.Name, prefix) {
+			if _, err := api.DeleteServiceWithResponse(ctx, it.Name); err != nil {
 				return err
 			}
 		}
