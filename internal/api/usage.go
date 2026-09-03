@@ -10,7 +10,7 @@
 // report API, and scrape tokens are just Bearer JWTs.
 //
 // Aggregation semantics live in internal/policy (step function with
-// carry-in). Grouping is by (project, pool); the pool-level aggregate rows
+// carry-in). Grouping is by (project, pool, owner); the pool-level aggregate rows
 // the Kueue path writes carry project = "" and OVERLAP the per-project
 // rows — consumers must not sum across project boundaries. Ported from
 // mobula-api's usage.rs.
@@ -37,11 +37,11 @@ func promEscape(v string) string {
 	return v
 }
 
-// UsageReport reports resource-hours (and cost when priced) by project and
-// pool over a window, plus configured projects' time-windowed budget
-// status. Read on Target::Cluster. The `owner` query parameter the 0.2.0
-// contract adds is accepted but not yet applied: package H (usage-owner)
-// attributes samples per owner and filters on it here.
+// UsageReport reports resource-hours (and cost when priced) by project,
+// pool and owner over a window, plus configured projects' time-windowed
+// budget status. Read on Target::Cluster. The `owner` query parameter
+// narrows to one identity's consumption (requirement 14's "who"); an
+// owner of "" selects unattributed samples.
 func (s *Server) UsageReport(ctx context.Context, req UsageReportRequestObject) (UsageReportResponseObject, error) {
 	identity, _ := IdentityFromContext(ctx)
 	if err := Authorize(ctx, s.Store, identity, auth.Read, auth.TargetCluster); err != nil {
@@ -62,15 +62,15 @@ func (s *Server) UsageReport(ctx context.Context, req UsageReportRequestObject) 
 
 	// Query from 0, not `from`: a sample BEFORE the window sets the level
 	// entering it (carry-in — see policy.ResourceHours).
-	samples, err := s.Store.UsageSamples(ctx, q.Project, q.Pool, nil, 0, to)
+	samples, err := s.Store.UsageSamples(ctx, q.Project, q.Pool, q.Owner, 0, to)
 	if err != nil {
 		return nil, wrapStoreErr(err)
 	}
 
-	type groupKey struct{ project, pool string }
+	type groupKey struct{ project, pool, owner string }
 	grouped := map[groupKey]map[string][]policy.UsageSampleView{}
 	for _, smp := range samples {
-		key := groupKey{smp.Project, smp.Pool}
+		key := groupKey{smp.Project, smp.Pool, smp.Owner}
 		if grouped[key] == nil {
 			grouped[key] = map[string][]policy.UsageSampleView{}
 		}
@@ -96,7 +96,10 @@ func (s *Server) UsageReport(ctx context.Context, req UsageReportRequestObject) 
 		if keys[i].project != keys[j].project {
 			return keys[i].project < keys[j].project
 		}
-		return keys[i].pool < keys[j].pool
+		if keys[i].pool != keys[j].pool {
+			return keys[i].pool < keys[j].pool
+		}
+		return keys[i].owner < keys[j].owner
 	})
 	groups := make([]UsageGroup, 0, len(keys))
 	for _, key := range keys {
@@ -110,7 +113,8 @@ func (s *Server) UsageReport(ctx context.Context, req UsageReportRequestObject) 
 			c := policy.Cost(policy.ResourceMap(resourceHours), cfg.Prices)
 			costUSD = &c
 		}
-		groups = append(groups, UsageGroup{Project: key.project, Pool: key.pool, ResourceHours: resourceHours, CostUsd: costUSD})
+		owner := key.owner
+		groups = append(groups, UsageGroup{Project: key.project, Pool: key.pool, Owner: &owner, ResourceHours: resourceHours, CostUsd: costUSD})
 	}
 
 	// Budget status (#77): for each configured project (filtered to
@@ -214,14 +218,15 @@ func renderPoolNominalGauge(pools []controller.StoredPool) string {
 }
 
 // renderUsageGauge renders the latest usage sample per (pool, project,
-// resource) as Prometheus text exposition. Ported from usage.rs's
-// render_usage_gauge.
+// owner, resource) as Prometheus text exposition. Ported from usage.rs's
+// render_usage_gauge; the owner label is requirement 14's per-user
+// attribution ("" = unattributed).
 func renderUsageGauge(samples []controller.UsageSample) string {
-	type key struct{ pool, project, resource string }
+	type key struct{ pool, project, owner, resource string }
 	latest := map[key]float64{}
 	for _, smp := range samples {
 		// Samples arrive ts-ordered; last wins.
-		latest[key{smp.Pool, smp.Project, smp.Resource}] = smp.Quantity
+		latest[key{smp.Pool, smp.Project, smp.Owner, smp.Resource}] = smp.Quantity
 	}
 	keys := make([]key, 0, len(latest))
 	for k := range latest {
@@ -234,6 +239,9 @@ func renderUsageGauge(samples []controller.UsageSample) string {
 		if keys[i].project != keys[j].project {
 			return keys[i].project < keys[j].project
 		}
+		if keys[i].owner != keys[j].owner {
+			return keys[i].owner < keys[j].owner
+		}
 		return keys[i].resource < keys[j].resource
 	})
 	var b strings.Builder
@@ -241,8 +249,8 @@ func renderUsageGauge(samples []controller.UsageSample) string {
 		"(Kueue reservation ledger or observed-spec estimate).\n" +
 		"# TYPE bifrost_pool_resource_usage gauge\n")
 	for _, k := range keys {
-		fmt.Fprintf(&b, "bifrost_pool_resource_usage{pool=%q,project=%q,resource=%q} %v\n",
-			promEscape(k.pool), promEscape(k.project), promEscape(k.resource), latest[k])
+		fmt.Fprintf(&b, "bifrost_pool_resource_usage{pool=%q,project=%q,owner=%q,resource=%q} %v\n",
+			promEscape(k.pool), promEscape(k.project), promEscape(k.owner), promEscape(k.resource), latest[k])
 	}
 	return b.String()
 }
