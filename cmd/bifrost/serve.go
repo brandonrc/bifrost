@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -42,6 +43,7 @@ type serveOptions struct {
 	MeteringInterval        time.Duration
 	AllowedImages           string
 	MaxWorkers              int
+	Profiles                string
 	Bind                    string
 	Registry                string
 	AuthConfig              string
@@ -90,6 +92,9 @@ func newServeCmd() *cobra.Command {
 		"Comma-separated image prefixes a cluster may request (requirement 7: administrator-controlled images). Empty = any image")
 	f.IntVar(&opts.MaxWorkers, "max-workers", 0,
 		"Cap on the sum of max_replicas across a cluster's worker groups (requirement 7). 0 = no cap")
+	f.StringVar(&opts.Profiles, "profiles", "",
+		"JSON file seeding the profile catalog (requirement 7): a list of ProfileSpec objects. "+
+			"Consulted until an administrator sets the catalog via PUT /api/v1/settings/policy")
 	f.StringVar(&opts.GatewayDomain, "gateway-domain", "",
 		"DNS suffix dynamically registered clusters are exposed under as <name>.<domain> (requirement 5). Empty = static registry only")
 	f.StringVar(&opts.GatewayExternalBase, "gateway-external-base", "",
@@ -181,7 +186,20 @@ func buildServer(ctx context.Context, opts serveOptions) (*builtServer, error) {
 		slog.Info("local auth enabled (ADR-0011): /api/v1/auth/login")
 	}
 
+	var profiles []core.Profile
+	if opts.Profiles != "" {
+		data, err := os.ReadFile(opts.Profiles)
+		if err != nil {
+			return fail(fmt.Errorf("reading --profiles: %w", err))
+		}
+		if profiles, err = api.LoadProfiles(data); err != nil {
+			return fail(fmt.Errorf("--profiles %s: %w", opts.Profiles, err))
+		}
+		slog.Info("profile catalog seeded", "profiles", len(profiles))
+	}
+
 	cfg := app.Config{
+		Profiles:             profiles,
 		Store:                store,
 		Registry:             registry,
 		Validator:            validator,

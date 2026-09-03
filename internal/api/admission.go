@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -19,6 +20,68 @@ type Admission struct {
 	// MaxWorkers caps the sum of max_replicas across a cluster's worker
 	// groups. 0 = no cap.
 	MaxWorkers int
+}
+
+// SeedRules converts the boot-time flags (`--allowed-images`,
+// `--max-workers`) into the policy seed's admission map: the "*" rule that
+// applies to every project, or nil when both flags are unset so an empty
+// seed never materializes a policy row. The flags keep their meaning; the
+// policy API can inspect and replace the rule like any other section.
+func (a Admission) SeedRules() map[string]core.AdmissionRule {
+	if len(a.AllowedImagePrefixes) == 0 && a.MaxWorkers <= 0 {
+		return nil
+	}
+	rule := core.AdmissionRule{AllowedImages: append([]string(nil), a.AllowedImagePrefixes...)}
+	if a.MaxWorkers > 0 {
+		rule.MaxWorkers = uint32(a.MaxWorkers)
+	}
+	return map[string]core.AdmissionRule{AdmissionEveryProject: rule}
+}
+
+// AdmissionEveryProject is the admission-map key whose rule applies to
+// every project; a project's own rule overrides it field by field.
+const AdmissionEveryProject = "*"
+
+// admissionFor is the effective admission for project: the "*" rule's
+// fields, each overridden by the project's rule where that rule sets it
+// (a non-empty image list, a cap > 0). An unset field inherits, so an
+// administrator can cap one project's workers without restating the
+// platform image allowlist. Reads the effective policy, so an edit via
+// PUT applies to the next create without a restart. Package B's
+// submit_job calls the same helper.
+func (s *Server) admissionFor(ctx context.Context, project string) (Admission, error) {
+	p, err := effectivePolicy(ctx, s.Store, &s.PolicySeed)
+	if err != nil {
+		return Admission{}, err
+	}
+	var out Admission
+	if p == nil {
+		return out, nil
+	}
+	for _, key := range []string{AdmissionEveryProject, project} {
+		rule, ok := p.Admission[key]
+		if !ok {
+			continue
+		}
+		if len(rule.AllowedImages) > 0 {
+			out.AllowedImagePrefixes = append([]string(nil), rule.AllowedImages...)
+		}
+		if rule.MaxWorkers > 0 {
+			out.MaxWorkers = int(rule.MaxWorkers)
+		}
+	}
+	return out, nil
+}
+
+// totalMaxWorkers is the sum of max_replicas across a spec's worker
+// groups — the number every worker cap (admission rule, profile) is
+// checked against.
+func totalMaxWorkers(spec *core.ClusterSpec) int {
+	total := 0
+	for _, g := range spec.WorkerGroups {
+		total += int(g.MaxReplicas)
+	}
+	return total
 }
 
 // admissionError is the reason a spec is refused, in audit-row form
@@ -45,11 +108,7 @@ func (a Admission) Check(spec *core.ClusterSpec) *admissionError {
 		}
 	}
 	if a.MaxWorkers > 0 {
-		total := 0
-		for _, g := range spec.WorkerGroups {
-			total += int(g.MaxReplicas)
-		}
-		if total > a.MaxWorkers {
+		if total := totalMaxWorkers(spec); total > a.MaxWorkers {
 			return &admissionError{
 				reason:  "max_workers_exceeded",
 				message: fmt.Sprintf("worker groups ask for up to %d workers; the administrator's cap is %d", total, a.MaxWorkers),

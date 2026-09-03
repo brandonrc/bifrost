@@ -8,7 +8,8 @@ import (
 
 // This file holds the 501 stubs for the operations the 0.2.0 contract adds
 // ahead of their handlers (build-out plan package A1): submit_job, get_job,
-// delete_job (package B, `rayjobs.go`) and list_profiles (package F). Each
+// delete_job (package B, `rayjobs.go`); list_profiles has moved to
+// profiles.go (package F). Each
 // stub runs the SAME authorization the real handler will, then answers
 // ErrNotImplemented, so r03's TestPermissionMatrix already pins the
 // per-role outcome: 501 is "not 401/403", so an `allow` row passes, while
@@ -91,17 +92,6 @@ func (s *Server) DeleteJob(ctx context.Context, _ DeleteJobRequestObject) (Delet
 	}
 	if narrowed {
 		return nil, notFound("no such job")
-	}
-	return nil, ErrNotImplemented
-}
-
-// ListProfiles (package F): Read on cluster, like the other catalog reads
-// (usage, metrics); the real handler filters the catalog to the caller's
-// projects.
-func (s *Server) ListProfiles(ctx context.Context, _ ListProfilesRequestObject) (ListProfilesResponseObject, error) {
-	identity, _ := IdentityFromContext(ctx)
-	if err := Authorize(ctx, s.Store, identity, auth.Read, auth.TargetCluster); err != nil {
-		return nil, err
 	}
 	return nil, ErrNotImplemented
 }

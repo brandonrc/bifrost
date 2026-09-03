@@ -34,8 +34,13 @@ type Config struct {
 	// ReconcileInterval <= 0 means controller.DefaultReconcileInterval.
 	ReconcileInterval time.Duration
 	// Admission is the administrator's image allowlist and worker cap
-	// (requirement 7); zero value = unrestricted.
+	// (requirement 7); zero value = unrestricted. It seeds the policy's
+	// "*" admission rule, so it applies until an administrator replaces
+	// the admission section via PUT /settings/policy.
 	Admission api.Admission
+	// Profiles seeds the profile catalog (requirement 7); nil = none until
+	// an administrator sets one via PUT /settings/policy.
+	Profiles []core.Profile
 	// MeteringInterval is how often usage samples are recorded
 	// (requirement 14); 0 = controller.DefaultMeteringInterval.
 	MeteringInterval time.Duration
@@ -82,7 +87,7 @@ func New(cfg Config) (*App, error) {
 		Provisioner:         cfg.Provisioner,
 		ServiceProvisioner:  cfg.ServiceProvisioner,
 		JobProvisioner:      cfg.JobProvisioner,
-		Admission:           cfg.Admission,
+		PolicySeed:          api.PolicyConfig{Admission: cfg.Admission.SeedRules(), Profiles: cfg.Profiles},
 		GatewayDomain:       cfg.GatewayDomain,
 		GatewayExternalBase: cfg.GatewayExternalBase,
 		ServicesPerProject:  cfg.ServicesPerProject,

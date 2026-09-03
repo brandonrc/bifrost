@@ -12,6 +12,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"net/http"
 
@@ -34,6 +35,15 @@ type PolicyConfig struct {
 	Prices  policy.PriceSheet
 	Quotas  map[string]policy.ResourceMap
 	Budgets map[string]policy.Budget
+	// Profiles is the profile catalog seed (requirement 7, plan ruling
+	// D7): named cluster shapes a spec picks by name (`--profiles`).
+	Profiles []core.Profile
+	// Admission maps project (or "*" for every project) to its admission
+	// limits (requirement 7). The `--allowed-images`/`--max-workers` flags
+	// arrive here as the "*" rule (Admission.SeedRules), so a deployment
+	// that never touches the policy API keeps exactly its old behaviour
+	// while an administrator can tighten one project via PUT.
+	Admission map[string]core.AdmissionRule
 	// GPUDefaultSharing defaults to core.DefaultGpuSharing (whole-gpu) at
 	// the zero value only when read through EffectiveGPUDefaultSharing —
 	// a bare PolicyConfig{} leaves this "" (core.GpuSharing's zero value),
@@ -58,7 +68,8 @@ func (c PolicyConfig) EffectiveGPUDefaultSharing() core.GpuSharing {
 // never materializes a row, so source stays "none". Ported from settings.rs's
 // seed_from_config.
 func seedFromConfig(cfg *PolicyConfig) *controller.StoredPolicy {
-	if cfg.Prices == nil && len(cfg.Quotas) == 0 && len(cfg.Budgets) == 0 {
+	if cfg.Prices == nil && len(cfg.Quotas) == 0 && len(cfg.Budgets) == 0 &&
+		len(cfg.Profiles) == 0 && len(cfg.Admission) == 0 {
 		return nil
 	}
 	quotas := make(map[string]map[string]float64, len(cfg.Quotas))
@@ -77,8 +88,30 @@ func seedFromConfig(cfg *PolicyConfig) *controller.StoredPolicy {
 		Prices:       prices,
 		Quotas:       quotas,
 		Budgets:      budgets,
+		Profiles:     cloneProfiles(cfg.Profiles),
+		Admission:    cloneAdmission(cfg.Admission),
 		FromFileSeed: true,
 	}
+}
+
+func cloneProfiles(in []core.Profile) []core.Profile {
+	if in == nil {
+		return nil
+	}
+	out := make([]core.Profile, len(in))
+	copy(out, in)
+	return out
+}
+
+func cloneAdmission(in map[string]core.AdmissionRule) map[string]core.AdmissionRule {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]core.AdmissionRule, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 // configFromStored converts a stored row back into the in-flight
@@ -99,7 +132,13 @@ func configFromStored(p *controller.StoredPolicy) PolicyConfig {
 	if p.Prices != nil {
 		prices = policy.PriceSheet(p.Prices)
 	}
-	return PolicyConfig{Prices: prices, Quotas: quotas, Budgets: budgets}
+	return PolicyConfig{
+		Prices:    prices,
+		Quotas:    quotas,
+		Budgets:   budgets,
+		Profiles:  cloneProfiles(p.Profiles),
+		Admission: cloneAdmission(p.Admission),
+	}
 }
 
 // effectivePolicy is the effective governance policy: the store row when
@@ -146,13 +185,210 @@ func policyView(p *controller.StoredPolicy, source string) PolicyView {
 	if p.Prices != nil {
 		prices = &p.Prices
 	}
+	profiles := profilesToWire(p.Profiles)
+	admission := admissionToWire(p.Admission)
 	return PolicyView{
-		Prices:   prices,
-		Quotas:   quotas,
-		Budgets:  budgets,
-		Source:   source,
-		Editable: true,
+		Prices:    prices,
+		Quotas:    quotas,
+		Budgets:   budgets,
+		Profiles:  &profiles,
+		Admission: &admission,
+		Source:    source,
+		Editable:  true,
 	}
+}
+
+// --- Profile catalog and admission rules: wire <-> core (#7) ---
+
+func profileToWire(p *core.Profile) ProfileSpec {
+	projects := make([]string, len(p.Projects))
+	copy(projects, p.Projects)
+	out := ProfileSpec{
+		Name:         p.Name,
+		Description:  p.Description,
+		Image:        p.Image,
+		RayVersion:   p.RayVersion,
+		HeadCpu:      p.HeadCpu,
+		HeadMemory:   p.HeadMemory,
+		WorkerGroups: workerGroupsToWire(p.WorkerGroups),
+		Projects:     &projects,
+	}
+	if p.MaxWorkers != nil {
+		v := int32(*p.MaxWorkers)
+		out.MaxWorkers = &v
+	}
+	if p.TtlSeconds != nil {
+		v := int64(*p.TtlSeconds)
+		out.TtlSeconds = &v
+	}
+	if p.IdleTimeoutSecs != nil {
+		v := int64(*p.IdleTimeoutSecs)
+		out.IdleTimeoutSecs = &v
+	}
+	return out
+}
+
+// profilesToWire never returns nil: the contract's catalog is `[]`, not
+// `null`, when empty.
+func profilesToWire(in []core.Profile) []ProfileSpec {
+	out := make([]ProfileSpec, 0, len(in))
+	for i := range in {
+		out = append(out, profileToWire(&in[i]))
+	}
+	return out
+}
+
+func workerGroupsToWire(in []core.WorkerGroup) []WorkerGroup {
+	out := make([]WorkerGroup, 0, len(in))
+	for _, g := range in {
+		out = append(out, WorkerGroup{
+			Name:        g.Name,
+			Cpu:         g.Cpu,
+			Memory:      g.Memory,
+			Gpu:         g.Gpu,
+			MinReplicas: int32(g.MinReplicas),
+			MaxReplicas: int32(g.MaxReplicas),
+			Replicas:    int32(g.Replicas),
+		})
+	}
+	return out
+}
+
+// profilesFromWire converts an incoming catalog and validates it as a
+// unit — the edit is refused with a precise 400 rather than every later
+// create failing with a 403 nobody can act on (mobula's rule: validate at
+// the edit). Checks: unique non-empty names; complete shape (image,
+// ray_version, head_cpu, head_memory); quantities and replica bounds that
+// parse (policy.ClusterDemand on a synthetic spec, the same check a
+// create runs); worker groups within the profile's own max_workers;
+// non-negative caps and timeouts; non-empty project names.
+func profilesFromWire(in []ProfileSpec) ([]core.Profile, error) {
+	out := make([]core.Profile, 0, len(in))
+	seen := make(map[string]bool, len(in))
+	for i := range in {
+		w := &in[i]
+		what := fmt.Sprintf("invalid profile %q: ", w.Name)
+		if w.Name == "" {
+			return nil, badRequest(fmt.Sprintf("invalid profile at index %d: name must not be empty", i))
+		}
+		if seen[w.Name] {
+			return nil, badRequest(what + "duplicate name")
+		}
+		seen[w.Name] = true
+		for field, v := range map[string]string{"image": w.Image, "ray_version": w.RayVersion, "head_cpu": w.HeadCpu, "head_memory": w.HeadMemory} {
+			if v == "" {
+				return nil, badRequest(what + field + " must not be empty")
+			}
+		}
+		groups, err := workerGroupsFromWire(w.WorkerGroups)
+		if err != nil {
+			return nil, badRequest(what + httpMessage(err))
+		}
+		p := core.Profile{
+			Name:         w.Name,
+			Description:  w.Description,
+			Image:        w.Image,
+			RayVersion:   w.RayVersion,
+			HeadCpu:      w.HeadCpu,
+			HeadMemory:   w.HeadMemory,
+			WorkerGroups: groups,
+		}
+		if w.MaxWorkers != nil {
+			if *w.MaxWorkers < 0 {
+				return nil, badRequest(what + "max_workers must be non-negative")
+			}
+			v := uint32(*w.MaxWorkers)
+			p.MaxWorkers = &v
+		}
+		if w.TtlSeconds != nil {
+			if *w.TtlSeconds < 0 {
+				return nil, badRequest(what + "ttl_seconds must be non-negative")
+			}
+			v := uint64(*w.TtlSeconds)
+			p.TtlSeconds = &v
+		}
+		if w.IdleTimeoutSecs != nil {
+			if *w.IdleTimeoutSecs < 0 {
+				return nil, badRequest(what + "idle_timeout_secs must be non-negative")
+			}
+			v := uint64(*w.IdleTimeoutSecs)
+			p.IdleTimeoutSecs = &v
+		}
+		if w.Projects != nil {
+			for _, proj := range *w.Projects {
+				if proj == "" {
+					return nil, badRequest(what + "projects must not contain an empty name")
+				}
+			}
+			p.Projects = append([]string(nil), (*w.Projects)...)
+		}
+		// The shape a cluster gets from this profile must itself be
+		// buildable: run the create-time shape validation on it.
+		synthetic := core.ClusterSpec{HeadCpu: p.HeadCpu, HeadMemory: p.HeadMemory, WorkerGroups: p.WorkerGroups}
+		if err := validateClusterShape(&synthetic); err != nil {
+			return nil, badRequest(what + httpMessage(err))
+		}
+		if p.MaxWorkers != nil && *p.MaxWorkers > 0 && totalMaxWorkers(&synthetic) > int(*p.MaxWorkers) {
+			return nil, badRequest(fmt.Sprintf("%sworker groups ask for up to %d workers but max_workers is %d",
+				what, totalMaxWorkers(&synthetic), *p.MaxWorkers))
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// httpMessage is the caller-facing text of an HTTPError, or err.Error().
+func httpMessage(err error) string {
+	if he, ok := err.(HTTPError); ok {
+		return he.Message
+	}
+	return err.Error()
+}
+
+func admissionRuleToWire(r core.AdmissionRule) AdmissionRule {
+	images := make([]string, len(r.AllowedImages))
+	copy(images, r.AllowedImages)
+	max := int32(r.MaxWorkers)
+	return AdmissionRule{AllowedImages: &images, MaxWorkers: &max}
+}
+
+// admissionToWire never returns nil: the contract's map is `{}`, not
+// `null`, when empty.
+func admissionToWire(in map[string]core.AdmissionRule) map[string]AdmissionRule {
+	out := make(map[string]AdmissionRule, len(in))
+	for k, v := range in {
+		out[k] = admissionRuleToWire(v)
+	}
+	return out
+}
+
+// admissionFromWire converts an incoming admission map and validates it:
+// non-empty project keys, non-empty image prefixes, non-negative caps.
+func admissionFromWire(in map[string]AdmissionRule) (map[string]core.AdmissionRule, error) {
+	out := make(map[string]core.AdmissionRule, len(in))
+	for project, w := range in {
+		what := fmt.Sprintf("invalid admission rule for project %q: ", project)
+		if project == "" {
+			return nil, badRequest("invalid admission rule: project must not be empty (use \"*\" for every project)")
+		}
+		var r core.AdmissionRule
+		if w.AllowedImages != nil {
+			for _, img := range *w.AllowedImages {
+				if img == "" {
+					return nil, badRequest(what + "allowed_images must not contain an empty prefix")
+				}
+			}
+			r.AllowedImages = append([]string(nil), (*w.AllowedImages)...)
+		}
+		if w.MaxWorkers != nil {
+			if *w.MaxWorkers < 0 {
+				return nil, badRequest(what + "max_workers must be non-negative")
+			}
+			r.MaxWorkers = uint32(*w.MaxWorkers)
+		}
+		out[project] = r
+	}
+	return out, nil
 }
 
 // validateAmounts requires every value to be a non-negative finite number
@@ -240,6 +476,20 @@ func (s *Server) UpdatePolicy(ctx context.Context, req UpdatePolicyRequestObject
 			}
 		}
 	}
+	var profiles []core.Profile
+	if body.Profiles != nil {
+		var err error
+		if profiles, err = profilesFromWire(*body.Profiles); err != nil {
+			return nil, err
+		}
+	}
+	var admission map[string]core.AdmissionRule
+	if body.Admission != nil {
+		var err error
+		if admission, err = admissionFromWire(*body.Admission); err != nil {
+			return nil, err
+		}
+	}
 
 	next, err := effectivePolicy(ctx, s.Store, &s.PolicySeed)
 	if err != nil {
@@ -260,6 +510,15 @@ func (s *Server) UpdatePolicy(ctx context.Context, req UpdatePolicyRequestObject
 			budgets[k] = controller.StoredBudget{WindowSecs: uint64(b.WindowSecs), Limits: b.AdditionalProperties}
 		}
 		next.Budgets = budgets
+	}
+	// Profiles and admission follow the same section-replace rule as the
+	// maps above: a present key replaces the whole section (`[]`/`{}`
+	// clears it), an absent key leaves it untouched.
+	if body.Profiles != nil {
+		next.Profiles = profiles
+	}
+	if body.Admission != nil {
+		next.Admission = admission
 	}
 	next.FromFileSeed = false
 
