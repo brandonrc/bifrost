@@ -244,14 +244,16 @@
       "n": 14,
       "title": "Usage visibility: who requested what, duration, estimated cost",
       "priority": "LOW",
-      "tests": 2,
-      "passed": 2,
+      "tests": 4,
+      "passed": 4,
       "failed": 0,
       "skipped": 0,
       "not_yet_built": 0,
       "status": "built",
       "test_names": [
         "TestRunningClusterShowsUpInTheUsageReport",
+        "TestUsageReportAttributesToTheRequestingUser",
+        "TestUsageReportFiltersByOwner",
         "TestUsageReportIsNotForProjectMembers"
       ],
       "skip_reasons": null

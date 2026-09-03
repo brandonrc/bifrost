@@ -29,10 +29,10 @@ func TestRenderUsageGauge_LatestSamplePerLabelSet(t *testing.T) {
 	if !strings.Contains(text, "# TYPE bifrost_pool_resource_usage gauge") {
 		t.Errorf("missing TYPE line: %s", text)
 	}
-	if !strings.Contains(text, `bifrost_pool_resource_usage{pool="gpu",project="proj-a",resource="cpu"} 8`) {
+	if !strings.Contains(text, `bifrost_pool_resource_usage{pool="gpu",project="proj-a",owner="",resource="cpu"} 8`) {
 		t.Errorf("stale sample not overwritten: %s", text)
 	}
-	if !strings.Contains(text, `bifrost_pool_resource_usage{pool="gpu",project="",resource="cpu"} 16`) {
+	if !strings.Contains(text, `bifrost_pool_resource_usage{pool="gpu",project="",owner="",resource="cpu"} 16`) {
 		t.Errorf("pool-aggregate row missing: %s", text)
 	}
 	if strings.Count(text, "proj-a") != 1 {
@@ -188,6 +188,71 @@ func TestUsageReport_GroupsSamplesAndComputesCost(t *testing.T) {
 	}
 	if g.CostUsd == nil || *g.CostUsd != 4.0 {
 		t.Errorf("cost_usd = %v, want 4.0 (2h * $2/hr)", g.CostUsd)
+	}
+}
+
+// usageReportOK runs the report as admin and fails the test on any error.
+func usageReportOK(t *testing.T, s *Server, params UsageReportParams) UsageReport200JSONResponse {
+	t.Helper()
+	resp, err := s.UsageReport(ctxWithIdentity(admin()), UsageReportRequestObject{Params: params})
+	if err != nil {
+		t.Fatalf("usage report: %v", err)
+	}
+	return mustResponse[UsageReport200JSONResponse](t, resp)
+}
+
+func TestUsageReport_GroupsByOwnerAndFiltersOnIt(t *testing.T) {
+	ctx := context.Background()
+	store := controller.NewMemoryStore()
+	owned := func(ts uint64, owner string, qty float64) controller.UsageSample {
+		s := usageSample(ts, "gpu", "proj-a", "cpu", qty)
+		s.Owner = owner
+		return s
+	}
+	if err := store.RecordUsageSamples(ctx, []controller.UsageSample{
+		owned(0, "dev-a", 1.0), owned(0, "dev-b", 2.0), owned(0, "", 4.0),
+	}); err != nil {
+		t.Fatalf("record samples: %v", err)
+	}
+	s := &Server{Store: store}
+	from, to := int64(0), int64(3600)
+	report := usageReportOK(t, s, UsageReportParams{From: &from, To: &to})
+	if len(report.Groups) != 3 {
+		t.Fatalf("groups = %+v, want one per owner", report.Groups)
+	}
+	// Same project and pool: sorted by owner, "" first.
+	wantOwners := []string{"", "dev-a", "dev-b"}
+	wantCPU := []float64{4.0, 1.0, 2.0}
+	for i, g := range report.Groups {
+		if g.Owner == nil || *g.Owner != wantOwners[i] || g.ResourceHours["cpu"] != wantCPU[i] {
+			t.Errorf("group[%d] = %+v (owner %v), want owner %q cpu %v", i, g, g.Owner, wantOwners[i], wantCPU[i])
+		}
+	}
+
+	devA := "dev-a"
+	report = usageReportOK(t, s, UsageReportParams{From: &from, To: &to, Owner: &devA})
+	if len(report.Groups) != 1 || report.Groups[0].Owner == nil || *report.Groups[0].Owner != "dev-a" {
+		t.Fatalf("owner=dev-a groups = %+v, want only dev-a", report.Groups)
+	}
+	// owner="" is a real filter (unattributed), not "no filter".
+	empty := ""
+	report = usageReportOK(t, s, UsageReportParams{From: &from, To: &to, Owner: &empty})
+	if len(report.Groups) != 1 || *report.Groups[0].Owner != "" || report.Groups[0].ResourceHours["cpu"] != 4.0 {
+		t.Fatalf("owner=\"\" groups = %+v, want only the unattributed group", report.Groups)
+	}
+	nobody := "nobody"
+	report = usageReportOK(t, s, UsageReportParams{From: &from, To: &to, Owner: &nobody})
+	if len(report.Groups) != 0 {
+		t.Fatalf("owner=nobody groups = %+v, want none", report.Groups)
+	}
+}
+
+func TestRenderUsageGauge_CarriesOwnerLabel(t *testing.T) {
+	s := usageSample(100, "gpu", "proj-a", "cpu", 4.0)
+	s.Owner = "dev-a"
+	text := renderUsageGauge([]controller.UsageSample{s})
+	if !strings.Contains(text, `bifrost_pool_resource_usage{pool="gpu",project="proj-a",owner="dev-a",resource="cpu"} 4`) {
+		t.Errorf("owner label missing: %s", text)
 	}
 }
 
