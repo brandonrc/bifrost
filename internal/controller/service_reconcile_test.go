@@ -16,6 +16,7 @@ import (
 type scriptedServiceProvisioner struct {
 	mu        sync.Mutex
 	deployed  map[string]uint64
+	queues    map[string]*provision.QueueAssignment
 	state     map[string]core.ClusterState
 	deploys   int
 	deletes   int
@@ -24,10 +25,10 @@ type scriptedServiceProvisioner struct {
 }
 
 func newScriptedServiceProvisioner() *scriptedServiceProvisioner {
-	return &scriptedServiceProvisioner{deployed: map[string]uint64{}, state: map[string]core.ClusterState{}}
+	return &scriptedServiceProvisioner{deployed: map[string]uint64{}, queues: map[string]*provision.QueueAssignment{}, state: map[string]core.ClusterState{}}
 }
 
-func (p *scriptedServiceProvisioner) Deploy(_ context.Context, name string, _ *core.ServiceSpec, generation uint64) error {
+func (p *scriptedServiceProvisioner) Deploy(_ context.Context, name string, _ *core.ServiceSpec, generation uint64, queue *provision.QueueAssignment) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.deployErr != nil {
@@ -35,6 +36,7 @@ func (p *scriptedServiceProvisioner) Deploy(_ context.Context, name string, _ *c
 	}
 	p.deploys++
 	p.deployed[name] = generation
+	p.queues[name] = queue
 	if _, ok := p.state[name]; !ok {
 		p.state[name] = core.ClusterStateProvisioning
 	}
@@ -311,5 +313,51 @@ func TestServiceActionStrings(t *testing.T) {
 		if a.String() != want {
 			t.Errorf("%d.String() = %q, want %q", int(a), a.String(), want)
 		}
+	}
+}
+
+// Requirement 4: the reconciler hands Deploy the project's serving-pool
+// queue — resolved from the store at apply time — and nil when the project
+// has only a compute allocation (services never land in compute pools).
+func TestServiceReconcileDeploysThroughServingQueue(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryStore()
+	pool := func(name string, purpose core.PoolPurpose) core.PoolSpec {
+		return core.PoolSpec{Name: name, Cohort: "c", FairSharingWeight: 1,
+			Flavors: []core.FlavorSpec{{Name: "f", Resources: map[string]string{"cpu": "8"}}}, Purpose: purpose}
+	}
+	if _, err := store.UpsertPool(ctx, "cpu", pool("cpu", core.PoolPurposeCompute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertAllocation(ctx, core.AllocationSpec{Pool: "cpu", Project: "team-a", Namespace: "ns"}); err != nil {
+		t.Fatal(err)
+	}
+	prov := newScriptedServiceProvisioner()
+	r := NewServiceReconciler(store, prov)
+
+	spec := core.ServiceSpec{Name: "svc", Project: "team-a", HeadCpu: "1", HeadMemory: "1Gi", WorkerCpu: "1", WorkerMemory: "1Gi", Upgrade: core.UpgradeStrategyInPlace}
+	if _, err := store.UpsertService(ctx, "svc", spec, nil); err != nil {
+		t.Fatal(err)
+	}
+	r.ReconcileAllAt(ctx, 1)
+	if q := prov.queues["svc"]; q != nil {
+		t.Fatalf("compute-only project: Deploy got queue %+v, want nil", q)
+	}
+
+	// A serving allocation appears; the next roll carries its queue.
+	if _, err := store.UpsertPool(ctx, "serve", pool("serve", core.PoolPurposeServing)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertAllocation(ctx, core.AllocationSpec{Pool: "serve", Project: "team-a", Namespace: "ns"}); err != nil {
+		t.Fatal(err)
+	}
+	spec.WorkerCpu = "2"
+	if _, err := store.UpsertService(ctx, "svc", spec, nil); err != nil {
+		t.Fatal(err)
+	}
+	r.ReconcileAllAt(ctx, 2)
+	q := prov.queues["svc"]
+	if q == nil || q.QueueName != "team-a-serving" {
+		t.Fatalf("Deploy queue = %+v, want team-a-serving", q)
 	}
 }

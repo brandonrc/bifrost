@@ -30,7 +30,7 @@ func newFakeServiceProvisioner() *fakeServiceProvisioner {
 
 var _ provision.ServiceProvisioner = (*fakeServiceProvisioner)(nil)
 
-func (p *fakeServiceProvisioner) Deploy(_ context.Context, name string, spec *core.ServiceSpec, generation uint64) error {
+func (p *fakeServiceProvisioner) Deploy(_ context.Context, name string, spec *core.ServiceSpec, generation uint64, _ *provision.QueueAssignment) error {
 	if !core.IsK8sName(name) {
 		return provision.ProvisionError{Kind: provision.ProvisionErrBackend, Message: "resource name may not be empty or invalid: " + name}
 	}

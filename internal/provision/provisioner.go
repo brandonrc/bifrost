@@ -299,8 +299,11 @@ type ServiceProvisioner interface {
 	// RayService). Idempotent; the upgrade strategy in the spec drives
 	// canary vs in-place rollout. generation is the Bifrost spec
 	// generation being applied; the backend stamps it on the resource so
-	// Get can report it back (ObservedService.Generation).
-	Deploy(ctx context.Context, name string, spec *core.ServiceSpec, generation uint64) error
+	// Get can report it back (ObservedService.Generation). queue is the
+	// project's serving-pool LocalQueue (requirement 4), stamped on the
+	// RayService so KubeRay's generated RayCluster carries it; nil leaves
+	// the manifest queue-free.
+	Deploy(ctx context.Context, name string, spec *core.ServiceSpec, generation uint64, queue *QueueAssignment) error
 
 	Get(ctx context.Context, name string) (*ObservedService, error)
 

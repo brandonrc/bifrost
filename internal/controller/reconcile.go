@@ -987,37 +987,56 @@ func paramsFingerprint(spec *core.ClusterSpec) string {
 }
 
 // queueAssignmentForProject resolves the Kueue queue a project's clusters
-// are admitted through (ADR-0010-equivalent): the first allocation
-// matching project across all pools, carrying the pool's Elastic flag. nil
-// = the project has no allocation and its clusters stay queue-free.
-// Derived from the store at apply time (the store is truth), so the
-// assignment never travels inside ClusterSpec's serialized form — both the
-// cluster reconciler and the create API (a later task) resolve it through
-// this helper. Ported from store.rs's queue_assignment_for_project.
+// and jobs are admitted through: the project's allocation in a compute
+// pool. See QueueAssignmentForProjectPurpose.
 func queueAssignmentForProject(ctx context.Context, store Store, project string) (*provision.QueueAssignment, error) {
+	return QueueAssignmentForProjectPurpose(ctx, store, project, core.PoolPurposeCompute)
+}
+
+// QueueAssignmentForProjectPurpose resolves the Kueue queue a project's
+// workloads of one kind are admitted through (ADR-0010-equivalent,
+// requirement 4): the first allocation matching project across the pools
+// of the given purpose, carrying the pool's Elastic flag and named per
+// provision.LocalQueueName (`<project>` for compute, `<project>-serving`
+// for serving). nil = the project has no allocation in a pool of that
+// purpose and its workloads stay queue-free. Pools of the other purpose
+// are never consulted — a compute cluster cannot land in (or draw on) a
+// serving pool, which is the property requirement 4 asks for. Derived from
+// the store at apply time (the store is truth), so the assignment never
+// travels inside a spec's serialized form — the reconcilers and the
+// create/deploy APIs all resolve it through this helper. Ported from
+// store.rs's queue_assignment_for_project, split by purpose.
+func QueueAssignmentForProjectPurpose(ctx context.Context, store Store, project string, purpose core.PoolPurpose) (*provision.QueueAssignment, error) {
 	pools, err := store.ListPools(ctx)
 	if err != nil {
 		return nil, wrapStoreErr(err)
 	}
+	purpose = purpose.OrDefault()
 	for _, pool := range pools {
+		if pool.Spec.Purpose.OrDefault() != purpose {
+			continue
+		}
 		allocs, err := store.ListAllocations(ctx, pool.Name)
 		if err != nil {
 			return nil, wrapStoreErr(err)
 		}
 		for _, alloc := range allocs {
 			if alloc.Project == project {
-				return &provision.QueueAssignment{QueueName: alloc.Project, Elastic: pool.Spec.Elastic}, nil
+				return &provision.QueueAssignment{
+					QueueName: provision.LocalQueueName(alloc.Project, purpose),
+					Elastic:   pool.Spec.Elastic,
+				}, nil
 			}
 		}
 	}
 	return nil, nil
 }
 
-// QueueAssignmentForProject is queueAssignmentForProject's exported form,
-// for Wave 1 T11's cluster API (create-time queue-assignment audit row and
-// the suspend/resume queue-owned-suspend 409 guard) to resolve the same
-// project -> Kueue-queue mapping the reconciler uses, ported from
-// mobula-controller's store.rs queue_assignment_for_project.
+// QueueAssignmentForProject is the compute-pool lookup (clusters and
+// jobs): QueueAssignmentForProjectPurpose with core.PoolPurposeCompute.
+// Used by the cluster API (create-time queue-assignment audit row and the
+// suspend/resume queue-owned-suspend 409 guard) to resolve the same
+// project -> Kueue-queue mapping the reconciler uses.
 func QueueAssignmentForProject(ctx context.Context, store Store, project string) (*provision.QueueAssignment, error) {
 	return queueAssignmentForProject(ctx, store, project)
 }

@@ -1344,3 +1344,53 @@ func TestReapTerminatedDefersRowRemovalWhenNetpolReapFails(t *testing.T) {
 		t.Fatal("cluster row should be purged once the netpol reap succeeds")
 	}
 }
+
+// Requirement 4: the queue lookup is split by pool purpose. A compute
+// cluster never lands in a serving pool's queue (even when the serving
+// allocation is the only one the project has), and a service's queue is
+// the serving pool's `<project>-serving` LocalQueue.
+func TestQueueAssignmentIsSplitByPoolPurpose(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryStore()
+	pool := func(name string, purpose core.PoolPurpose) core.PoolSpec {
+		return core.PoolSpec{
+			Name:              name,
+			Flavors:           []core.FlavorSpec{{Name: "cpu", Resources: map[string]string{"cpu": "4"}}},
+			Cohort:            "research",
+			FairSharingWeight: 1.0,
+			Purpose:           purpose,
+		}
+	}
+	if _, err := store.UpsertPool(ctx, "serve", pool("serve", core.PoolPurposeServing)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertAllocation(ctx, core.AllocationSpec{Pool: "serve", Project: "p", Namespace: "p"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Only a serving allocation: clusters stay queue-free, services are
+	// admitted through p-serving.
+	if q, err := queueAssignmentForProject(ctx, store, "p"); err != nil || q != nil {
+		t.Fatalf("compute lookup with only a serving allocation: q=%v err=%v, want nil", q, err)
+	}
+	q, err := QueueAssignmentForProjectPurpose(ctx, store, "p", core.PoolPurposeServing)
+	if err != nil || q == nil || q.QueueName != "p-serving" {
+		t.Fatalf("serving lookup: q=%+v err=%v, want p-serving", q, err)
+	}
+
+	// Add a compute allocation: each purpose resolves its own pool.
+	if _, err := store.UpsertPool(ctx, "cpu", pool("cpu", "")); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertAllocation(ctx, core.AllocationSpec{Pool: "cpu", Project: "p", Namespace: "p"}); err != nil {
+		t.Fatal(err)
+	}
+	q, err = queueAssignmentForProject(ctx, store, "p")
+	if err != nil || q == nil || q.QueueName != "p" {
+		t.Fatalf("compute lookup: q=%+v err=%v, want p", q, err)
+	}
+	q, err = QueueAssignmentForProjectPurpose(ctx, store, "p", core.PoolPurposeServing)
+	if err != nil || q == nil || q.QueueName != "p-serving" {
+		t.Fatalf("serving lookup after compute pool added: q=%+v err=%v", q, err)
+	}
+}

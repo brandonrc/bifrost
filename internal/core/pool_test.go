@@ -3,6 +3,7 @@ package core
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -491,4 +492,28 @@ func inf() float64 {
 	var zero float64
 	one := 1.0
 	return one / zero
+}
+
+// #4: purpose is compute | serving; the zero value reads as compute and
+// any other spelling is refused at Validate (JSON ingress already rejects
+// it at UnmarshalJSON, this covers struct-literal construction).
+func TestPoolPurposeMustBeKnown(t *testing.T) {
+	p := testPool()
+	if err := p.Validate(); err != nil {
+		t.Fatalf("zero-value purpose must validate as compute: %v", err)
+	}
+	for _, ok := range []PoolPurpose{PoolPurposeCompute, PoolPurposeServing} {
+		p.Purpose = ok
+		if err := p.Validate(); err != nil {
+			t.Fatalf("purpose %q: unexpected error: %v", ok, err)
+		}
+	}
+	p.Purpose = PoolPurpose("inference")
+	err, isPool := p.Validate().(PoolSpecError)
+	if !isPool || err.Kind != PoolSpecErrInvalidPurpose || err.Name != "inference" {
+		t.Fatalf("expected InvalidPurpose error, got %v", p.Validate())
+	}
+	if !strings.Contains(err.Error(), "inference") {
+		t.Fatalf("error should name the offending purpose: %v", err)
+	}
 }
