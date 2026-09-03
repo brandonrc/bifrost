@@ -244,18 +244,24 @@
       "n": 12,
       "title": "Private storage (e.g. S3) from the cluster",
       "priority": "CRITICAL",
-      "tests": 2,
-      "passed": 0,
+      "tests": 6,
+      "passed": 3,
       "failed": 0,
-      "skipped": 1,
-      "not_yet_built": 1,
+      "skipped": 3,
+      "not_yet_built": 0,
       "status": "partial",
       "test_names": [
-        "TestClusterSpecCanReferenceStorageCredentials",
-        "TestRBACGrantsRayJobsAndSecretMetadataOnly"
+        "TestFileModeMountsAtPath",
+        "TestRBACGrantsRayJobsAndSecretMetadataOnly",
+        "TestSecretValuesNeverAppearInResponses",
+        "TestStorageRefOutsideProjectIsRefused",
+        "TestStorageRefReachesPodsAsSecretRefNeverAsValue",
+        "TestUnknownStorageRefIsRefused"
       ],
       "skip_reasons": [
-        "bifrost-pack chart not checked out (set PACK_CHART)"
+        "bifrost-pack chart not checked out (set PACK_CHART)",
+        "target inproc has no Kubernetes",
+        "target inproc has no Kubernetes"
       ]
     },
     {
