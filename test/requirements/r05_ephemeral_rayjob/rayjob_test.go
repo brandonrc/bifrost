@@ -124,6 +124,7 @@ func TestJobAppearsInHistoryWithSubmitter(t *testing.T) {
 	req.Covers(t, 14, "the job history attributes each job to the identity that submitted it")
 	ctx := context.Background()
 	id := req.Name("hist")
+	submitter := fixture.Subject(t, tgt, "dev-a")
 	fixture.MustSubmitJob(t, tgt, "dev-a", fixture.SubmitJobBody(id, "team-a", okEntrypoint, quickTTL()))
 	fixture.WaitJob(t, tgt, "dev-a", id, "SUCCEEDED")
 
@@ -145,8 +146,10 @@ func TestJobAppearsInHistoryWithSubmitter(t *testing.T) {
 			if r.Id != id {
 				continue
 			}
-			if r.Submitter != "dev-a" || r.Status != "SUCCEEDED" || r.Cluster == "" || r.DurationSecs == nil {
-				t.Fatalf("history record = %+v, want submitter dev-a, SUCCEEDED, a cluster and a duration", r)
+			// The submitter is the identity's subject: "dev-a" on inproc, the
+			// seeded username on a cluster target.
+			if r.Submitter != submitter || r.Status != "SUCCEEDED" || r.Cluster == "" || r.DurationSecs == nil {
+				t.Fatalf("history record = %+v, want submitter %q, SUCCEEDED, a cluster and a duration", r, submitter)
 			}
 			return true, "recorded"
 		}
