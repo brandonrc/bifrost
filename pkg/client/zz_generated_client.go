@@ -100,6 +100,78 @@ func (e LocalRole) Valid() bool {
 	}
 }
 
+// Defines values for PoolPurpose.
+const (
+	Compute PoolPurpose = "compute"
+	Serving PoolPurpose = "serving"
+)
+
+// Valid indicates whether the value is a known member of the PoolPurpose enum.
+func (e PoolPurpose) Valid() bool {
+	switch e {
+	case Compute:
+		return true
+	case Serving:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RegistryEntryViewSource.
+const (
+	Dynamic RegistryEntryViewSource = "dynamic"
+	Static  RegistryEntryViewSource = "static"
+)
+
+// Valid indicates whether the value is a known member of the RegistryEntryViewSource enum.
+func (e RegistryEntryViewSource) Valid() bool {
+	switch e {
+	case Dynamic:
+		return true
+	case Static:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RegistryEntryViewTarget.
+const (
+	Jobs  RegistryEntryViewTarget = "jobs"
+	Serve RegistryEntryViewTarget = "serve"
+)
+
+// Valid indicates whether the value is a known member of the RegistryEntryViewTarget enum.
+func (e RegistryEntryViewTarget) Valid() bool {
+	switch e {
+	case Jobs:
+		return true
+	case Serve:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for StorageEntryMode.
+const (
+	Env  StorageEntryMode = "env"
+	File StorageEntryMode = "file"
+)
+
+// Valid indicates whether the value is a known member of the StorageEntryMode enum.
+func (e StorageEntryMode) Valid() bool {
+	switch e {
+	case Env:
+		return true
+	case File:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for UpgradeStrategy.
 const (
 	Canary  UpgradeStrategy = "canary"
@@ -116,6 +188,15 @@ func (e UpgradeStrategy) Valid() bool {
 	default:
 		return false
 	}
+}
+
+// AdmissionRule Per-project admission limits (#7). Both fields optional; a zero value means unrestricted. Keyed by project (or `"*"` for every project) in `PolicyView.admission`.
+type AdmissionRule struct {
+	// AllowedImages Container images a cluster/job in the project may use; empty = any image.
+	AllowedImages *[]string `json:"allowed_images,omitempty"`
+
+	// MaxWorkers Maximum total worker replicas across all worker groups; 0 = unlimited.
+	MaxWorkers *int32 `json:"max_workers,omitempty"`
 }
 
 // AllocationSpec A project's allocation within a pool (translates to a Kueue LocalQueue).
@@ -421,9 +502,15 @@ type ClusterSpec struct {
 	// owner's notebook pod can reach the cluster. `#[serde(default)]` keeps
 	// specs persisted before this field deserializable (they parse as
 	// `None`).
-	Owner      *string `json:"owner,omitempty"`
+	Owner *string `json:"owner,omitempty"`
+
+	// Profile Profile catalog name (#7) whose shape fills zero-valued fields of this spec; conflicting non-empty fields are refused (400). `null` = none.
+	Profile    *string `json:"profile,omitempty"`
 	Project    string  `json:"project"`
 	RayVersion string  `json:"ray_version"`
+
+	// Storage Storage catalog entries (#12) delivered to the cluster's pods; the API never carries the secrets themselves.
+	Storage *[]string `json:"storage,omitempty"`
 
 	// TtlSeconds **Absolute max-age cap** in seconds: the cluster is reaped this long
 	// after creation regardless of activity. `None` disables the max-age
@@ -454,6 +541,9 @@ type ClusterView struct {
 	// EstMinHourly Estimated $/hr at min size, if a price sheet is configured.
 	EstMinHourly *float64 `json:"est_min_hourly,omitempty"`
 
+	// GatewayUrl Gateway address of the cluster's Ray dashboard/Jobs API while it is registered; `null` otherwise.
+	GatewayUrl *string `json:"gateway_url,omitempty"`
+
 	// Generation Bumps when the spec changes; drives the reconcile idempotency key.
 	Generation         int64  `json:"generation"`
 	Id                 string `json:"id"`
@@ -461,8 +551,14 @@ type ClusterView struct {
 
 	// ObservedState Observed lifecycle state, if the cluster has been reconciled.
 	ObservedState *string `json:"observed_state,omitempty"`
-	Project       string  `json:"project"`
-	RayVersion    string  `json:"ray_version"`
+
+	// Owner Identity that created the cluster (server-stamped); `null` when unattributed.
+	Owner   *string `json:"owner,omitempty"`
+	Project string  `json:"project"`
+
+	// Queue Kueue LocalQueue the cluster was admitted through; `null` when Kueue is not in use.
+	Queue      *string `json:"queue,omitempty"`
+	RayVersion string  `json:"ray_version"`
 }
 
 // CreateCluster Request body for creating/updating a managed cluster.
@@ -684,6 +780,9 @@ type OidcProviderInfo struct {
 // PolicyView `GET /api/v1/settings/policy` response: the effective policy plus its
 // provenance.
 type PolicyView struct {
+	// Admission project (or `"*"`) → admission limits (#7). Empty when none are configured.
+	Admission *map[string]AdmissionRule `json:"admission,omitempty"`
+
 	// Budgets project → time-windowed compute budget (#77). Empty when none are
 	// configured.
 	Budgets map[string]BudgetView `json:"budgets"`
@@ -694,13 +793,22 @@ type PolicyView struct {
 	// Prices resource → $/unit-hour; `null` when no price sheet is configured.
 	Prices *map[string]float64 `json:"prices,omitempty"`
 
+	// Profiles The profile catalog (#7); empty when none are configured.
+	Profiles *[]ProfileSpec `json:"profiles,omitempty"`
+
 	// Quotas project → (resource → limit). Empty when no quotas are configured.
 	Quotas map[string]map[string]float64 `json:"quotas"`
 
 	// Source "file" (the untouched `--policy` boot seed) | "store" (edited via
 	// PUT) | "none" (no policy configured at all).
 	Source string `json:"source"`
+
+	// Storage The storage catalog (#12); empty when none are configured.
+	Storage *[]StorageEntry `json:"storage,omitempty"`
 }
+
+// PoolPurpose What a pool's capacity is for (#4). `compute` (the default when absent) admits interactive clusters and jobs; `serving` admits only RayService-backed services, so long-lived serving replicas never compete with notebooks for the same queue.
+type PoolPurpose string
 
 // PoolSpec A shared capacity pool: flavors + a cohort to borrow from (ADR-0010).
 type PoolSpec struct {
@@ -717,6 +825,9 @@ type PoolSpec struct {
 	Flavors           []FlavorSpec `json:"flavors"`
 	GpuSharing        *GpuSharing  `json:"gpu_sharing,omitempty"`
 	Name              string       `json:"name"`
+
+	// Purpose What the pool's capacity is for (#4); absent = `compute`.
+	Purpose *PoolPurpose `json:"purpose,omitempty"`
 }
 
 // PoolUsageView Live point-in-time usage of one pool (Slice 4): built from the pool's
@@ -750,11 +861,40 @@ type PoolView struct {
 	GpuSharing *GpuSharing `json:"gpu_sharing,omitempty"`
 	Name       string      `json:"name"`
 
+	// Purpose What the pool's capacity is for (#4); absent = `compute`.
+	Purpose *PoolPurpose `json:"purpose,omitempty"`
+
 	// TotalNominal Resource key → summed nominal quota across flavors, as a string.
 	// A resource key whose quantity fails to parse on ANY flavor is
 	// omitted entirely (a partial sum would misreport capacity); the
 	// failure is logged. Display math only — the spec stays authoritative.
 	TotalNominal map[string]string `json:"total_nominal"`
+}
+
+// ProfileSpec A named cluster shape in the profile catalog (#7): the head/worker shape and image a cluster or job gets when its spec names this profile. Expansion fills zero-valued shape fields and refuses conflicting non-empty ones (400).
+type ProfileSpec struct {
+	// Description Human-readable summary shown by clients.
+	Description *string `json:"description,omitempty"`
+	HeadCpu     string  `json:"head_cpu"`
+	HeadMemory  string  `json:"head_memory"`
+
+	// IdleTimeoutSecs Default inactivity reap window applied to clusters using this profile; `null` = none.
+	IdleTimeoutSecs *int64 `json:"idle_timeout_secs,omitempty"`
+	Image           string `json:"image"`
+
+	// MaxWorkers Cap on total worker replicas for clusters using this profile; `null` = unlimited.
+	MaxWorkers *int32 `json:"max_workers,omitempty"`
+
+	// Name Catalog name a spec refers to (`ClusterSpec.profile`, `RayJobSpec.profile`).
+	Name string `json:"name"`
+
+	// Projects Projects that may use this profile; empty = every project.
+	Projects   *[]string `json:"projects,omitempty"`
+	RayVersion string    `json:"ray_version"`
+
+	// TtlSeconds Default absolute max-age cap applied to clusters using this profile; `null` = none.
+	TtlSeconds   *int64        `json:"ttl_seconds,omitempty"`
+	WorkerGroups []WorkerGroup `json:"worker_groups"`
 }
 
 // ProvidersResponse Which auth providers this deployment offers (login-page metadata; not
@@ -777,6 +917,38 @@ type PutAllocation struct {
 	Project        *string           `json:"project,omitempty"`
 }
 
+// RayJobSpec Declarative spec for an ephemeral Ray job (#5): Bifrost provisions a dedicated RayCluster, runs `entrypoint` on it and tears the cluster down when the job finishes. Mirrors a KubeRay RayJob CR so the provisioner stays a thin translation.
+type RayJobSpec struct {
+	// Entrypoint The shell command Ray runs as the job (e.g. `python train.py`).
+	Entrypoint string `json:"entrypoint"`
+
+	// HeadCpu Head CPU request; default "1" when empty.
+	HeadCpu *string `json:"head_cpu,omitempty"`
+
+	// HeadMemory Head memory request; default "2Gi" when empty.
+	HeadMemory *string `json:"head_memory,omitempty"`
+
+	// Image Container image for the head, the workers and the submitter.
+	Image string `json:"image"`
+
+	// Profile Profile catalog name (#7) whose shape fills zero-valued fields here; `null` = none.
+	Profile *string `json:"profile,omitempty"`
+	Project string  `json:"project"`
+
+	// RayVersion Ray version in `image`; defaults from the image tag when empty.
+	RayVersion *string `json:"ray_version,omitempty"`
+
+	// RuntimeEnvYaml Ray runtime_env for the job as a YAML document, passed through verbatim; empty = none.
+	RuntimeEnvYaml *string `json:"runtime_env_yaml,omitempty"`
+
+	// Storage Storage catalog entries (#12) delivered to the job's pods.
+	Storage *[]string `json:"storage,omitempty"`
+
+	// TtlSecondsAfterFinished Seconds the finished job's cluster is kept before KubeRay deletes it; default 60 when omitted.
+	TtlSecondsAfterFinished *int32         `json:"ttl_seconds_after_finished,omitempty"`
+	WorkerGroups            *[]WorkerGroup `json:"worker_groups,omitempty"`
+}
+
 // RayJobSummary A Ray job normalized to a stable Bifrost shape (api-v1.md §5.6). Every
 // field is optional: Ray's own records vary by version and by whether the
 // job has started/finished. `status` is Ray's vocabulary verbatim
@@ -795,6 +967,39 @@ type RayJobSummary struct {
 	SubmissionId *string `json:"submission_id,omitempty"`
 }
 
+// RayJobView An ephemeral Ray job as the control plane sees it (#5): the submitted intent plus the last observed KubeRay RayJob status.
+type RayJobView struct {
+	// Cluster Name of the RayCluster backing the job while it exists; `null` before provisioning and after teardown.
+	Cluster *string `json:"cluster,omitempty"`
+
+	// DeploymentStatus KubeRay deployment status (Initializing | Running | Complete | Failed | Suspended | ...).
+	DeploymentStatus string `json:"deployment_status"`
+
+	// FinishedAt Unix seconds the job reached a terminal status; `null` while running.
+	FinishedAt *int64 `json:"finished_at,omitempty"`
+
+	// GatewayUrl Gateway address of the job's Ray dashboard/Jobs API while the cluster is registered; `null` otherwise.
+	GatewayUrl *string `json:"gateway_url,omitempty"`
+	Id         string  `json:"id"`
+
+	// Message Last status message from KubeRay/Ray, when any.
+	Message *string `json:"message,omitempty"`
+
+	// Owner Identity that submitted the job (server-stamped); `null` when unattributed.
+	Owner   *string `json:"owner,omitempty"`
+	Project string  `json:"project"`
+
+	// Queue Kueue LocalQueue the job's cluster was admitted through; `null` when Kueue is not in use.
+	Queue *string `json:"queue,omitempty"`
+
+	// StartedAt Unix seconds the Ray job started running; `null` until then.
+	StartedAt *int64 `json:"started_at,omitempty"`
+
+	// Status Ray job status (PENDING | RUNNING | SUCCEEDED | FAILED | STOPPED); empty until Ray reports one.
+	Status      string `json:"status"`
+	SubmittedAt int64  `json:"submitted_at"`
+}
+
 // RegistryEntryView A gateway routing entry as the control plane may show it: where a
 // cluster is exposed and where its dashboard head lives, but never the
 // token itself (ADR-0003, security issue #4).
@@ -803,10 +1008,22 @@ type RegistryEntryView struct {
 	Hostname   string `json:"hostname"`
 	Id         string `json:"id"`
 
+	// Source `static` = from the boot-time registry file; `dynamic` = registered by the reconciler for a managed cluster, job or service.
+	Source *RegistryEntryViewSource `json:"source,omitempty"`
+
+	// Target What the entry proxies to: `jobs` = a Ray dashboard/Jobs API; `serve` = a Ray Serve endpoint.
+	Target *RegistryEntryViewTarget `json:"target,omitempty"`
+
 	// TokenSet Whether the gateway holds a static Ray token for this cluster.
 	TokenSet   bool                `json:"token_set"`
 	Validation *RegistryValidation `json:"validation,omitempty"`
 }
+
+// RegistryEntryViewSource `static` = from the boot-time registry file; `dynamic` = registered by the reconciler for a managed cluster, job or service.
+type RegistryEntryViewSource string
+
+// RegistryEntryViewTarget What the entry proxies to: `jobs` = a Ray dashboard/Jobs API; `serve` = a Ray Serve endpoint.
+type RegistryEntryViewTarget string
 
 // RegistryValidation Placeholder shape for future per-entry health/validation results.
 type RegistryValidation struct {
@@ -873,6 +1090,9 @@ type ServiceSpec struct {
 	// through verbatim as a YAML string — Bifrost does not interpret it.
 	ServeConfigV2 string `json:"serve_config_v2"`
 
+	// Storage Storage catalog entries (#12) delivered to the service's pods.
+	Storage *[]string `json:"storage,omitempty"`
+
 	// Upgrade How to roll out a new version of a service.
 	Upgrade      *UpgradeStrategy `json:"upgrade,omitempty"`
 	WorkerCpu    string           `json:"worker_cpu"`
@@ -885,13 +1105,54 @@ type ServiceSpec struct {
 
 // ServiceView defines model for ServiceView.
 type ServiceView struct {
-	Name string `json:"name"`
+	// GatewayUrl Gateway address of the Serve endpoint while the service is registered; `null` otherwise.
+	GatewayUrl *string `json:"gateway_url,omitempty"`
+	Name       string  `json:"name"`
+
+	// Owner Identity that deployed the service (server-stamped); `null` when unattributed.
+	Owner *string `json:"owner,omitempty"`
+
+	// Project Project the service belongs to (#2).
+	Project string `json:"project"`
+
+	// Queue Kueue LocalQueue the service's cluster was admitted through; `null` when Kueue is not in use.
+	Queue *string `json:"queue,omitempty"`
 
 	// State Observed lifecycle state: provisioning | running | updating | ...
 	State string `json:"state"`
 
 	// Url External Serve endpoint base URL, when ready.
 	Url *string `json:"url,omitempty"`
+}
+
+// StorageEntry A catalog entry for private storage credentials (#12): a Kubernetes Secret Bifrost delivers to the pods of any cluster, job or service that names this entry in its `storage` list. The API only ever sees the name; the secret's contents never cross it.
+type StorageEntry struct {
+	// Mode How the secret reaches the pods: `env` injects every key as an environment variable; `file` mounts the secret at `mount_path`.
+	Mode StorageEntryMode `json:"mode"`
+
+	// MountPath Mount point inside the pods (`file` mode only); `null` for `env` mode.
+	MountPath *string `json:"mount_path,omitempty"`
+
+	// Name Catalog name a spec refers to.
+	Name string `json:"name"`
+
+	// Projects Projects that may reference this entry; empty = every project.
+	Projects *[]string `json:"projects,omitempty"`
+
+	// SecretName Name of the Kubernetes Secret in the workload namespace.
+	SecretName string `json:"secret_name"`
+}
+
+// StorageEntryMode How the secret reaches the pods: `env` injects every key as an environment variable; `file` mounts the secret at `mount_path`.
+type StorageEntryMode string
+
+// SubmitJob Request body for `POST /api/v1/jobs`.
+type SubmitJob struct {
+	// Id Stable job id (RFC 1123 label); the server generates `job-<8 hex>` when `null`.
+	Id *string `json:"id,omitempty"`
+
+	// Spec Declarative spec for an ephemeral Ray job (#5): Bifrost provisions a dedicated RayCluster, runs `entrypoint` on it and tears the cluster down when the job finishes. Mirrors a KubeRay RayJob CR so the provisioner stays a thin translation.
+	Spec RayJobSpec `json:"spec"`
 }
 
 // TaintSpec A Kubernetes taint on a flavor's nodes. `effect` is e.g. "NoSchedule";
@@ -908,14 +1169,23 @@ type TaintSpec struct {
 // clears the price sheet; `quotas: {}` clears all quotas); an absent key
 // leaves that section untouched.
 type UpdatePolicy struct {
+	// Admission Present replaces the whole admission map (`{}` clears it) (#7).
+	Admission *map[string]AdmissionRule `json:"admission,omitempty"`
+
 	// Budgets Present replaces the whole budget map (`{}` clears all budgets) (#77).
 	Budgets *map[string]BudgetView `json:"budgets,omitempty"`
 
 	// Prices Present (incl. explicit `null`) replaces/clears the price sheet.
 	Prices *map[string]float64 `json:"prices,omitempty"`
 
+	// Profiles Present replaces the whole profile catalog (`[]` clears it) (#7).
+	Profiles *[]ProfileSpec `json:"profiles,omitempty"`
+
 	// Quotas Present replaces the whole quota map (`{}` clears all quotas).
 	Quotas *map[string]map[string]float64 `json:"quotas,omitempty"`
+
+	// Storage Present replaces the whole storage catalog (`[]` clears it) (#12).
+	Storage *[]StorageEntry `json:"storage,omitempty"`
 }
 
 // UpdateUserRequest defines model for UpdateUserRequest.
@@ -939,10 +1209,13 @@ type UpsertAssignment struct {
 	Scope string `json:"scope"`
 }
 
-// UsageGroup One (project, pool) group of the usage report.
+// UsageGroup One (project, pool, owner) group of the usage report.
 type UsageGroup struct {
 	// CostUsd Total cost in USD; `null` when no price sheet is configured.
 	CostUsd *float64 `json:"cost_usd,omitempty"`
+
+	// Owner Identity the consumption is attributed to (#14); empty string = unattributed.
+	Owner *string `json:"owner,omitempty"`
 
 	// Pool Empty string = the project has no allocation.
 	Pool string `json:"pool"`
@@ -1079,6 +1352,12 @@ type ClusterLogsParams struct {
 	Tail *int `form:"tail,omitempty" json:"tail,omitempty"`
 }
 
+// DeleteJobParams defines parameters for DeleteJob.
+type DeleteJobParams struct {
+	// Purge Hard-delete the store row (tombstone purge); only when already terminated and observed gone
+	Purge *bool `form:"purge,omitempty" json:"purge,omitempty"`
+}
+
 // UsageReportParams defines parameters for UsageReport.
 type UsageReportParams struct {
 	// Project Filter to one project.
@@ -1092,6 +1371,9 @@ type UsageReportParams struct {
 
 	// To Window end, unix seconds (default: now).
 	To *int64 `form:"to,omitempty" json:"to,omitempty"`
+
+	// Owner Filter to one owner (#14).
+	Owner *string `form:"owner,omitempty" json:"owner,omitempty"`
 }
 
 // UpsertAssignmentJSONRequestBody defines body for UpsertAssignment for application/json ContentType.
@@ -1111,6 +1393,9 @@ type UpdateUserJSONRequestBody = UpdateUserRequest
 
 // CreateClusterJSONRequestBody defines body for CreateCluster for application/json ContentType.
 type CreateClusterJSONRequestBody = CreateCluster
+
+// SubmitJobJSONRequestBody defines body for SubmitJob for application/json ContentType.
+type SubmitJobJSONRequestBody = SubmitJob
 
 // CreatePoolJSONRequestBody defines body for CreatePool for application/json ContentType.
 type CreatePoolJSONRequestBody = CreatePool
@@ -1451,6 +1736,20 @@ type ClientInterface interface {
 	// ListJobs performs a GET /api/v1/jobs (the `ListJobs` operationId) request.
 	ListJobs(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// SubmitJobWithBody performs a POST /api/v1/jobs (the `SubmitJob` operationId) request,
+	// with any type of body and a specified content type.
+	SubmitJobWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// SubmitJob performs a POST /api/v1/jobs (the `SubmitJob` operationId) request.
+	// Takes a body of the `application/json` content type.
+	SubmitJob(ctx context.Context, body SubmitJobJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// DeleteJob performs a DELETE /api/v1/jobs/{id} (the `DeleteJob` operationId) request.
+	DeleteJob(ctx context.Context, id string, params *DeleteJobParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetJob performs a GET /api/v1/jobs/{id} (the `GetJob` operationId) request.
+	GetJob(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// Metrics performs a GET /api/v1/metrics (the `Metrics` operationId) request.
 	Metrics(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -1487,6 +1786,9 @@ type ClientInterface interface {
 
 	// PoolUsage performs a GET /api/v1/pools/{name}/usage (the `PoolUsage` operationId) request.
 	PoolUsage(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ListProfiles performs a GET /api/v1/profiles (the `ListProfiles` operationId) request.
+	ListProfiles(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListRegistry performs a GET /api/v1/registry/clusters (the `ListRegistry` operationId) request.
 	ListRegistry(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -2076,6 +2378,60 @@ func (c *Client) ListJobs(ctx context.Context, reqEditors ...RequestEditorFn) (*
 	return c.Client.Do(req)
 }
 
+// SubmitJobWithBody performs a POST /api/v1/jobs (the `SubmitJob` operationId) request,
+// with any type of body and a specified content type.
+func (c *Client) SubmitJobWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewSubmitJobRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// SubmitJob performs a POST /api/v1/jobs (the `SubmitJob` operationId) request.
+// Takes a body of the `application/json` content type.
+func (c *Client) SubmitJob(ctx context.Context, body SubmitJobJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewSubmitJobRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// DeleteJob performs a DELETE /api/v1/jobs/{id} (the `DeleteJob` operationId) request.
+func (c *Client) DeleteJob(ctx context.Context, id string, params *DeleteJobParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeleteJobRequest(c.Server, id, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// GetJob performs a GET /api/v1/jobs/{id} (the `GetJob` operationId) request.
+func (c *Client) GetJob(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetJobRequest(c.Server, id)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 // Metrics performs a GET /api/v1/metrics (the `Metrics` operationId) request.
 func (c *Client) Metrics(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewMetricsRequest(c.Server)
@@ -2213,6 +2569,19 @@ func (c *Client) PutAllocation(ctx context.Context, name string, project string,
 // PoolUsage performs a GET /api/v1/pools/{name}/usage (the `PoolUsage` operationId) request.
 func (c *Client) PoolUsage(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewPoolUsageRequest(c.Server, name)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ListProfiles performs a GET /api/v1/profiles (the `ListProfiles` operationId) request.
+func (c *Client) ListProfiles(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListProfilesRequest(c.Server)
 	if err != nil {
 		return nil, err
 	}
@@ -3623,6 +3992,141 @@ func NewListJobsRequest(server string) (*http.Request, error) {
 	return req, nil
 }
 
+// NewSubmitJobRequest calls the generic SubmitJob builder with application/json body
+func NewSubmitJobRequest(server string, body SubmitJobJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewSubmitJobRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewSubmitJobRequestWithBody constructs an http.Request for the SubmitJob method, with any body, and a specified content type
+func NewSubmitJobRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/jobs")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewDeleteJobRequest constructs an http.Request for the DeleteJob method
+func NewDeleteJobRequest(server string, id string, params *DeleteJobParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "id", id, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/jobs/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.Purge != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "purge", *params.Purge, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "boolean", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetJobRequest constructs an http.Request for the GetJob method
+func NewGetJobRequest(server string, id string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "id", id, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/jobs/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewMetricsRequest constructs an http.Request for the Metrics method
 func NewMetricsRequest(server string) (*http.Request, error) {
 	var err error
@@ -3948,6 +4452,33 @@ func NewPoolUsageRequest(server string, name string) (*http.Request, error) {
 	return req, nil
 }
 
+// NewListProfilesRequest constructs an http.Request for the ListProfiles method
+func NewListProfilesRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/profiles")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewListRegistryRequest constructs an http.Request for the ListRegistry method
 func NewListRegistryRequest(server string) (*http.Request, error) {
 	var err error
@@ -4244,6 +4775,18 @@ func NewUsageReportRequest(server string, params *UsageReportParams) (*http.Requ
 		if params.To != nil {
 
 			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "to", *params.To, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: "int64"}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Owner != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "owner", *params.Owner, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
 				return nil, err
 			} else {
 				for _, qp := range strings.Split(queryFrag, "&") {
@@ -4598,6 +5141,26 @@ type ClientWithResponsesInterface interface {
 	// Returns a wrapper object for the known response body format(s).
 	ListJobsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListJobsHTTPResponse, error)
 
+	// SubmitJobWithBodyWithResponse performs a POST /api/v1/jobs (the `SubmitJob` operationId) request,
+	// with any type of body and a specified content type.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	SubmitJobWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*SubmitJobHTTPResponse, error)
+
+	// SubmitJobWithResponse performs a POST /api/v1/jobs (the `SubmitJob` operationId) request.
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	SubmitJobWithResponse(ctx context.Context, body SubmitJobJSONRequestBody, reqEditors ...RequestEditorFn) (*SubmitJobHTTPResponse, error)
+
+	// DeleteJobWithResponse performs a DELETE /api/v1/jobs/{id} (the `DeleteJob` operationId) request.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	DeleteJobWithResponse(ctx context.Context, id string, params *DeleteJobParams, reqEditors ...RequestEditorFn) (*DeleteJobHTTPResponse, error)
+
+	// GetJobWithResponse performs a GET /api/v1/jobs/{id} (the `GetJob` operationId) request.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	GetJobWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*GetJobHTTPResponse, error)
+
 	// MetricsWithResponse performs a GET /api/v1/metrics (the `Metrics` operationId) request.
 	//
 	// Returns a wrapper object for the known response body format(s).
@@ -4652,6 +5215,11 @@ type ClientWithResponsesInterface interface {
 	//
 	// Returns a wrapper object for the known response body format(s).
 	PoolUsageWithResponse(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*PoolUsageHTTPResponse, error)
+
+	// ListProfilesWithResponse performs a GET /api/v1/profiles (the `ListProfiles` operationId) request.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	ListProfilesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListProfilesHTTPResponse, error)
 
 	// ListRegistryWithResponse performs a GET /api/v1/registry/clusters (the `ListRegistry` operationId) request.
 	//
@@ -5831,6 +6399,122 @@ func (r ListJobsHTTPResponse) ContentType() string {
 	return ""
 }
 
+type SubmitJobHTTPResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON201 the response for an HTTP 201 `application/json` response
+	JSON201 *RayJobView
+}
+
+// GetJSON201 returns the response for an HTTP 201 `application/json` response
+func (r SubmitJobHTTPResponse) GetJSON201() *RayJobView {
+	return r.JSON201
+}
+
+// GetBody returns the raw response body bytes
+func (r SubmitJobHTTPResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r SubmitJobHTTPResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r SubmitJobHTTPResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r SubmitJobHTTPResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type DeleteJobHTTPResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+}
+
+// GetBody returns the raw response body bytes
+func (r DeleteJobHTTPResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r DeleteJobHTTPResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r DeleteJobHTTPResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r DeleteJobHTTPResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetJobHTTPResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *RayJobView
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r GetJobHTTPResponse) GetJSON200() *RayJobView {
+	return r.JSON200
+}
+
+// GetBody returns the raw response body bytes
+func (r GetJobHTTPResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r GetJobHTTPResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetJobHTTPResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetJobHTTPResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type MetricsHTTPResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -6159,6 +6843,47 @@ func (r PoolUsageHTTPResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r PoolUsageHTTPResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ListProfilesHTTPResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *[]ProfileSpec
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ListProfilesHTTPResponse) GetJSON200() *[]ProfileSpec {
+	return r.JSON200
+}
+
+// GetBody returns the raw response body bytes
+func (r ListProfilesHTTPResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ListProfilesHTTPResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListProfilesHTTPResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListProfilesHTTPResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -6991,6 +7716,50 @@ func (c *ClientWithResponses) ListJobsWithResponse(ctx context.Context, reqEdito
 	return ParseListJobsHTTPResponse(rsp)
 }
 
+// SubmitJobWithBodyWithResponse performs a POST /api/v1/jobs (the `SubmitJob` operationId) request,
+// with any type of body and a specified content type.
+//
+// Returns a wrapper object for the known response body format(s).
+func (c *ClientWithResponses) SubmitJobWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*SubmitJobHTTPResponse, error) {
+	rsp, err := c.SubmitJobWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseSubmitJobHTTPResponse(rsp)
+}
+
+// SubmitJobWithResponse performs a POST /api/v1/jobs (the `SubmitJob` operationId) request.
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+func (c *ClientWithResponses) SubmitJobWithResponse(ctx context.Context, body SubmitJobJSONRequestBody, reqEditors ...RequestEditorFn) (*SubmitJobHTTPResponse, error) {
+	rsp, err := c.SubmitJob(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseSubmitJobHTTPResponse(rsp)
+}
+
+// DeleteJobWithResponse performs a DELETE /api/v1/jobs/{id} (the `DeleteJob` operationId) request.
+//
+// Returns a wrapper object for the known response body format(s).
+func (c *ClientWithResponses) DeleteJobWithResponse(ctx context.Context, id string, params *DeleteJobParams, reqEditors ...RequestEditorFn) (*DeleteJobHTTPResponse, error) {
+	rsp, err := c.DeleteJob(ctx, id, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDeleteJobHTTPResponse(rsp)
+}
+
+// GetJobWithResponse performs a GET /api/v1/jobs/{id} (the `GetJob` operationId) request.
+//
+// Returns a wrapper object for the known response body format(s).
+func (c *ClientWithResponses) GetJobWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*GetJobHTTPResponse, error) {
+	rsp, err := c.GetJob(ctx, id, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetJobHTTPResponse(rsp)
+}
+
 // MetricsWithResponse performs a GET /api/v1/metrics (the `Metrics` operationId) request.
 //
 // Returns a wrapper object for the known response body format(s).
@@ -7110,6 +7879,17 @@ func (c *ClientWithResponses) PoolUsageWithResponse(ctx context.Context, name st
 		return nil, err
 	}
 	return ParsePoolUsageHTTPResponse(rsp)
+}
+
+// ListProfilesWithResponse performs a GET /api/v1/profiles (the `ListProfiles` operationId) request.
+//
+// Returns a wrapper object for the known response body format(s).
+func (c *ClientWithResponses) ListProfilesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListProfilesHTTPResponse, error) {
+	rsp, err := c.ListProfiles(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListProfilesHTTPResponse(rsp)
 }
 
 // ListRegistryWithResponse performs a GET /api/v1/registry/clusters (the `ListRegistry` operationId) request.
@@ -8088,6 +8868,98 @@ func ParseListJobsHTTPResponse(rsp *http.Response) (*ListJobsHTTPResponse, error
 	return response, nil
 }
 
+// ParseSubmitJobHTTPResponse parses an HTTP response from a SubmitJobWithResponse call
+func ParseSubmitJobHTTPResponse(rsp *http.Response) (*SubmitJobHTTPResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &SubmitJobHTTPResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest RayJobView
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case rsp.StatusCode == 400:
+		break // No content-type
+
+	case rsp.StatusCode == 401:
+		break // No content-type
+
+	case rsp.StatusCode == 403:
+		break // No content-type
+
+	case rsp.StatusCode == 409:
+		break // No content-type
+
+	case rsp.StatusCode == 502:
+		break // No content-type
+
+	}
+
+	return response, nil
+}
+
+// ParseDeleteJobHTTPResponse parses an HTTP response from a DeleteJobWithResponse call
+func ParseDeleteJobHTTPResponse(rsp *http.Response) (*DeleteJobHTTPResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &DeleteJobHTTPResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	return response, nil
+}
+
+// ParseGetJobHTTPResponse parses an HTTP response from a GetJobWithResponse call
+func ParseGetJobHTTPResponse(rsp *http.Response) (*GetJobHTTPResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetJobHTTPResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest RayJobView
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case rsp.StatusCode == 401:
+		break // No content-type
+
+	case rsp.StatusCode == 403:
+		break // No content-type
+
+	case rsp.StatusCode == 404:
+		break // No content-type
+
+	}
+
+	return response, nil
+}
+
 // ParseMetricsHTTPResponse parses an HTTP response from a MetricsWithResponse call
 func ParseMetricsHTTPResponse(rsp *http.Response) (*MetricsHTTPResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -8295,6 +9167,38 @@ func ParsePoolUsageHTTPResponse(rsp *http.Response) (*PoolUsageHTTPResponse, err
 		break // No content-type
 
 	case rsp.StatusCode == 404:
+		break // No content-type
+
+	}
+
+	return response, nil
+}
+
+// ParseListProfilesHTTPResponse parses an HTTP response from a ListProfilesWithResponse call
+func ParseListProfilesHTTPResponse(rsp *http.Response) (*ListProfilesHTTPResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListProfilesHTTPResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest []ProfileSpec
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case rsp.StatusCode == 401:
+		break // No content-type
+
+	case rsp.StatusCode == 403:
 		break // No content-type
 
 	}

@@ -100,6 +100,78 @@ func (e LocalRole) Valid() bool {
 	}
 }
 
+// Defines values for PoolPurpose.
+const (
+	Compute PoolPurpose = "compute"
+	Serving PoolPurpose = "serving"
+)
+
+// Valid indicates whether the value is a known member of the PoolPurpose enum.
+func (e PoolPurpose) Valid() bool {
+	switch e {
+	case Compute:
+		return true
+	case Serving:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RegistryEntryViewSource.
+const (
+	Dynamic RegistryEntryViewSource = "dynamic"
+	Static  RegistryEntryViewSource = "static"
+)
+
+// Valid indicates whether the value is a known member of the RegistryEntryViewSource enum.
+func (e RegistryEntryViewSource) Valid() bool {
+	switch e {
+	case Dynamic:
+		return true
+	case Static:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RegistryEntryViewTarget.
+const (
+	Jobs  RegistryEntryViewTarget = "jobs"
+	Serve RegistryEntryViewTarget = "serve"
+)
+
+// Valid indicates whether the value is a known member of the RegistryEntryViewTarget enum.
+func (e RegistryEntryViewTarget) Valid() bool {
+	switch e {
+	case Jobs:
+		return true
+	case Serve:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for StorageEntryMode.
+const (
+	Env  StorageEntryMode = "env"
+	File StorageEntryMode = "file"
+)
+
+// Valid indicates whether the value is a known member of the StorageEntryMode enum.
+func (e StorageEntryMode) Valid() bool {
+	switch e {
+	case Env:
+		return true
+	case File:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for UpgradeStrategy.
 const (
 	Canary  UpgradeStrategy = "canary"
@@ -116,6 +188,15 @@ func (e UpgradeStrategy) Valid() bool {
 	default:
 		return false
 	}
+}
+
+// AdmissionRule Per-project admission limits (#7). Both fields optional; a zero value means unrestricted. Keyed by project (or `"*"` for every project) in `PolicyView.admission`.
+type AdmissionRule struct {
+	// AllowedImages Container images a cluster/job in the project may use; empty = any image.
+	AllowedImages *[]string `json:"allowed_images,omitempty"`
+
+	// MaxWorkers Maximum total worker replicas across all worker groups; 0 = unlimited.
+	MaxWorkers *int32 `json:"max_workers,omitempty"`
 }
 
 // AllocationSpec A project's allocation within a pool (translates to a Kueue LocalQueue).
@@ -421,9 +502,15 @@ type ClusterSpec struct {
 	// owner's notebook pod can reach the cluster. `#[serde(default)]` keeps
 	// specs persisted before this field deserializable (they parse as
 	// `None`).
-	Owner      *string `json:"owner,omitempty"`
+	Owner *string `json:"owner,omitempty"`
+
+	// Profile Profile catalog name (#7) whose shape fills zero-valued fields of this spec; conflicting non-empty fields are refused (400). `null` = none.
+	Profile    *string `json:"profile,omitempty"`
 	Project    string  `json:"project"`
 	RayVersion string  `json:"ray_version"`
+
+	// Storage Storage catalog entries (#12) delivered to the cluster's pods; the API never carries the secrets themselves.
+	Storage *[]string `json:"storage,omitempty"`
 
 	// TtlSeconds **Absolute max-age cap** in seconds: the cluster is reaped this long
 	// after creation regardless of activity. `None` disables the max-age
@@ -454,6 +541,9 @@ type ClusterView struct {
 	// EstMinHourly Estimated $/hr at min size, if a price sheet is configured.
 	EstMinHourly *float64 `json:"est_min_hourly,omitempty"`
 
+	// GatewayUrl Gateway address of the cluster's Ray dashboard/Jobs API while it is registered; `null` otherwise.
+	GatewayUrl *string `json:"gateway_url,omitempty"`
+
 	// Generation Bumps when the spec changes; drives the reconcile idempotency key.
 	Generation         int64  `json:"generation"`
 	Id                 string `json:"id"`
@@ -461,8 +551,14 @@ type ClusterView struct {
 
 	// ObservedState Observed lifecycle state, if the cluster has been reconciled.
 	ObservedState *string `json:"observed_state,omitempty"`
-	Project       string  `json:"project"`
-	RayVersion    string  `json:"ray_version"`
+
+	// Owner Identity that created the cluster (server-stamped); `null` when unattributed.
+	Owner   *string `json:"owner,omitempty"`
+	Project string  `json:"project"`
+
+	// Queue Kueue LocalQueue the cluster was admitted through; `null` when Kueue is not in use.
+	Queue      *string `json:"queue,omitempty"`
+	RayVersion string  `json:"ray_version"`
 }
 
 // CreateCluster Request body for creating/updating a managed cluster.
@@ -684,6 +780,9 @@ type OidcProviderInfo struct {
 // PolicyView `GET /api/v1/settings/policy` response: the effective policy plus its
 // provenance.
 type PolicyView struct {
+	// Admission project (or `"*"`) → admission limits (#7). Empty when none are configured.
+	Admission *map[string]AdmissionRule `json:"admission,omitempty"`
+
 	// Budgets project → time-windowed compute budget (#77). Empty when none are
 	// configured.
 	Budgets map[string]BudgetView `json:"budgets"`
@@ -694,13 +793,22 @@ type PolicyView struct {
 	// Prices resource → $/unit-hour; `null` when no price sheet is configured.
 	Prices *map[string]float64 `json:"prices,omitempty"`
 
+	// Profiles The profile catalog (#7); empty when none are configured.
+	Profiles *[]ProfileSpec `json:"profiles,omitempty"`
+
 	// Quotas project → (resource → limit). Empty when no quotas are configured.
 	Quotas map[string]map[string]float64 `json:"quotas"`
 
 	// Source "file" (the untouched `--policy` boot seed) | "store" (edited via
 	// PUT) | "none" (no policy configured at all).
 	Source string `json:"source"`
+
+	// Storage The storage catalog (#12); empty when none are configured.
+	Storage *[]StorageEntry `json:"storage,omitempty"`
 }
+
+// PoolPurpose What a pool's capacity is for (#4). `compute` (the default when absent) admits interactive clusters and jobs; `serving` admits only RayService-backed services, so long-lived serving replicas never compete with notebooks for the same queue.
+type PoolPurpose string
 
 // PoolSpec A shared capacity pool: flavors + a cohort to borrow from (ADR-0010).
 type PoolSpec struct {
@@ -717,6 +825,9 @@ type PoolSpec struct {
 	Flavors           []FlavorSpec `json:"flavors"`
 	GpuSharing        *GpuSharing  `json:"gpu_sharing,omitempty"`
 	Name              string       `json:"name"`
+
+	// Purpose What the pool's capacity is for (#4); absent = `compute`.
+	Purpose *PoolPurpose `json:"purpose,omitempty"`
 }
 
 // PoolUsageView Live point-in-time usage of one pool (Slice 4): built from the pool's
@@ -750,11 +861,40 @@ type PoolView struct {
 	GpuSharing *GpuSharing `json:"gpu_sharing,omitempty"`
 	Name       string      `json:"name"`
 
+	// Purpose What the pool's capacity is for (#4); absent = `compute`.
+	Purpose *PoolPurpose `json:"purpose,omitempty"`
+
 	// TotalNominal Resource key → summed nominal quota across flavors, as a string.
 	// A resource key whose quantity fails to parse on ANY flavor is
 	// omitted entirely (a partial sum would misreport capacity); the
 	// failure is logged. Display math only — the spec stays authoritative.
 	TotalNominal map[string]string `json:"total_nominal"`
+}
+
+// ProfileSpec A named cluster shape in the profile catalog (#7): the head/worker shape and image a cluster or job gets when its spec names this profile. Expansion fills zero-valued shape fields and refuses conflicting non-empty ones (400).
+type ProfileSpec struct {
+	// Description Human-readable summary shown by clients.
+	Description *string `json:"description,omitempty"`
+	HeadCpu     string  `json:"head_cpu"`
+	HeadMemory  string  `json:"head_memory"`
+
+	// IdleTimeoutSecs Default inactivity reap window applied to clusters using this profile; `null` = none.
+	IdleTimeoutSecs *int64 `json:"idle_timeout_secs,omitempty"`
+	Image           string `json:"image"`
+
+	// MaxWorkers Cap on total worker replicas for clusters using this profile; `null` = unlimited.
+	MaxWorkers *int32 `json:"max_workers,omitempty"`
+
+	// Name Catalog name a spec refers to (`ClusterSpec.profile`, `RayJobSpec.profile`).
+	Name string `json:"name"`
+
+	// Projects Projects that may use this profile; empty = every project.
+	Projects   *[]string `json:"projects,omitempty"`
+	RayVersion string    `json:"ray_version"`
+
+	// TtlSeconds Default absolute max-age cap applied to clusters using this profile; `null` = none.
+	TtlSeconds   *int64        `json:"ttl_seconds,omitempty"`
+	WorkerGroups []WorkerGroup `json:"worker_groups"`
 }
 
 // ProvidersResponse Which auth providers this deployment offers (login-page metadata; not
@@ -777,6 +917,38 @@ type PutAllocation struct {
 	Project        *string           `json:"project,omitempty"`
 }
 
+// RayJobSpec Declarative spec for an ephemeral Ray job (#5): Bifrost provisions a dedicated RayCluster, runs `entrypoint` on it and tears the cluster down when the job finishes. Mirrors a KubeRay RayJob CR so the provisioner stays a thin translation.
+type RayJobSpec struct {
+	// Entrypoint The shell command Ray runs as the job (e.g. `python train.py`).
+	Entrypoint string `json:"entrypoint"`
+
+	// HeadCpu Head CPU request; default "1" when empty.
+	HeadCpu *string `json:"head_cpu,omitempty"`
+
+	// HeadMemory Head memory request; default "2Gi" when empty.
+	HeadMemory *string `json:"head_memory,omitempty"`
+
+	// Image Container image for the head, the workers and the submitter.
+	Image string `json:"image"`
+
+	// Profile Profile catalog name (#7) whose shape fills zero-valued fields here; `null` = none.
+	Profile *string `json:"profile,omitempty"`
+	Project string  `json:"project"`
+
+	// RayVersion Ray version in `image`; defaults from the image tag when empty.
+	RayVersion *string `json:"ray_version,omitempty"`
+
+	// RuntimeEnvYaml Ray runtime_env for the job as a YAML document, passed through verbatim; empty = none.
+	RuntimeEnvYaml *string `json:"runtime_env_yaml,omitempty"`
+
+	// Storage Storage catalog entries (#12) delivered to the job's pods.
+	Storage *[]string `json:"storage,omitempty"`
+
+	// TtlSecondsAfterFinished Seconds the finished job's cluster is kept before KubeRay deletes it; default 60 when omitted.
+	TtlSecondsAfterFinished *int32         `json:"ttl_seconds_after_finished,omitempty"`
+	WorkerGroups            *[]WorkerGroup `json:"worker_groups,omitempty"`
+}
+
 // RayJobSummary A Ray job normalized to a stable Bifrost shape (api-v1.md §5.6). Every
 // field is optional: Ray's own records vary by version and by whether the
 // job has started/finished. `status` is Ray's vocabulary verbatim
@@ -795,6 +967,39 @@ type RayJobSummary struct {
 	SubmissionId *string `json:"submission_id,omitempty"`
 }
 
+// RayJobView An ephemeral Ray job as the control plane sees it (#5): the submitted intent plus the last observed KubeRay RayJob status.
+type RayJobView struct {
+	// Cluster Name of the RayCluster backing the job while it exists; `null` before provisioning and after teardown.
+	Cluster *string `json:"cluster,omitempty"`
+
+	// DeploymentStatus KubeRay deployment status (Initializing | Running | Complete | Failed | Suspended | ...).
+	DeploymentStatus string `json:"deployment_status"`
+
+	// FinishedAt Unix seconds the job reached a terminal status; `null` while running.
+	FinishedAt *int64 `json:"finished_at,omitempty"`
+
+	// GatewayUrl Gateway address of the job's Ray dashboard/Jobs API while the cluster is registered; `null` otherwise.
+	GatewayUrl *string `json:"gateway_url,omitempty"`
+	Id         string  `json:"id"`
+
+	// Message Last status message from KubeRay/Ray, when any.
+	Message *string `json:"message,omitempty"`
+
+	// Owner Identity that submitted the job (server-stamped); `null` when unattributed.
+	Owner   *string `json:"owner,omitempty"`
+	Project string  `json:"project"`
+
+	// Queue Kueue LocalQueue the job's cluster was admitted through; `null` when Kueue is not in use.
+	Queue *string `json:"queue,omitempty"`
+
+	// StartedAt Unix seconds the Ray job started running; `null` until then.
+	StartedAt *int64 `json:"started_at,omitempty"`
+
+	// Status Ray job status (PENDING | RUNNING | SUCCEEDED | FAILED | STOPPED); empty until Ray reports one.
+	Status      string `json:"status"`
+	SubmittedAt int64  `json:"submitted_at"`
+}
+
 // RegistryEntryView A gateway routing entry as the control plane may show it: where a
 // cluster is exposed and where its dashboard head lives, but never the
 // token itself (ADR-0003, security issue #4).
@@ -803,10 +1008,22 @@ type RegistryEntryView struct {
 	Hostname   string `json:"hostname"`
 	Id         string `json:"id"`
 
+	// Source `static` = from the boot-time registry file; `dynamic` = registered by the reconciler for a managed cluster, job or service.
+	Source *RegistryEntryViewSource `json:"source,omitempty"`
+
+	// Target What the entry proxies to: `jobs` = a Ray dashboard/Jobs API; `serve` = a Ray Serve endpoint.
+	Target *RegistryEntryViewTarget `json:"target,omitempty"`
+
 	// TokenSet Whether the gateway holds a static Ray token for this cluster.
 	TokenSet   bool                `json:"token_set"`
 	Validation *RegistryValidation `json:"validation,omitempty"`
 }
+
+// RegistryEntryViewSource `static` = from the boot-time registry file; `dynamic` = registered by the reconciler for a managed cluster, job or service.
+type RegistryEntryViewSource string
+
+// RegistryEntryViewTarget What the entry proxies to: `jobs` = a Ray dashboard/Jobs API; `serve` = a Ray Serve endpoint.
+type RegistryEntryViewTarget string
 
 // RegistryValidation Placeholder shape for future per-entry health/validation results.
 type RegistryValidation struct {
@@ -873,6 +1090,9 @@ type ServiceSpec struct {
 	// through verbatim as a YAML string — Bifrost does not interpret it.
 	ServeConfigV2 string `json:"serve_config_v2"`
 
+	// Storage Storage catalog entries (#12) delivered to the service's pods.
+	Storage *[]string `json:"storage,omitempty"`
+
 	// Upgrade How to roll out a new version of a service.
 	Upgrade      *UpgradeStrategy `json:"upgrade,omitempty"`
 	WorkerCpu    string           `json:"worker_cpu"`
@@ -885,13 +1105,54 @@ type ServiceSpec struct {
 
 // ServiceView defines model for ServiceView.
 type ServiceView struct {
-	Name string `json:"name"`
+	// GatewayUrl Gateway address of the Serve endpoint while the service is registered; `null` otherwise.
+	GatewayUrl *string `json:"gateway_url,omitempty"`
+	Name       string  `json:"name"`
+
+	// Owner Identity that deployed the service (server-stamped); `null` when unattributed.
+	Owner *string `json:"owner,omitempty"`
+
+	// Project Project the service belongs to (#2).
+	Project string `json:"project"`
+
+	// Queue Kueue LocalQueue the service's cluster was admitted through; `null` when Kueue is not in use.
+	Queue *string `json:"queue,omitempty"`
 
 	// State Observed lifecycle state: provisioning | running | updating | ...
 	State string `json:"state"`
 
 	// Url External Serve endpoint base URL, when ready.
 	Url *string `json:"url,omitempty"`
+}
+
+// StorageEntry A catalog entry for private storage credentials (#12): a Kubernetes Secret Bifrost delivers to the pods of any cluster, job or service that names this entry in its `storage` list. The API only ever sees the name; the secret's contents never cross it.
+type StorageEntry struct {
+	// Mode How the secret reaches the pods: `env` injects every key as an environment variable; `file` mounts the secret at `mount_path`.
+	Mode StorageEntryMode `json:"mode"`
+
+	// MountPath Mount point inside the pods (`file` mode only); `null` for `env` mode.
+	MountPath *string `json:"mount_path,omitempty"`
+
+	// Name Catalog name a spec refers to.
+	Name string `json:"name"`
+
+	// Projects Projects that may reference this entry; empty = every project.
+	Projects *[]string `json:"projects,omitempty"`
+
+	// SecretName Name of the Kubernetes Secret in the workload namespace.
+	SecretName string `json:"secret_name"`
+}
+
+// StorageEntryMode How the secret reaches the pods: `env` injects every key as an environment variable; `file` mounts the secret at `mount_path`.
+type StorageEntryMode string
+
+// SubmitJob Request body for `POST /api/v1/jobs`.
+type SubmitJob struct {
+	// Id Stable job id (RFC 1123 label); the server generates `job-<8 hex>` when `null`.
+	Id *string `json:"id,omitempty"`
+
+	// Spec Declarative spec for an ephemeral Ray job (#5): Bifrost provisions a dedicated RayCluster, runs `entrypoint` on it and tears the cluster down when the job finishes. Mirrors a KubeRay RayJob CR so the provisioner stays a thin translation.
+	Spec RayJobSpec `json:"spec"`
 }
 
 // TaintSpec A Kubernetes taint on a flavor's nodes. `effect` is e.g. "NoSchedule";
@@ -908,14 +1169,23 @@ type TaintSpec struct {
 // clears the price sheet; `quotas: {}` clears all quotas); an absent key
 // leaves that section untouched.
 type UpdatePolicy struct {
+	// Admission Present replaces the whole admission map (`{}` clears it) (#7).
+	Admission *map[string]AdmissionRule `json:"admission,omitempty"`
+
 	// Budgets Present replaces the whole budget map (`{}` clears all budgets) (#77).
 	Budgets *map[string]BudgetView `json:"budgets,omitempty"`
 
 	// Prices Present (incl. explicit `null`) replaces/clears the price sheet.
 	Prices *map[string]float64 `json:"prices,omitempty"`
 
+	// Profiles Present replaces the whole profile catalog (`[]` clears it) (#7).
+	Profiles *[]ProfileSpec `json:"profiles,omitempty"`
+
 	// Quotas Present replaces the whole quota map (`{}` clears all quotas).
 	Quotas *map[string]map[string]float64 `json:"quotas,omitempty"`
+
+	// Storage Present replaces the whole storage catalog (`[]` clears it) (#12).
+	Storage *[]StorageEntry `json:"storage,omitempty"`
 }
 
 // UpdateUserRequest defines model for UpdateUserRequest.
@@ -939,10 +1209,13 @@ type UpsertAssignment struct {
 	Scope string `json:"scope"`
 }
 
-// UsageGroup One (project, pool) group of the usage report.
+// UsageGroup One (project, pool, owner) group of the usage report.
 type UsageGroup struct {
 	// CostUsd Total cost in USD; `null` when no price sheet is configured.
 	CostUsd *float64 `json:"cost_usd,omitempty"`
+
+	// Owner Identity the consumption is attributed to (#14); empty string = unattributed.
+	Owner *string `json:"owner,omitempty"`
 
 	// Pool Empty string = the project has no allocation.
 	Pool string `json:"pool"`
@@ -1079,6 +1352,12 @@ type ClusterLogsParams struct {
 	Tail *int `form:"tail,omitempty" json:"tail,omitempty"`
 }
 
+// DeleteJobParams defines parameters for DeleteJob.
+type DeleteJobParams struct {
+	// Purge Hard-delete the store row (tombstone purge); only when already terminated and observed gone
+	Purge *bool `form:"purge,omitempty" json:"purge,omitempty"`
+}
+
 // UsageReportParams defines parameters for UsageReport.
 type UsageReportParams struct {
 	// Project Filter to one project.
@@ -1092,6 +1371,9 @@ type UsageReportParams struct {
 
 	// To Window end, unix seconds (default: now).
 	To *int64 `form:"to,omitempty" json:"to,omitempty"`
+
+	// Owner Filter to one owner (#14).
+	Owner *string `form:"owner,omitempty" json:"owner,omitempty"`
 }
 
 // UpsertAssignmentJSONRequestBody defines body for UpsertAssignment for application/json ContentType.
@@ -1111,6 +1393,9 @@ type UpdateUserJSONRequestBody = UpdateUserRequest
 
 // CreateClusterJSONRequestBody defines body for CreateCluster for application/json ContentType.
 type CreateClusterJSONRequestBody = CreateCluster
+
+// SubmitJobJSONRequestBody defines body for SubmitJob for application/json ContentType.
+type SubmitJobJSONRequestBody = SubmitJob
 
 // CreatePoolJSONRequestBody defines body for CreatePool for application/json ContentType.
 type CreatePoolJSONRequestBody = CreatePool
@@ -1292,6 +1577,15 @@ type ServerInterface interface {
 	// (GET /api/v1/jobs)
 	ListJobs(w http.ResponseWriter, r *http.Request)
 
+	// (POST /api/v1/jobs)
+	SubmitJob(w http.ResponseWriter, r *http.Request)
+
+	// (DELETE /api/v1/jobs/{id})
+	DeleteJob(w http.ResponseWriter, r *http.Request, id string, params DeleteJobParams)
+
+	// (GET /api/v1/jobs/{id})
+	GetJob(w http.ResponseWriter, r *http.Request, id string)
+
 	// (GET /api/v1/metrics)
 	Metrics(w http.ResponseWriter, r *http.Request)
 
@@ -1318,6 +1612,9 @@ type ServerInterface interface {
 
 	// (GET /api/v1/pools/{name}/usage)
 	PoolUsage(w http.ResponseWriter, r *http.Request, name string)
+
+	// (GET /api/v1/profiles)
+	ListProfiles(w http.ResponseWriter, r *http.Request)
 
 	// (GET /api/v1/registry/clusters)
 	ListRegistry(w http.ResponseWriter, r *http.Request)
@@ -2180,6 +2477,88 @@ func (siw *ServerInterfaceWrapper) ListJobs(w http.ResponseWriter, r *http.Reque
 	handler.ServeHTTP(w, r)
 }
 
+// SubmitJob operation middleware
+func (siw *ServerInterfaceWrapper) SubmitJob(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SubmitJob(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteJob operation middleware
+func (siw *ServerInterfaceWrapper) DeleteJob(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteJobParams
+
+	// ------------- Optional query parameter "purge" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "purge", r.URL.Query(), &params.Purge, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "purge"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "purge", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteJob(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetJob operation middleware
+func (siw *ServerInterfaceWrapper) GetJob(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetJob(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // Metrics operation middleware
 func (siw *ServerInterfaceWrapper) Metrics(w http.ResponseWriter, r *http.Request) {
 
@@ -2396,6 +2775,20 @@ func (siw *ServerInterfaceWrapper) PoolUsage(w http.ResponseWriter, r *http.Requ
 	handler.ServeHTTP(w, r)
 }
 
+// ListProfiles operation middleware
+func (siw *ServerInterfaceWrapper) ListProfiles(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListProfiles(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ListRegistry operation middleware
 func (siw *ServerInterfaceWrapper) ListRegistry(w http.ResponseWriter, r *http.Request) {
 
@@ -2575,6 +2968,19 @@ func (siw *ServerInterfaceWrapper) UsageReport(w http.ResponseWriter, r *http.Re
 			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "to"})
 		} else {
 			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "to", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "owner" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "owner", r.URL.Query(), &params.Owner, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "owner"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "owner", Err: err})
 		}
 		return
 	}
@@ -2766,6 +3172,9 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/clusters/{id}/suspend", wrapper.SuspendCluster)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/identity", wrapper.Identity)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/jobs", wrapper.ListJobs)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/jobs", wrapper.SubmitJob)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/jobs/{id}", wrapper.DeleteJob)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/jobs/{id}", wrapper.GetJob)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/metrics", wrapper.Metrics)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/pools", wrapper.ListPools)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/pools", wrapper.CreatePool)
@@ -2775,6 +3184,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/pools/{name}/allocations/{project}", wrapper.DeleteAllocation)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v1/pools/{name}/allocations/{project}", wrapper.PutAllocation)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/pools/{name}/usage", wrapper.PoolUsage)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/profiles", wrapper.ListProfiles)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/registry/clusters", wrapper.ListRegistry)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/services", wrapper.ListServices)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/services", wrapper.DeployService)
@@ -4007,6 +4417,171 @@ func (response ListJobs403Response) VisitListJobsResponse(w http.ResponseWriter)
 	return nil
 }
 
+type SubmitJobRequestObject struct {
+	Body *SubmitJobJSONRequestBody
+}
+
+type SubmitJobResponseObject interface {
+	VisitSubmitJobResponse(w http.ResponseWriter) error
+}
+
+type SubmitJob201JSONResponse RayJobView
+
+func (response SubmitJob201JSONResponse) VisitSubmitJobResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SubmitJob400Response struct {
+}
+
+func (response SubmitJob400Response) VisitSubmitJobResponse(w http.ResponseWriter) error {
+	w.WriteHeader(400)
+	return nil
+}
+
+type SubmitJob401Response struct {
+}
+
+func (response SubmitJob401Response) VisitSubmitJobResponse(w http.ResponseWriter) error {
+	w.WriteHeader(401)
+	return nil
+}
+
+type SubmitJob403Response struct {
+}
+
+func (response SubmitJob403Response) VisitSubmitJobResponse(w http.ResponseWriter) error {
+	w.WriteHeader(403)
+	return nil
+}
+
+type SubmitJob409Response struct {
+}
+
+func (response SubmitJob409Response) VisitSubmitJobResponse(w http.ResponseWriter) error {
+	w.WriteHeader(409)
+	return nil
+}
+
+type SubmitJob502Response struct {
+}
+
+func (response SubmitJob502Response) VisitSubmitJobResponse(w http.ResponseWriter) error {
+	w.WriteHeader(502)
+	return nil
+}
+
+type DeleteJobRequestObject struct {
+	Id     string `json:"id"`
+	Params DeleteJobParams
+}
+
+type DeleteJobResponseObject interface {
+	VisitDeleteJobResponse(w http.ResponseWriter) error
+}
+
+type DeleteJob200Response struct {
+}
+
+func (response DeleteJob200Response) VisitDeleteJobResponse(w http.ResponseWriter) error {
+	w.WriteHeader(200)
+	return nil
+}
+
+type DeleteJob202Response struct {
+}
+
+func (response DeleteJob202Response) VisitDeleteJobResponse(w http.ResponseWriter) error {
+	w.WriteHeader(202)
+	return nil
+}
+
+type DeleteJob401Response struct {
+}
+
+func (response DeleteJob401Response) VisitDeleteJobResponse(w http.ResponseWriter) error {
+	w.WriteHeader(401)
+	return nil
+}
+
+type DeleteJob403Response struct {
+}
+
+func (response DeleteJob403Response) VisitDeleteJobResponse(w http.ResponseWriter) error {
+	w.WriteHeader(403)
+	return nil
+}
+
+type DeleteJob404Response struct {
+}
+
+func (response DeleteJob404Response) VisitDeleteJobResponse(w http.ResponseWriter) error {
+	w.WriteHeader(404)
+	return nil
+}
+
+type DeleteJob409Response struct {
+}
+
+func (response DeleteJob409Response) VisitDeleteJobResponse(w http.ResponseWriter) error {
+	w.WriteHeader(409)
+	return nil
+}
+
+type GetJobRequestObject struct {
+	Id string `json:"id"`
+}
+
+type GetJobResponseObject interface {
+	VisitGetJobResponse(w http.ResponseWriter) error
+}
+
+type GetJob200JSONResponse RayJobView
+
+func (response GetJob200JSONResponse) VisitGetJobResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetJob401Response struct {
+}
+
+func (response GetJob401Response) VisitGetJobResponse(w http.ResponseWriter) error {
+	w.WriteHeader(401)
+	return nil
+}
+
+type GetJob403Response struct {
+}
+
+func (response GetJob403Response) VisitGetJobResponse(w http.ResponseWriter) error {
+	w.WriteHeader(403)
+	return nil
+}
+
+type GetJob404Response struct {
+}
+
+func (response GetJob404Response) VisitGetJobResponse(w http.ResponseWriter) error {
+	w.WriteHeader(404)
+	return nil
+}
+
 type MetricsRequestObject struct {
 }
 
@@ -4384,6 +4959,43 @@ type PoolUsage404Response struct {
 
 func (response PoolUsage404Response) VisitPoolUsageResponse(w http.ResponseWriter) error {
 	w.WriteHeader(404)
+	return nil
+}
+
+type ListProfilesRequestObject struct {
+}
+
+type ListProfilesResponseObject interface {
+	VisitListProfilesResponse(w http.ResponseWriter) error
+}
+
+type ListProfiles200JSONResponse []ProfileSpec
+
+func (response ListProfiles200JSONResponse) VisitListProfilesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListProfiles401Response struct {
+}
+
+func (response ListProfiles401Response) VisitListProfilesResponse(w http.ResponseWriter) error {
+	w.WriteHeader(401)
+	return nil
+}
+
+type ListProfiles403Response struct {
+}
+
+func (response ListProfiles403Response) VisitListProfilesResponse(w http.ResponseWriter) error {
+	w.WriteHeader(403)
 	return nil
 }
 
@@ -4849,6 +5461,15 @@ type StrictServerInterface interface {
 	// (GET /api/v1/jobs)
 	ListJobs(ctx context.Context, request ListJobsRequestObject) (ListJobsResponseObject, error)
 
+	// (POST /api/v1/jobs)
+	SubmitJob(ctx context.Context, request SubmitJobRequestObject) (SubmitJobResponseObject, error)
+
+	// (DELETE /api/v1/jobs/{id})
+	DeleteJob(ctx context.Context, request DeleteJobRequestObject) (DeleteJobResponseObject, error)
+
+	// (GET /api/v1/jobs/{id})
+	GetJob(ctx context.Context, request GetJobRequestObject) (GetJobResponseObject, error)
+
 	// (GET /api/v1/metrics)
 	Metrics(ctx context.Context, request MetricsRequestObject) (MetricsResponseObject, error)
 
@@ -4875,6 +5496,9 @@ type StrictServerInterface interface {
 
 	// (GET /api/v1/pools/{name}/usage)
 	PoolUsage(ctx context.Context, request PoolUsageRequestObject) (PoolUsageResponseObject, error)
+
+	// (GET /api/v1/profiles)
+	ListProfiles(ctx context.Context, request ListProfilesRequestObject) (ListProfilesResponseObject, error)
 
 	// (GET /api/v1/registry/clusters)
 	ListRegistry(ctx context.Context, request ListRegistryRequestObject) (ListRegistryResponseObject, error)
@@ -5698,6 +6322,90 @@ func (sh *strictHandler) ListJobs(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// SubmitJob operation middleware
+func (sh *strictHandler) SubmitJob(w http.ResponseWriter, r *http.Request) {
+	var request SubmitJobRequestObject
+
+	var body SubmitJobJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SubmitJob(ctx, request.(SubmitJobRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SubmitJob")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SubmitJobResponseObject); ok {
+		if err := validResponse.VisitSubmitJobResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteJob operation middleware
+func (sh *strictHandler) DeleteJob(w http.ResponseWriter, r *http.Request, id string, params DeleteJobParams) {
+	var request DeleteJobRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteJob(ctx, request.(DeleteJobRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteJob")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteJobResponseObject); ok {
+		if err := validResponse.VisitDeleteJobResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetJob operation middleware
+func (sh *strictHandler) GetJob(w http.ResponseWriter, r *http.Request, id string) {
+	var request GetJobRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetJob(ctx, request.(GetJobRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetJob")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetJobResponseObject); ok {
+		if err := validResponse.VisitGetJobResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // Metrics operation middleware
 func (sh *strictHandler) Metrics(w http.ResponseWriter, r *http.Request) {
 	var request MetricsRequestObject
@@ -5935,6 +6643,30 @@ func (sh *strictHandler) PoolUsage(w http.ResponseWriter, r *http.Request, name 
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(PoolUsageResponseObject); ok {
 		if err := validResponse.VisitPoolUsageResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListProfiles operation middleware
+func (sh *strictHandler) ListProfiles(w http.ResponseWriter, r *http.Request) {
+	var request ListProfilesRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListProfiles(ctx, request.(ListProfilesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListProfiles")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListProfilesResponseObject); ok {
+		if err := validResponse.VisitListProfilesResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
