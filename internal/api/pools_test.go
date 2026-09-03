@@ -288,3 +288,41 @@ func TestFormatQuantity_IntegralVsFractional(t *testing.T) {
 		t.Errorf("formatQuantity(0.5) = %q, want 0.5", got)
 	}
 }
+
+// #4: purpose round-trips through the wire: absent reads as compute, a
+// serving pool lists as serving, and an unknown spelling is 400.
+func TestPoolPurpose_WireRoundTrip(t *testing.T) {
+	s := &Server{Store: newMemStore(t)}
+	if _, err := s.CreatePool(ctxWithIdentity(admin()), CreatePoolRequestObject{Body: &CreatePool{Spec: minimalPoolSpec("compute-pool")}}); err != nil {
+		t.Fatalf("create compute pool: %v", err)
+	}
+	serving := minimalPoolSpec("serve-pool")
+	purpose := Serving
+	serving.Purpose = &purpose
+	if _, err := s.CreatePool(ctxWithIdentity(admin()), CreatePoolRequestObject{Body: &CreatePool{Spec: serving}}); err != nil {
+		t.Fatalf("create serving pool: %v", err)
+	}
+	bad := minimalPoolSpec("bad-pool")
+	badPurpose := PoolPurpose("inference")
+	bad.Purpose = &badPurpose
+	_, err := s.CreatePool(ctxWithIdentity(admin()), CreatePoolRequestObject{Body: &CreatePool{Spec: bad}})
+	if err == nil {
+		t.Fatal("unknown purpose must be refused")
+	}
+	mustHTTPError(t, err, 400)
+
+	list, err := s.ListPools(ctxWithIdentity(admin()), ListPoolsRequestObject{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	got := map[string]string{}
+	for _, v := range mustResponse[ListPools200JSONResponse](t, list) {
+		if v.Purpose == nil {
+			t.Fatalf("pool %s: purpose must always be written", v.Name)
+		}
+		got[v.Name] = string(*v.Purpose)
+	}
+	if got["compute-pool"] != "compute" || got["serve-pool"] != "serving" || len(got) != 2 {
+		t.Fatalf("purposes = %v", got)
+	}
+}

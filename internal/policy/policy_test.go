@@ -450,3 +450,42 @@ func TestPriceSheetPriceIsAccumulationOrderDeterministic(t *testing.T) {
 		}
 	}
 }
+
+// Requirement 4: a service's demand is head + replicas × worker, one map
+// (no min/max — Serve replicas are fixed on the cluster).
+func TestServiceDemand(t *testing.T) {
+	spec := &core.ServiceSpec{HeadCpu: "1", HeadMemory: "2Gi", WorkerCpu: "2", WorkerMemory: "4Gi", WorkerReplicas: 3}
+	d, err := ServiceDemand(spec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if d.Cpu() != 7 || d.MemGiB() != 14 || len(d) != 2 {
+		t.Fatalf("demand = %v, want cpu 7 memory 14 and no other keys", d)
+	}
+	zero := &core.ServiceSpec{HeadCpu: "500m", HeadMemory: "1Gi", WorkerCpu: "2", WorkerMemory: "4Gi", WorkerReplicas: 0}
+	d, err = ServiceDemand(zero)
+	if err != nil || d.Cpu() != 0.5 || d.MemGiB() != 1 {
+		t.Fatalf("zero replicas: demand = %v err=%v, want head only", d, err)
+	}
+	if _, err := ServiceDemand(&core.ServiceSpec{HeadCpu: "lots", HeadMemory: "1Gi", WorkerCpu: "1", WorkerMemory: "1Gi"}); err == nil {
+		t.Fatal("unparseable head_cpu must be an error")
+	}
+}
+
+// An allocation's nominal map reads as a limit in demand units: cpu in
+// cores, memory in GiB, anything else as a count.
+func TestLimitFromQuantities(t *testing.T) {
+	limit, err := LimitFromQuantities(map[string]string{"cpu": "4", "memory": "16Gi", "nvidia.com/gpu": "2"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if limit.Cpu() != 4 || limit.MemGiB() != 16 || limit.Gpu() != 2 {
+		t.Fatalf("limit = %v", limit)
+	}
+	if _, err := LimitFromQuantities(map[string]string{"cpu": "many"}); err == nil {
+		t.Fatal("unparseable quantity must be an error")
+	}
+	if got, err := LimitFromQuantities(nil); err != nil || len(got) != 0 {
+		t.Fatalf("nil map: %v %v", got, err)
+	}
+}

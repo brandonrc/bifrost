@@ -359,6 +359,113 @@ func TestDeployService_NoIdentityStampsNoOwner(t *testing.T) {
 	}
 }
 
+// Requirement 4: a serving pool's allocation nominal is the project's
+// serving limit. With cpu 3 (memory generous) one canonical service (head 1
+// + worker 1 = 2 CPU) is admitted, a second is 409 with an audit deny, a
+// same-name redeploy replaces its own row rather than double-counting, and
+// the view names the serving queue.
+func TestDeployService_ServingAllocationCapsProjectDemand(t *testing.T) {
+	s := newServiceServer(t)
+	ctx := context.Background()
+	serving := core.PoolPurposeServing
+	if _, err := s.Store.UpsertPool(ctx, "serve", core.PoolSpec{Name: "serve", Cohort: "c", FairSharingWeight: 1, Purpose: serving,
+		Flavors: []core.FlavorSpec{{Name: "f", Resources: map[string]string{"cpu": "64", "memory": "256Gi"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Store.UpsertAllocation(ctx, core.AllocationSpec{Pool: "serve", Project: "proj", Namespace: "ns",
+		Nominal: map[string]string{"cpu": "3", "memory": "1024Gi"}}); err != nil {
+		t.Fatal(err)
+	}
+	dev := testIdentity("dev", auth.RoleDeveloper)
+	if err := deployAs(t, s, dev, "svc-a", minimalServiceSpec()); err != nil {
+		t.Fatalf("first deploy within the serving limit: %v", err)
+	}
+	second := minimalServiceSpec()
+	second.Name = "svc-b"
+	err := deployAs(t, s, dev, "svc-b", second)
+	if err == nil {
+		t.Fatal("second service must exceed the 3-CPU serving allocation")
+	}
+	mustHTTPError(t, err, 409)
+	rows, _, aerr := s.Store.ListAudit(ctx, core.AuditFilter{})
+	if aerr != nil {
+		t.Fatal(aerr)
+	}
+	denied := false
+	for _, r := range rows {
+		if r.Event.Decision == core.AuditDecisionDeny && r.Event.Reason != nil && *r.Event.Reason == "serving_quota_exceeded" {
+			denied = true
+		}
+	}
+	if !denied {
+		t.Fatal("expected an audit deny with reason serving_quota_exceeded")
+	}
+	if row, _ := s.Store.GetService(ctx, "svc-b"); row != nil {
+		t.Fatal("a refused deploy must not write a row")
+	}
+
+	// Same name = update: the row being replaced is not in-use.
+	redeploy := minimalServiceSpec()
+	redeploy.WorkerReplicas = 2 // head 1 + 2 = 3 CPU, exactly the limit
+	if err := deployAs(t, s, dev, "svc-a", redeploy); err != nil {
+		t.Fatalf("same-name redeploy at the limit must be admitted: %v", err)
+	}
+
+	resp, err := s.GetService(ctxWithIdentity(dev), GetServiceRequestObject{Name: "svc-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := mustResponse[GetService200JSONResponse](t, resp)
+	if view.Queue == nil || *view.Queue != "proj-serving" {
+		t.Fatalf("view.queue = %v, want proj-serving", view.Queue)
+	}
+}
+
+// A compute allocation is not a serving limit and not a serving queue: with
+// only a compute pool the project's services deploy unbounded and
+// queue-free, and an allocation with an empty nominal declares no limit.
+func TestDeployService_ComputeAllocationIsNotAServingLimit(t *testing.T) {
+	s := newServiceServer(t)
+	ctx := context.Background()
+	if _, err := s.Store.UpsertPool(ctx, "cpu", core.PoolSpec{Name: "cpu", Cohort: "c", FairSharingWeight: 1,
+		Flavors: []core.FlavorSpec{{Name: "f", Resources: map[string]string{"cpu": "64"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Store.UpsertAllocation(ctx, core.AllocationSpec{Pool: "cpu", Project: "proj", Namespace: "ns",
+		Nominal: map[string]string{"cpu": "1", "memory": "1Gi"}}); err != nil {
+		t.Fatal(err)
+	}
+	dev := testIdentity("dev", auth.RoleDeveloper)
+	for _, name := range []string{"svc-a", "svc-b", "svc-c"} {
+		spec := minimalServiceSpec()
+		spec.Name = name
+		if err := deployAs(t, s, dev, name, spec); err != nil {
+			t.Fatalf("deploy %s with only a compute allocation: %v", name, err)
+		}
+	}
+	resp, err := s.GetService(ctxWithIdentity(dev), GetServiceRequestObject{Name: "svc-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view := mustResponse[GetService200JSONResponse](t, resp); view.Queue != nil {
+		t.Fatalf("view.queue = %q, want null without a serving allocation", *view.Queue)
+	}
+
+	// A serving allocation with no nominal caps nothing.
+	if _, err := s.Store.UpsertPool(ctx, "serve", core.PoolSpec{Name: "serve", Cohort: "c", FairSharingWeight: 1, Purpose: core.PoolPurposeServing,
+		Flavors: []core.FlavorSpec{{Name: "f", Resources: map[string]string{"cpu": "64"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Store.UpsertAllocation(ctx, core.AllocationSpec{Pool: "serve", Project: "proj", Namespace: "ns"}); err != nil {
+		t.Fatal(err)
+	}
+	spec := minimalServiceSpec()
+	spec.Name = "svc-d"
+	if err := deployAs(t, s, dev, "svc-d", spec); err != nil {
+		t.Fatalf("empty nominal must not cap: %v", err)
+	}
+}
+
 // One service per project (requirement 2, ruling D8): a second name in the
 // same project is 409 and audited as a deny; a same-name redeploy and
 // another project's service are unaffected.
