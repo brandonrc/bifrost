@@ -4,12 +4,15 @@
 package contract
 
 import (
+	"crypto/tls"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
 )
@@ -30,14 +33,21 @@ type Op struct {
 	Public           bool
 }
 
-// Load reads the vendored contract from the repo — the same file the server
-// embeds — so these tests can never drift from what the server enforces.
+// Load reads the contract from the repo — the same file the server embeds —
+// so these tests can never drift from what the server enforces. A shipped
+// test binary (the grace lane runs on the box, with no source tree) reads
+// the same document from the server itself at api.SpecPath, which serves
+// the embedded copy: still the file the server enforces, never a stale one.
 func Load(t testing.TB) *openapi3.T {
 	t.Helper()
 	p := filepath.Join("..", "..", "..", "internal", "api", "openapi.json")
 	data, err := os.ReadFile(p)
 	if err != nil {
-		t.Fatalf("read contract %s: %v", p, err)
+		base := os.Getenv("BIFROST_URL")
+		if base == "" {
+			t.Fatalf("read contract %s: %v (and BIFROST_URL is unset, so it cannot be fetched from the server)", p, err)
+		}
+		data = fetchSpec(t, strings.TrimRight(base, "/")+"/api/v1/openapi.json")
 	}
 	doc, err := openapi3.NewLoader().LoadFromData(data)
 	if err != nil {
@@ -95,4 +105,32 @@ func Do(t testing.TB, base string, editor func(*http.Request), method, path, bod
 		t.Fatal(err)
 	}
 	return resp
+}
+
+// fetchSpec downloads the served contract. TLS verification follows
+// BIFROST_INSECURE_TLS like the cluster target does (grace's self-signed CA).
+func fetchSpec(t testing.TB, url string) []byte {
+	t.Helper()
+	tr, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		t.Fatal("http.DefaultTransport is not an *http.Transport")
+	}
+	tr = tr.Clone()
+	if os.Getenv("BIFROST_INSECURE_TLS") == "1" {
+		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // opt-in, mirrors target/cluster
+	}
+	c := &http.Client{Transport: tr, Timeout: 30 * time.Second}
+	resp, err := c.Get(url)
+	if err != nil {
+		t.Fatalf("fetch contract %s: %v", url, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("fetch contract %s: %d", url, resp.StatusCode)
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read contract body: %v", err)
+	}
+	return data
 }
