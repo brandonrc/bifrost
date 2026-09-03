@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -9,8 +10,8 @@ import (
 
 // Ported from mobula-core/src/registry.rs #[cfg(test)] mod tests.
 
-func testRegistry() ClusterRegistry {
-	return ClusterRegistry{
+func testRegistry() *ClusterRegistry {
+	return &ClusterRegistry{
 		Clusters: []ClusterEndpoint{
 			{
 				Id:         ClusterId("demo"),
@@ -81,7 +82,7 @@ func TestByHostnameAndByIDReturnCopiesNotAliases(t *testing.T) {
 
 func TestIpv6HostsAreNotMangledByPortStripping(t *testing.T) {
 	// An unbracketed IPv6 literal's last segment is not a port.
-	r := ClusterRegistry{
+	r := &ClusterRegistry{
 		Clusters: []ClusterEndpoint{
 			{
 				Id:         ClusterId("v6"),
@@ -240,7 +241,7 @@ func TestAuthTokenEnvSerializesButTokenNeverDoes(t *testing.T) {
 	// itself must not, even when env-sourced.
 	e := testEndpoint("demo")
 	e.AuthTokenEnv = strPtr("DEMO_RAY_TOKEN")
-	r := ClusterRegistry{Clusters: []ClusterEndpoint{e}}
+	r := &ClusterRegistry{Clusters: []ClusterEndpoint{e}}
 
 	t.Setenv("DEMO_RAY_TOKEN", "env-secret")
 	if err := r.ResolveAuthTokens(); err != nil {
@@ -266,7 +267,7 @@ func TestAuthTokenEnvSerializesButTokenNeverDoes(t *testing.T) {
 func TestResolveAuthTokensReadsEnvIntoAuthToken(t *testing.T) {
 	e := testEndpoint("demo")
 	e.AuthTokenEnv = strPtr("BIFROST_CORE_TEST_TOKEN_OK")
-	r := ClusterRegistry{Clusters: []ClusterEndpoint{e}}
+	r := &ClusterRegistry{Clusters: []ClusterEndpoint{e}}
 
 	t.Setenv("BIFROST_CORE_TEST_TOKEN_OK", "resolved-secret")
 	if err := r.ResolveAuthTokens(); err != nil {
@@ -287,7 +288,7 @@ func TestResolveAuthTokensFailsFastOnMissingOrEmptyEnv(t *testing.T) {
 	for _, value := range []*string{nil, strPtr("")} {
 		e := testEndpoint("demo")
 		e.AuthTokenEnv = strPtr("BIFROST_CORE_TEST_TOKEN_MISSING")
-		r := ClusterRegistry{Clusters: []ClusterEndpoint{e}}
+		r := &ClusterRegistry{Clusters: []ClusterEndpoint{e}}
 
 		if value != nil {
 			t.Setenv("BIFROST_CORE_TEST_TOKEN_MISSING", *value)
@@ -325,14 +326,14 @@ func TestTokenSourceNotesFlagPlaintextAndAcknowledgeEnv(t *testing.T) {
 
 	envEntry := testEndpoint("envdemo")
 	envEntry.AuthTokenEnv = strPtr("ENVDEMO_RAY_TOKEN")
-	r2 := ClusterRegistry{Clusters: []ClusterEndpoint{envEntry}}
+	r2 := &ClusterRegistry{Clusters: []ClusterEndpoint{envEntry}}
 	want2 := []TokenSourceNote{{Kind: TokenSourceNoteEnv, Id: "envdemo", Var: "ENVDEMO_RAY_TOKEN"}}
 	if got := r2.TokenSourceNotes(); !reflect.DeepEqual(got, want2) {
 		t.Fatalf("got %v, want %v", got, want2)
 	}
 
 	// Tokenless entries produce no note.
-	r3 := ClusterRegistry{Clusters: []ClusterEndpoint{testEndpoint("bare")}}
+	r3 := &ClusterRegistry{Clusters: []ClusterEndpoint{testEndpoint("bare")}}
 	if got := r3.TokenSourceNotes(); len(got) != 0 {
 		t.Fatalf("expected no notes, got %v", got)
 	}
@@ -344,7 +345,7 @@ func TestTokenSourceNotesFlagPlaintextAndAcknowledgeEnv(t *testing.T) {
 // behavior.
 func TestClusterRegistryMarshalsNilClustersAsEmpty(t *testing.T) {
 	var r ClusterRegistry
-	b, err := json.Marshal(r)
+	b, err := json.Marshal(&r)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -354,5 +355,133 @@ func TestClusterRegistryMarshalsNilClustersAsEmpty(t *testing.T) {
 	}
 	if clusters, ok := v["clusters"].([]any); !ok || len(clusters) != 0 {
 		t.Fatalf("clusters = %v, want []", v["clusters"])
+	}
+}
+
+// --- Dynamic entries (#5: the lifecycle controller registers ephemeral
+// clusters at run time; the static file stays the operator's override) ---
+
+func dynamicEndpoint(id string) ClusterEndpoint {
+	return ClusterEndpoint{
+		Id:         ClusterId(id),
+		Hostname:   id + ".ray.kind.invalid",
+		ApiBaseUrl: "http://" + id + "-head-svc:8265",
+		Project:    "team-a",
+	}
+}
+
+func TestUpsertRegistersDynamicEntryVisibleToLookups(t *testing.T) {
+	r := testRegistry()
+	if err := r.Upsert(dynamicEndpoint("job-1")); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	got, ok := r.ByHostname("JOB-1.ray.kind.invalid:8484")
+	if !ok || got.Id != "job-1" || got.Source != RegistrySourceDynamic || got.Target != RegistryTargetJobs || got.Project != "team-a" {
+		t.Fatalf("ByHostname = %+v %v", got, ok)
+	}
+	if got, ok := r.ByID("job-1"); !ok || got.Source != RegistrySourceDynamic {
+		t.Fatalf("ByID = %+v %v", got, ok)
+	}
+	if st, ok := r.ByID("demo"); !ok || st.Source != RegistrySourceStatic || st.Target != RegistryTargetJobs {
+		t.Fatalf("static entry must be stamped static/jobs: %+v %v", st, ok)
+	}
+	if len(r.Clusters) != 1 {
+		t.Fatalf("Upsert must not touch the static slice: %d", len(r.Clusters))
+	}
+}
+
+func TestUpsertRefusesToShadowStaticEntries(t *testing.T) {
+	r := testRegistry()
+	shadow := dynamicEndpoint("job-1")
+	shadow.Hostname = "DEMO.ray.example.com"
+	var re RegistryError
+	if err := r.Upsert(shadow); !errors.As(err, &re) || re.Kind != RegistryErrDuplicateHostname {
+		t.Fatalf("shadowing a static hostname: %v", err)
+	}
+	sameID := dynamicEndpoint("demo")
+	if err := r.Upsert(sameID); !errors.As(err, &re) || re.Kind != RegistryErrDuplicateId {
+		t.Fatalf("reusing a static id: %v", err)
+	}
+	bad := dynamicEndpoint("job-2")
+	bad.Hostname = "job 2"
+	if err := r.Upsert(bad); !errors.As(err, &re) || re.Kind != RegistryErrInvalidHostname {
+		t.Fatalf("invalid hostname: %v", err)
+	}
+	if _, ok := r.ByID("job-1"); ok {
+		t.Fatal("refused entries must not be registered")
+	}
+}
+
+func TestUpsertReplacesByIdButRefusesDynamicHostnameCollision(t *testing.T) {
+	r := &ClusterRegistry{}
+	if err := r.Upsert(dynamicEndpoint("a")); err != nil {
+		t.Fatal(err)
+	}
+	moved := dynamicEndpoint("a")
+	moved.ApiBaseUrl = "http://a-head-svc:9999"
+	if err := r.Upsert(moved); err != nil {
+		t.Fatalf("re-upsert by id: %v", err)
+	}
+	if got, _ := r.ByID("a"); got.ApiBaseUrl != "http://a-head-svc:9999" {
+		t.Fatalf("re-upsert did not replace: %+v", got)
+	}
+	collide := dynamicEndpoint("b")
+	collide.Hostname = "A.ray.kind.invalid"
+	var re RegistryError
+	if err := r.Upsert(collide); !errors.As(err, &re) || re.Kind != RegistryErrDuplicateHostname {
+		t.Fatalf("two dynamic entries on one hostname: %v", err)
+	}
+}
+
+func TestRemoveAndSnapshotOrder(t *testing.T) {
+	r := testRegistry()
+	for _, id := range []string{"zeta", "alpha"} {
+		if err := r.Upsert(dynamicEndpoint(id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snap := r.Snapshot()
+	ids := make([]string, len(snap))
+	for i, c := range snap {
+		ids[i] = string(c.Id) + ":" + c.Source
+	}
+	want := []string{"demo:static", "alpha:dynamic", "zeta:dynamic"}
+	if !reflect.DeepEqual(ids, want) {
+		t.Fatalf("snapshot = %v, want %v", ids, want)
+	}
+	snap[0].Hostname = "mutated"
+	if r.Clusters[0].Hostname == "mutated" {
+		t.Fatal("Snapshot must return copies")
+	}
+	if !r.Remove("zeta") || r.Remove("zeta") || r.Remove("demo") {
+		t.Fatal("Remove: first true, repeat false, static never removable")
+	}
+	if _, ok := r.ByID("zeta"); ok {
+		t.Fatal("removed entry still resolves")
+	}
+	if _, ok := r.ByID("demo"); !ok {
+		t.Fatal("static entry must survive a Remove attempt")
+	}
+	if !strings.Contains(r.String(), "alpha") || strings.Contains(r.String(), "secret") {
+		t.Fatalf("String must list dynamic entries and redact tokens: %s", r.String())
+	}
+}
+
+func TestDynamicEntriesAreNotPartOfTheFileFormat(t *testing.T) {
+	r := testRegistry()
+	_ = r.Upsert(dynamicEndpoint("job-1"))
+	b, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "job-1") {
+		t.Fatalf("dynamic entry leaked into the registry file format: %s", b)
+	}
+	var back ClusterRegistry
+	if err := json.Unmarshal(b, &back); err != nil {
+		t.Fatal(err)
+	}
+	if len(back.Clusters) != 1 || back.Clusters[0].Id != "demo" {
+		t.Fatalf("round trip: %+v", back.Clusters)
 	}
 }

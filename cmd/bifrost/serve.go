@@ -139,10 +139,11 @@ func buildServer(ctx context.Context, opts serveOptions) (*builtServer, error) {
 		}
 		registry = reg
 	}
-	for _, c := range registry.Clusters {
+	static := registry.Snapshot()
+	for _, c := range static {
 		slog.Info("cluster registered", "id", c.Id, "hostname", c.Hostname)
 	}
-	slog.Info("registry loaded", "clusters", len(registry.Clusters))
+	slog.Info("registry loaded", "clusters", len(static))
 
 	var validator *auth.Validator
 	if opts.AuthConfig != "" {

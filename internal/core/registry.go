@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sort"
 	"strings"
+	"sync"
 	"unicode"
 )
 
@@ -31,7 +33,30 @@ type ClusterEndpoint struct {
 	// Mutually exclusive with AuthToken; unlike the token, the name is
 	// not a secret and may serialize.
 	AuthTokenEnv *string `json:"auth_token_env,omitempty"`
+	// Project is the project that owns the workload behind this entry, so
+	// the gateway can scope authorization per project (#5/#2). "" for
+	// static entries that predate project scoping.
+	Project string `json:"project,omitempty"`
+	// Target is what the hostname fronts: RegistryTargetJobs (the Ray
+	// Jobs API — the default when absent) or RegistryTargetServe (a Serve
+	// application's HTTP endpoint).
+	Target string `json:"target,omitempty"`
+	// Source is how the entry got into the registry: RegistrySourceStatic
+	// (the --registry file) or RegistrySourceDynamic (registered at run
+	// time by the lifecycle controller). Stamped by the registry on every
+	// lookup/snapshot; a file entry never needs to set it.
+	Source string `json:"source,omitempty"`
 }
+
+// Registry entry Target / Source vocabularies (the contract's
+// RegistryEntryView enums).
+const (
+	RegistryTargetJobs  = "jobs"
+	RegistryTargetServe = "serve"
+
+	RegistrySourceStatic  = "static"
+	RegistrySourceDynamic = "dynamic"
+)
 
 // clusterEndpointAlias breaks the recursion MarshalJSON would otherwise
 // cause by re-entering ClusterEndpoint's own MarshalJSON.
@@ -64,33 +89,143 @@ func (c ClusterEndpoint) String() string {
 	)
 }
 
-// ClusterRegistry is the static cluster registry — the Phase 1 stand-in
-// for the Phase 3 lifecycle controller's dynamic view.
+// ClusterRegistry is the gateway's routing table: the static entries
+// loaded from the --registry file at boot (Clusters, immutable after
+// load) plus the dynamic entries the lifecycle controller registers and
+// deregisters as it provisions ephemeral clusters (#5). Lookups consult
+// static first, then dynamic, under a read lock; a dynamic entry can never
+// shadow a static hostname (Upsert refuses it), so the file stays the
+// operator's override.
+//
+// Contains a mutex: pass it around as *ClusterRegistry, never by value
+// (`go vet` copylocks).
 type ClusterRegistry struct {
+	Clusters []ClusterEndpoint `json:"clusters"`
+
+	mu      sync.RWMutex
+	dynamic map[ClusterId]ClusterEndpoint
+}
+
+// clusterRegistryWire is the JSON shape: only the static entries are the
+// file format — dynamic entries are runtime state, not configuration.
+type clusterRegistryWire struct {
 	Clusters []ClusterEndpoint `json:"clusters"`
 }
 
-// clusterRegistryAlias breaks the recursion MarshalJSON would otherwise
-// cause by re-entering ClusterRegistry's own MarshalJSON.
-type clusterRegistryAlias ClusterRegistry
-
 // MarshalJSON substitutes an empty slice for a nil Clusters, mirroring
 // Rust's Vec::default(), which serde always writes as `[]`, never `null`.
-func (r ClusterRegistry) MarshalJSON() ([]byte, error) {
-	a := clusterRegistryAlias(r)
-	if a.Clusters == nil {
-		a.Clusters = []ClusterEndpoint{}
+// Pointer receiver: the struct carries a mutex.
+func (r *ClusterRegistry) MarshalJSON() ([]byte, error) {
+	w := clusterRegistryWire{Clusters: r.Clusters}
+	if w.Clusters == nil {
+		w.Clusters = []ClusterEndpoint{}
 	}
-	return json.Marshal(a)
+	return json.Marshal(w)
+}
+
+// UnmarshalJSON reads the file format (static entries only).
+func (r *ClusterRegistry) UnmarshalJSON(data []byte) error {
+	var w clusterRegistryWire
+	if err := json.Unmarshal(data, &w); err != nil {
+		return err
+	}
+	r.Clusters = w.Clusters
+	return nil
 }
 
 // String redacts every entry's auth token (see ClusterEndpoint.String).
-func (r ClusterRegistry) String() string {
-	parts := make([]string, len(r.Clusters))
-	for i, c := range r.Clusters {
-		parts[i] = c.String()
+// Static and dynamic entries both appear, in Snapshot order.
+func (r *ClusterRegistry) String() string {
+	all := r.Snapshot()
+	parts := make([]string, len(all))
+	for i := range all {
+		parts[i] = all[i].String()
 	}
 	return fmt.Sprintf("ClusterRegistry{Clusters: [%s]}", strings.Join(parts, ", "))
+}
+
+// stamp returns c with Source set and Target defaulted — the one place
+// egress normalization happens, so a caller never sees an entry whose
+// provenance or target is ambiguous.
+func stamp(c ClusterEndpoint, source string) ClusterEndpoint {
+	c.Source = source
+	if c.Target == "" {
+		c.Target = RegistryTargetJobs
+	}
+	return c
+}
+
+// Upsert registers (or replaces, by Id) a dynamic entry. It refuses an
+// entry that would shadow a static hostname or reuse a static id (the
+// file is the operator's override, and first-match-wins misrouting is the
+// exact failure Validate guards against), and one whose hostname another
+// dynamic entry already routes. Hostnames compare case-insensitively.
+func (r *ClusterRegistry) Upsert(c ClusterEndpoint) error {
+	if c.Hostname == "" || hasInvalidHostnameChar(c.Hostname) {
+		return RegistryError{Kind: RegistryErrInvalidHostname, Id: string(c.Id), Hostname: c.Hostname}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.Clusters {
+		if r.Clusters[i].Id == c.Id {
+			return RegistryError{Kind: RegistryErrDuplicateId, Id: string(c.Id)}
+		}
+		if strings.EqualFold(r.Clusters[i].Hostname, c.Hostname) {
+			return RegistryError{Kind: RegistryErrDuplicateHostname, Hostname: c.Hostname}
+		}
+	}
+	for id, d := range r.dynamic {
+		if id != c.Id && strings.EqualFold(d.Hostname, c.Hostname) {
+			return RegistryError{Kind: RegistryErrDuplicateHostname, Hostname: c.Hostname}
+		}
+	}
+	if r.dynamic == nil {
+		r.dynamic = map[ClusterId]ClusterEndpoint{}
+	}
+	r.dynamic[c.Id] = c
+	return nil
+}
+
+// Remove deregisters a dynamic entry. Static entries cannot be removed at
+// run time. Returns whether an entry was removed.
+func (r *ClusterRegistry) Remove(id ClusterId) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.dynamic[id]
+	if ok {
+		delete(r.dynamic, id)
+	}
+	return ok
+}
+
+// Register is Upsert under the controller-facing verb (see
+// controller.Registrar).
+func (r *ClusterRegistry) Register(c ClusterEndpoint) error { return r.Upsert(c) }
+
+// Deregister is Remove under the controller-facing verb (see
+// controller.Registrar).
+func (r *ClusterRegistry) Deregister(id ClusterId) { r.Remove(id) }
+
+// Snapshot returns a copy of every entry — static entries in file order,
+// then dynamic entries ordered by id — each stamped with its Source and an
+// effective Target. Copies, not aliases: a caller cannot reach the stored
+// AuthToken through the result.
+func (r *ClusterRegistry) Snapshot() []ClusterEndpoint {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]ClusterEndpoint, 0, len(r.Clusters)+len(r.dynamic))
+	for i := range r.Clusters {
+		out = append(out, stamp(r.Clusters[i], RegistrySourceStatic))
+	}
+	ids := make([]ClusterId, 0, len(r.dynamic))
+	for id := range r.dynamic {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	for _, id := range ids {
+		out = append(out, stamp(r.dynamic[id], RegistrySourceDynamic))
+	}
+	return out
 }
 
 // RegistryErrorKind discriminates ClusterRegistry failures.
@@ -172,23 +307,37 @@ type TokenSourceNote struct {
 // Returns a copy of the matched entry, not a pointer into the live slice —
 // a caller must not be able to mutate the registry's stored entries (and
 // in particular AuthToken) through a lookup result.
+// Static entries win over dynamic ones.
 func (r *ClusterRegistry) ByHostname(host string) (ClusterEndpoint, bool) {
 	h := stripPort(host)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	for i := range r.Clusters {
 		if strings.EqualFold(r.Clusters[i].Hostname, h) {
-			return r.Clusters[i], true
+			return stamp(r.Clusters[i], RegistrySourceStatic), true
+		}
+	}
+	for _, d := range r.dynamic {
+		if strings.EqualFold(d.Hostname, h) {
+			return stamp(d, RegistrySourceDynamic), true
 		}
 	}
 	return ClusterEndpoint{}, false
 }
 
 // ByID looks up a cluster by id. Returns a copy of the matched entry, not
-// a pointer into the live slice, for the same reason as ByHostname.
+// a pointer into the live slice, for the same reason as ByHostname. Static
+// entries win over dynamic ones.
 func (r *ClusterRegistry) ByID(id ClusterId) (ClusterEndpoint, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	for i := range r.Clusters {
 		if r.Clusters[i].Id == id {
-			return r.Clusters[i], true
+			return stamp(r.Clusters[i], RegistrySourceStatic), true
 		}
+	}
+	if d, ok := r.dynamic[id]; ok {
+		return stamp(d, RegistrySourceDynamic), true
 	}
 	return ClusterEndpoint{}, false
 }

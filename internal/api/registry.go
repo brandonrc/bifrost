@@ -11,7 +11,8 @@ import (
 	"github.com/brandonrc/bifrost/internal/auth"
 )
 
-// ListRegistry lists the gateway's static routing table. Admin-only:
+// ListRegistry lists the gateway's routing table (static and dynamic
+// entries, see core.ClusterRegistry.Snapshot). Admin-only:
 // Admin on any target is granted only to auth.RoleAdmin, and api-v1.md
 // §2.2 classifies registry surfaces as Admin; auth.TargetCluster because
 // registry entries describe cluster routing.
@@ -27,8 +28,9 @@ func (s *Server) ListRegistry(ctx context.Context, _ ListRegistryRequestObject) 
 	}
 	var entries []RegistryEntryView
 	if s.Registry != nil {
-		entries = make([]RegistryEntryView, 0, len(s.Registry.Clusters))
-		for _, c := range s.Registry.Clusters {
+		all := s.Registry.Snapshot()
+		entries = make([]RegistryEntryView, 0, len(all))
+		for _, c := range all {
 			entries = append(entries, RegistryEntryView{
 				Id:         c.Id.String(),
 				Hostname:   c.Hostname,
