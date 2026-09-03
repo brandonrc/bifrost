@@ -55,6 +55,8 @@ func ZeroStatus(obj client.Object) {
 		o.Status = rayv1.RayClusterStatus{}
 	case *rayv1.RayService:
 		o.Status = rayv1.RayServiceStatuses{}
+	case *rayv1.RayJob:
+		o.Status = rayv1.RayJobStatus{}
 	case *kueuev1beta2.Cohort:
 		o.Status = kueuev1beta2.CohortStatus{}
 	case *kueuev1beta2.ClusterQueue:
