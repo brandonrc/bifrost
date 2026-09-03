@@ -26,8 +26,13 @@ operations:
   cluster_nodes:    {admin: allow, operator: allow, dev-a: scoped, dev-b: scoped}
   # The gateway registry names every cluster host and whether it holds a token: administrators only.
   list_registry:    {admin: allow, operator: deny,  dev-a: deny,   dev-b: deny}
-  # --- jobs (target Job: developer full, operator read)
+  # --- jobs (target Job: developer full, operator read; ephemeral jobs are project-scoped, #5)
   list_jobs:        {admin: allow, operator: allow, dev-a: allow, dev-b: allow}
+  submit_job:       {admin: allow, operator: deny,  dev-a: scoped, dev-b: scoped}
+  get_job:          {admin: allow, operator: allow, dev-a: scoped, dev-b: scoped}
+  delete_job:       {admin: allow, operator: deny,  dev-a: scoped, dev-b: scoped}
+  # --- profiles (the catalog is read like usage/metrics: Read on cluster, any authenticated role)
+  list_profiles:    {admin: allow, operator: allow, dev-a: allow, dev-b: allow}
   # --- services (target Service: developer full, operator read)
   list_services:    {admin: allow, operator: allow, dev-a: allow, dev-b: allow}
   deploy_service:   {admin: allow, operator: deny,  dev-a: allow, dev-b: allow}

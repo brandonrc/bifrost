@@ -59,7 +59,15 @@ func TestPermissionMatrix(t *testing.T) {
 	})
 
 	// Path parameters: the contract's placeholders → this run's objects.
+	// `{id}` is a cluster id on /clusters/... and a job id on /jobs/...; the
+	// job is never created (submit_job is destructive-if-allowed), so its
+	// id resolves to 404 for every principal that gets past authorization —
+	// "not 401/403" for allow and dev-a, Denied for dev-b.
+	jobID := req.Name("mxjob")
 	fill := func(p string) string {
+		if strings.HasPrefix(p, "/api/v1/jobs/") {
+			p = strings.ReplaceAll(p, "{id}", jobID)
+		}
 		p = strings.ReplaceAll(p, "{id}", clusterID)
 		p = strings.ReplaceAll(p, "{name}", poolName)
 		p = strings.ReplaceAll(p, "{project}", "team-a")
@@ -91,11 +99,12 @@ func TestPermissionMatrix(t *testing.T) {
 		},
 		"update_policy":  func() string { return `{}` },
 		"deploy_service": func() string { return serviceBody(req.Name("mxsvc")) },
+		"submit_job":     func() string { return jobBody(req.Name("mxj2")) },
 	}
 	// Operations whose success would mutate shared state in a way another
 	// test would notice are not exercised against a principal expected to be
 	// allowed; the deny side still is.
-	destructiveIfAllowed := map[string]bool{"delete_cluster": true, "suspend_cluster": true, "resume_cluster": true, "logout": true, "delete_pool": true, "delete_allocation": true, "delete_service": true, "create_pool": true, "create_cluster": true, "deploy_service": true, "create_user": true, "upsert_assignment": true, "update_policy": true, "revoke_token": true, "update_user": true, "delete_assignment": true}
+	destructiveIfAllowed := map[string]bool{"delete_cluster": true, "suspend_cluster": true, "resume_cluster": true, "logout": true, "delete_pool": true, "delete_allocation": true, "delete_service": true, "submit_job": true, "create_pool": true, "create_cluster": true, "deploy_service": true, "create_user": true, "upsert_assignment": true, "update_policy": true, "revoke_token": true, "update_user": true, "delete_assignment": true}
 
 	doc := contract.Load(t)
 	seen := map[string]bool{}
@@ -158,7 +167,7 @@ func TestPermissionMatrix(t *testing.T) {
 		}
 	}
 	if len(seen) < 40 {
-		t.Fatalf("only %d operations classified; the contract has 47 (3 public)", len(seen))
+		t.Fatalf("only %d operations classified; the contract has 51 (3 public)", len(seen))
 	}
 }
 
@@ -179,4 +188,8 @@ func bodyOf(r interface{ GetBody() []byte }) string {
 func serviceBody(name string) string {
 	return fmt.Sprintf(`{"name":%q,"spec":{"name":%q,"project":"team-a","ray_version":"2.56.0","image":"rayproject/ray:2.56.0",
 	  "serve_config_v2":"applications: []\n","head_cpu":"1","head_memory":"2Gi","worker_replicas":0,"worker_cpu":"1","worker_memory":"2Gi","upgrade":"in_place"}}`, name, name)
+}
+
+func jobBody(id string) string {
+	return fmt.Sprintf(`{"id":%q,"spec":{"project":"team-a","entrypoint":"python -c 1","image":%q}}`, id, fixture.RayImage())
 }
