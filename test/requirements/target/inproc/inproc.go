@@ -49,7 +49,16 @@ type target struct {
 	tokens    *sync.Map // principal -> bearer token
 	cancel    context.CancelFunc
 	t         testing.TB
+	// gatewayDomain is the control plane's --gateway-domain equivalent;
+	// "" means the target has no dynamic gateway (Has("gateway") false).
+	gatewayDomain string
 }
+
+// DefaultGatewayDomain is the gateway domain the default inproc target
+// runs with. Nothing resolves it (.invalid is reserved for exactly that),
+// which is the point: L2 asserts authorization and registration, never
+// real routing.
+const DefaultGatewayDomain = "inproc.invalid"
 
 // seedBcryptCost is the bcrypt work factor inproc hashes seed passwords and
 // issued tokens at: bcrypt.MinCost, not auth's production bcryptCost (12).
@@ -74,6 +83,13 @@ func WithAdmission(allowedImagePrefixes []string, maxWorkers int) Option {
 	return func(c *app.Config) {
 		c.Admission = api.Admission{AllowedImagePrefixes: allowedImagePrefixes, MaxWorkers: maxWorkers}
 	}
+}
+
+// WithGatewayDomain sets the dynamic gateway domain (requirement 5) the
+// control plane under test registers clusters under; "" disables the
+// dynamic gateway so a test can assert the disabled path.
+func WithGatewayDomain(domain string) Option {
+	return func(c *app.Config) { c.GatewayDomain = domain }
 }
 
 // New builds the in-process target and starts its reconcile loop. Callers
@@ -101,6 +117,7 @@ func New(t testing.TB, opts ...Option) req.Target {
 		Provisioner:       newFakeProvisioner(),
 		ReconcileInterval: 25 * time.Millisecond,
 		MeteringInterval:  100 * time.Millisecond,
+		GatewayDomain:     DefaultGatewayDomain,
 	}
 	for _, o := range opts {
 		o(&cfg)
@@ -113,7 +130,7 @@ func New(t testing.TB, opts ...Option) req.Target {
 	go a.RunLoops(loopCtx)
 	srv := httptest.NewServer(a.Handler)
 
-	tg := &target{srv: srv, store: store, principal: "admin", tokens: &sync.Map{}, cancel: cancel, t: t}
+	tg := &target{srv: srv, store: store, principal: "admin", tokens: &sync.Map{}, cancel: cancel, t: t, gatewayDomain: cfg.GatewayDomain}
 	// Project-scoped assignments are made through the API as admin, so the
 	// seeding itself exercises the real access path. dev-a/dev-b hold an
 	// `operator` grant on their project (their local role stays
@@ -158,8 +175,13 @@ func (tg *target) Clock() req.FakeClock {
 	return nil // deferred to P1 (plan Global Constraints)
 }
 func (tg *target) K8s() (ctrlclient.Client, bool) { return nil, false }
-func (tg *target) Has(capability string) bool     { return false }
-func (tg *target) BaseURL() string                { return tg.srv.URL }
+func (tg *target) Has(capability string) bool {
+	// "gateway": a --gateway-domain is configured, so registration and
+	// authorization can be asserted (routing cannot — nothing resolves
+	// the .invalid domain). Every other L3 capability is absent.
+	return capability == "gateway" && tg.gatewayDomain != ""
+}
+func (tg *target) BaseURL() string { return tg.srv.URL }
 func (tg *target) Authorize(r *http.Request) {
 	if tok := tg.token(context.Background()); tok != "" {
 		r.Header.Set("Authorization", "Bearer "+tok)

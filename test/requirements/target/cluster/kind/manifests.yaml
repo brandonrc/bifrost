@@ -32,8 +32,13 @@ metadata:
   namespace: bifrost
 rules:
   - apiGroups: ["ray.io"]
-    resources: ["rayclusters", "rayservices"]
+    resources: ["rayclusters", "rayservices", "rayjobs"]
     verbs: ["get", "list", "watch", "create", "patch", "delete"]
+  # Requirement 12: an existence check (metadata only) on the Secrets the
+  # storage catalog names; Bifrost never reads their data.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
     verbs: ["get", "list", "create", "patch", "delete"]
@@ -164,6 +169,10 @@ spec:
             # these image prefixes, at most 4 workers per cluster.
             - --allowed-images=rayproject/,registry.k8s.io/
             - --max-workers=4
+            # Requirement 5: dynamically registered clusters are exposed as
+            # <name>.ray.kind.invalid; tests reach them with a Host header
+            # against the NodePort (REQ_GATEWAY_DOMAIN in l3-kind.yml).
+            - --gateway-domain=ray.kind.invalid
           env:
             - name: BIFROST_LOCAL_ADMIN_PASSWORD
               valueFrom:

@@ -53,6 +53,9 @@ type serveOptions struct {
 	ReconcileInterval       time.Duration
 	Autoscaling             bool
 	LocalAuth               bool
+	GatewayDomain           string
+	GatewayExternalBase     string
+	ServicesPerProject      int
 }
 
 func newServeCmd() *cobra.Command {
@@ -87,6 +90,12 @@ func newServeCmd() *cobra.Command {
 		"Comma-separated image prefixes a cluster may request (requirement 7: administrator-controlled images). Empty = any image")
 	f.IntVar(&opts.MaxWorkers, "max-workers", 0,
 		"Cap on the sum of max_replicas across a cluster's worker groups (requirement 7). 0 = no cap")
+	f.StringVar(&opts.GatewayDomain, "gateway-domain", "",
+		"DNS suffix dynamically registered clusters are exposed under as <name>.<domain> (requirement 5). Empty = static registry only")
+	f.StringVar(&opts.GatewayExternalBase, "gateway-external-base", "",
+		"Scheme (and optional prefix) clients reach the gateway through, e.g. https://, used to build gateway_url. Empty = not reported")
+	f.IntVar(&opts.ServicesPerProject, "services-per-project", 1,
+		"Cap on concurrently deployed services per project (requirement 2); deploys beyond it answer 409")
 	f.BoolVar(&opts.LocalAuth, "local-auth", false,
 		"Enable local (IdP-free) username/password auth (ADR-0011); counts as configured authentication "+
 			"for the fail-closed non-loopback rule")
@@ -180,6 +189,9 @@ func buildServer(ctx context.Context, opts serveOptions) (*builtServer, error) {
 		AllowUnauthenticated: opts.DevAllowUnauthenticated,
 		ReconcileInterval:    opts.ReconcileInterval,
 		MeteringInterval:     opts.MeteringInterval,
+		GatewayDomain:        opts.GatewayDomain,
+		GatewayExternalBase:  opts.GatewayExternalBase,
+		ServicesPerProject:   opts.ServicesPerProject,
 		Admission: api.Admission{
 			AllowedImagePrefixes: api.ParseImagePrefixes(opts.AllowedImages),
 			MaxWorkers:           opts.MaxWorkers,
@@ -198,6 +210,8 @@ func buildServer(ctx context.Context, opts serveOptions) (*builtServer, error) {
 		liveClient = c
 		cfg.Provisioner = c
 		cfg.ServiceProvisioner = live.NewServiceClient(c)
+		// cfg.JobProvisioner stays nil until the live RayJob client lands
+		// (requirement 5); the flags above are already parsed and carried.
 		slog.Info("cluster lifecycle controller + services enabled", "namespace", opts.Namespace)
 	}
 

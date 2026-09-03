@@ -92,6 +92,8 @@ jobs:
           # What manifests.yaml configured, so r07 can assert it.
           REQ_ADMISSION_DISALLOWED_IMAGE: docker.io/library/nginx:1.27
           REQ_ADMISSION_MAX_WORKERS: "4"
+          # --gateway-domain in manifests.yaml (requirement 5).
+          REQ_GATEWAY_DOMAIN: ray.kind.invalid
         run: |
           # One run id for every package (-p 1 runs them one at a time), so
           # preflight's leaked-cluster check and postflight's sweep agree.
