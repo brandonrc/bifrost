@@ -460,11 +460,15 @@ into every pod of a cluster, job or service).
 6. File mode: `{"name":"team-a-cfg","secret_name":"team-a-cfg","mode":"file","mount_path":"/etc/creds"}`;
    the pod mounts it at `/etc/creds`.
 
-**Caveat and fix:** the Secret itself is created by hand with kubectl; there is
-no API to store credentials, and the lanes prove projection with dummy
-secrets rather than a real bucket read. Stand up MinIO (or use a real bucket)
-on grace and add step 4 as a grace-only test; consider a `storage_secret` write
-operation later.
+**Caveat and fix:** the tenant NetworkPolicy allows egress to DNS only, so a
+catalogued endpoint is unreachable until an extra egress policy exists (see
+`docs/defects/2026-09-03-storage-egress-blocked-by-tenant-policy.md`; the fix
+is an `egress` allowance on the storage entry rendered per cluster). The Secret
+itself is created by hand with kubectl, and the lanes prove projection with
+dummy secrets. A real read is proven by hand on grace against aks3
+(`grace-deploy/aks3-*.yaml`, `aks3-job.sh`): a job reading
+`s3://team-a/data/sample.parquet` returned 1000 rows. Give the job a worker
+group; a head-only job has no CPU for Ray Data tasks.
 
 ### R13 — Group capacity via shared pools; fair queueing; admin quotas and weights (LOW)
 
@@ -610,7 +614,7 @@ Lane-tuning knobs live in the workflow env and the grace script:
 | 8 | failure drill is a pod restart only | node-loss / DB-loss drill on grace |
 | 9, 11 | extension-only, no requirement test | `r11_env_vars` now (no product code); Playwright spec for 9 after the image ships the extension |
 | 10 | nebi images do not exist yet | external; wire `REQ_NOWGET_RAY_IMAGE` when they do |
-| 12 | secrets created by hand; no real bucket read in lanes | MinIO on grace + grace-only read test |
+| 12 | tenant egress is DNS-only, storage endpoints unreachable without a hand policy; secrets created by hand | `egress` allowance on the storage entry (defect doc 2026-09-03); grace-only read test against aks3 |
 | 14 | no prices on grace, `cost_usd` reads null | set prices in values; assert `cost_usd > 0` |
 | 16 | Dask deferred | scope decision |
 | 18 | no FIPS build, no scan gate, no control mapping | `GOFIPS140` target, Trivy job, controls doc |
