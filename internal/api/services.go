@@ -27,8 +27,11 @@ import (
 var errNoServiceBackend = errors.New("no service backend configured")
 
 // serviceView converts an ObservedService into the wire ServiceView.
+// Project is required by the 0.2.0 contract but nothing observes it yet:
+// package C (serve-converge) stores services with their project and fills
+// it; until then it is the empty string.
 func serviceView(o *provision.ObservedService) ServiceView {
-	return ServiceView{Name: o.Name, State: o.State.String(), Url: o.Url}
+	return ServiceView{Name: o.Name, Project: "", State: o.State.String(), Url: o.Url}
 }
 
 // serviceProvErr converts a provisioner failure into the canonical 502
