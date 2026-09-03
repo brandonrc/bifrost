@@ -21,7 +21,7 @@
 // Every route requires the same read-scoped authorization as the other
 // cluster reads (#49): a developer sees only their project's clusters,
 // Admin sees all; an out-of-scope cluster is 404 (never leaks existence).
-// Ported from mobula-api's cluster_obs.rs.
+// Ported from the Rust predecessor's cluster_obs.rs.
 package api
 
 import (

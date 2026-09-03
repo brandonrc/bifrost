@@ -17,13 +17,15 @@
 # WHAT IS DELIBERATELY *NOT* A FINDING
 #
 # Heritage: this codebase is a line-by-line port, and `// Reference:
-# mobula-auth/src/local.rs:28` is what let reviewers trace what the original
-# did — it caught both the session-PAT-mint defect and the owner-match error.
+# the predecessor's auth crate, src/local.rs:28` is what let reviewers trace
+# what the original did — it caught both the session-PAT-mint defect and the owner-match error.
 # Deleting that record would remove the reasons without removing the identity.
 # So comments, ADRs, the frozen-contract parity note and superseded ruling text
 # are excluded BY CATEGORY, and the exclusions are listed below, not implied.
 #
-# STATUS: bifrost, bifrost-api and bifrost-jupyter are clean. bifrost-ui still
+# STATUS: bifrost, bifrost-api and bifrost-jupyter are clean (bifrost additionally
+# gates the WORDING repo-wide in internal/legacy_identity_test.go; this script
+# stays the cross-repo live-string triage tool). bifrost-ui still
 # reports, deliberately, and both remainders are tracked decisions rather than
 # misses — do not allowlist them to make the exit code green:
 #
@@ -89,27 +91,21 @@ PATH_FILTER="^[^:]*(${EXTS}):[0-9]+:"
 # ---------------------------------------------------------------------------
 allow() {
   grep -vE \
-    -e 'MOBULA_CONFIG_DIR|MOBULA_LOCAL_ADMIN_PASSWORD' \
-    -e 'no_mobula_policy_selects_namespace_wide' \
-    -e 'mobula ADR-0002|mobula-api #45' \
-    -e 'mobula_auth::|mobula-auth/|mobula-cli|mobula-api mounts' \
     -e 'LEGACY_IDENTITY:-' \
-    -e 'mirrors mobula_core|mobula-policy parse_quantity'
-  # 5. LEGACY_IDENTITY:- is this script's own default search term. Without this
+    -e '^[^:]*internal/legacy_identity_test\.go:'
+  # 1. LEGACY_IDENTITY:- is this script's own default search term. Without this
   #    the sweep reports itself and can never exit 0.
-  # 6. "mirrors mobula_core is_k8s_name" / "mobula-policy parse_quantity" are
-  #    heritage citations that happen to sit inside describe()/it() strings, so
-  #    the comment stripper cannot reach them. Same category as a `// Reference:`
-  #    line: they record which Rust function a behaviour was ported from.
-  # 1. MOBULA_CONFIG_DIR / MOBULA_LOCAL_ADMIN_PASSWORD appear only inside
-  #    comments recording what the Rust CLI called the variable that this
-  #    codebase already renamed (BIFROST_*). Heritage, and the rename is done.
-  # 2. no_mobula_policy_selects_namespace_wide cites the Rust test this Go test
-  #    was ported from. Heritage.
-  # 3. golangci depguard `desc:` strings cite mobula ADR-0002 / mobula-api #45
-  #    as the source of a lint rule. Citations, shown to developers only.
-  # 4. mobula_auth:: / mobula-auth/ / mobula-cli / "mobula-api mounts" are
-  #    source-of-truth references in doc comments. Heritage.
+  # 2. internal/legacy_identity_test.go is the Go guard for the same name; its
+  #    identifier allowlist is a table of raw-string regexes, not comments.
+  #
+  # Entries that used to sit here (MOBULA_CONFIG_DIR, the ported Rust test
+  # name, the depguard desc: citations, the mobula_auth::/mobula-cli/"mobula-api
+  # mounts" heritage comments) are gone: the bifrost wording sweep
+  # (feat/rename-predecessor) reworded every heritage citation to neutral
+  # vocabulary ("the predecessor's auth crate, src/local.rs:28"), and
+  # internal/legacy_identity_test.go now fails `go test ./...` on any
+  # case-insensitive match outside its own documented allowlist — including
+  # comments and prose, which this script deliberately skips.
 }
 
 # Strip whole-line comments (// … , # …, * … in a block comment). A runtime

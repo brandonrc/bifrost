@@ -48,7 +48,7 @@ const (
 // AuthError is Bifrost's auth error type: value-typed with an Unwrap chain
 // to the underlying cause, mirroring Rust's thiserror source fields.
 //
-// Reference: mobula-auth/src/lib.rs:367-387 (AuthError).
+// Reference: the predecessor's auth crate, src/lib.rs:367-387 (AuthError).
 type AuthError struct {
 	Kind AuthErrorKind
 	// Message carries the detail text for Discovery, Jwks, InvalidToken,
@@ -97,7 +97,7 @@ func (e AuthError) Unwrap() error {
 // layer over the Store (one indexed role_assignments read per request —
 // caching is a documented follow-up, not built).
 //
-// Reference: mobula-auth/src/lib.rs:392-404 (AssignmentSource).
+// Reference: the predecessor's auth crate, src/lib.rs:392-404 (AssignmentSource).
 type AssignmentSource interface {
 	// AssignmentsFor returns all assignments for subject, as (role, scope)
 	// rows. Implementations must fail CLOSED on backend errors (return
@@ -108,7 +108,7 @@ type AssignmentSource interface {
 // ProviderMetadata is the subset of the OIDC provider metadata Bifrost
 // uses.
 //
-// Reference: mobula-auth/src/lib.rs:406-417 (ProviderMetadata).
+// Reference: the predecessor's auth crate, src/lib.rs:406-417 (ProviderMetadata).
 type ProviderMetadata struct {
 	// Issuer is the issuer the provider claims; cross-checked against
 	// config (#16). Absent on some minimal providers.
@@ -122,7 +122,7 @@ type ProviderMetadata struct {
 // hung/trickling IdP cannot park a request forever: a 10s connect timeout
 // and a 15s overall timeout, mirroring the southbound posture.
 //
-// Reference: mobula-auth/src/lib.rs:419-427 (idp_client).
+// Reference: the predecessor's auth crate, src/lib.rs:419-427 (idp_client).
 func IdpClient() *http.Client {
 	return &http.Client{
 		Timeout: 15 * time.Second,
@@ -141,7 +141,7 @@ func IdpClient() *http.Client {
 // tolerance — Discover performs its own trailing-slash-insensitive
 // cross-check (#16) afterward, against the raw claims returned here.
 //
-// Reference: mobula-auth/src/lib.rs:429-447 (discover_metadata).
+// Reference: the predecessor's auth crate, src/lib.rs:429-447 (discover_metadata).
 func DiscoverMetadata(ctx context.Context, client *http.Client, issuer string) (*ProviderMetadata, error) {
 	ctx = oidc.ClientContext(ctx, client)
 	ctx = oidc.InsecureIssuerURLContext(ctx, issuer)
@@ -173,11 +173,11 @@ const DefaultRefreshCooldown = 30 * time.Second
 // with no cooldown gate of its own (only in-flight de-duplication for
 // concurrent callers), which would defeat the flood-prevention invariant
 // above. The JWKS document is instead fetched and cached by hand,
-// mirroring mobula-auth/src/lib.rs:459-586 structurally (a keys map guarded
+// mirroring the predecessor's auth crate, src/lib.rs:459-586 structurally (a keys map guarded
 // by one lock, a last-refresh timestamp guarded by another, released
 // before the network call).
 //
-// Reference: mobula-auth/src/lib.rs:454-465 (Validator).
+// Reference: the predecessor's auth crate, src/lib.rs:454-465 (Validator).
 type Validator struct {
 	config  AuthConfig
 	client  *http.Client
@@ -209,7 +209,7 @@ func (v *Validator) RoleMappings() RoleMappings {
 // fast — a control plane that cannot validate tokens must not start
 // serving.
 //
-// Reference: mobula-auth/src/lib.rs:480-548 (Validator::discover).
+// Reference: the predecessor's auth crate, src/lib.rs:480-548 (Validator::discover).
 func Discover(ctx context.Context, config AuthConfig, client *http.Client, allowInsecure bool) (*Validator, error) {
 	if !strings.HasPrefix(config.Issuer, "https://") && !allowInsecure {
 		return nil, AuthError{Kind: AuthErrInsecureIssuer, Issuer: config.Issuer}
@@ -426,7 +426,7 @@ const authLeeway = 60 * time.Second
 // Validate validates a Bearer token: RS256 signature against JWKS, iss,
 // aud, exp/nbf. Returns the mapped identity.
 //
-// Reference: mobula-auth/src/lib.rs:588-626 (Validator::validate).
+// Reference: the predecessor's auth crate, src/lib.rs:588-626 (Validator::validate).
 func (v *Validator) Validate(ctx context.Context, tokenString string) (*Identity, error) {
 	parser := jwt.NewParser(
 		jwt.WithValidMethods([]string{"RS256"}),
@@ -468,7 +468,7 @@ func (v *Validator) Validate(ctx context.Context, tokenString string) (*Identity
 
 // identityFromClaims maps validated JWT claims to an Identity.
 //
-// Reference: mobula-auth/src/lib.rs:628-661 (Validator::identity_from_claims).
+// Reference: the predecessor's auth crate, src/lib.rs:628-661 (Validator::identity_from_claims).
 func (v *Validator) identityFromClaims(claims jwt.MapClaims) Identity {
 	groups := extractGroups(claims, v.config.GroupsClaim)
 	roles := v.config.Roles.Resolve(groups)

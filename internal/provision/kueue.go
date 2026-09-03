@@ -17,7 +17,7 @@ import (
 
 // Kueue backend for resource pools (ADR-0010-equivalent): translate
 // Bifrost pool domain types into typed Kueue custom resources. Ported from
-// mobula-provision/src/kueue.rs.
+// the predecessor's provision crate, src/kueue.rs.
 //
 // This file is pure (no Kubernetes client) so the pool->Kueue mapping is
 // exhaustively testable, mirroring [kuberay.go]'s approach. The object

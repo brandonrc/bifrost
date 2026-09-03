@@ -1,5 +1,5 @@
 // Auth middleware: deny by default, and fail closed when nothing is
-// configured to deny with. Ported from mobula-api's auth_layer.rs
+// configured to deny with. Ported from the Rust predecessor's auth_layer.rs
 // (require_auth, is_public, resolve_identity, is_jwt_shaped) and lib.rs
 // (refuse_non_loopback, the serve_with_shutdown_and_limits bind guard).
 //
@@ -85,7 +85,7 @@ type AuthState struct {
 }
 
 // configured reports whether any authentication mechanism is wired up —
-// the fail-closed rule's "is auth configured at all" test (mobula-api
+// the fail-closed rule's "is auth configured at all" test (the Rust predecessor
 // #36/#45: local auth counts exactly like an OIDC validator).
 func (s AuthState) configured() bool {
 	return s.Validator != nil || s.Local != nil
@@ -251,7 +251,7 @@ var (
 )
 
 // auditDenial logs a structured access-denial record — never token
-// contents — mirroring the shape mobula-api's auth_layer.rs/lib.rs emit
+// contents — mirroring the shape the Rust predecessor's auth_layer.rs/lib.rs emit
 // via tracing (`decision=deny reason=...`). 401s log at Info: auth_layer.rs
 // audits both 401 paths at INFO specifically so credential-stuffing /
 // token-guessing is visible in the ordinary log stream, not buried at
@@ -332,7 +332,7 @@ func RequireAuth(state AuthState) func(http.Handler) http.Handler {
 var ErrAuthNotConfigured = errors.New("no authentication is configured")
 
 // CheckBindAllowed is the bind-time fail-closed guard, ported from
-// mobula-api lib.rs's serve_with_shutdown_and_limits: refuse to bind a
+// the predecessor's lib.rs's serve_with_shutdown_and_limits: refuse to bind a
 // non-loopback address when no authentication is configured, unless
 // explicitly overridden. A caller (Wave 1 T15's CLI) invokes this before
 // opening its listener; loopback is decided from the bind IP itself,
@@ -352,7 +352,7 @@ func CheckBindAllowed(bindIP net.IP, authConfigured, allowUnauthenticated bool) 
 }
 
 // RefuseNonLoopback is the router-level fail-closed guard, ported from
-// mobula-api lib.rs's refuse_non_loopback: when installed (see
+// the predecessor's lib.rs's refuse_non_loopback: when installed (see
 // NewHandler — only when no authentication is configured at all and it
 // hasn't been explicitly overridden), it refuses any request whose peer
 // isn't loopback, so a direct http.Serve(handler) on this Handler also

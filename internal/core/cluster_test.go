@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// Ported from mobula-core/src/cluster.rs #[cfg(test)] mod tests.
+// Ported from the predecessor's core crate, src/cluster.rs #[cfg(test)] mod tests.
 
 func TestHappyPathLifecycle(t *testing.T) {
 	s := ClusterStatePending
@@ -85,7 +85,7 @@ func TestTransitionErrorIsValueType(t *testing.T) {
 	}
 }
 
-// Added (not ported from Rust): mobula-core has no unit test in cluster.rs
+// Added (not ported from Rust): the predecessor's core crate has no unit test in cluster.rs
 // for Engine's #[serde(default)] behavior, but it is documented, load-bearing
 // wire behavior (pre-multi-engine specs and clients that omit `engine` must
 // still deserialize as Ray) and is part of the frozen OpenAPI contract

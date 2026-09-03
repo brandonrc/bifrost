@@ -1,7 +1,7 @@
 // Settings API (api-v1.md §5.16): the store-backed, API-editable governance
 // policy — price sheet (cost estimates), per-project quota limits,
 // per-project time-windowed budgets, and (plan ruling D7) the profile,
-// admission and private-storage catalogs. Ported from mobula-api's settings.rs.
+// admission and private-storage catalogs. Ported from the Rust predecessor's settings.rs.
 //
 // Precedence: the `--policy` boot-time seed is the DEFAULT; the store wins
 // once a row exists (seeded lazily on first read, or written by PUT).
@@ -23,7 +23,7 @@ import (
 	"github.com/brandonrc/bifrost/internal/policy"
 )
 
-// PolicyConfig is the boot-time `--policy` seed (mobula-api's clusters.rs
+// PolicyConfig is the boot-time `--policy` seed (the Rust predecessor's clusters.rs
 // PolicyConfig) — NOT the effective policy. Handlers load the effective
 // (store-backed) policy per request via effectivePolicy; this value is
 // consulted only until the store holds a policy row.
@@ -259,7 +259,7 @@ func workerGroupsToWire(in []core.WorkerGroup) []WorkerGroup {
 
 // profilesFromWire converts an incoming catalog and validates it as a
 // unit — the edit is refused with a precise 400 rather than every later
-// create failing with a 403 nobody can act on (mobula's rule: validate at
+// create failing with a 403 nobody can act on (the Rust predecessor's rule: validate at
 // the edit). Checks: unique non-empty names; complete shape (image,
 // ray_version, head_cpu, head_memory); quantities and replica bounds that
 // parse (policy.ClusterDemand on a synthetic spec, the same check a

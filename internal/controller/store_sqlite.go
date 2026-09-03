@@ -1,6 +1,6 @@
 // SQLite-backed Store (ADR-0004: Postgres is truth in prod; SQLite serves
 // single-node dev). Uses database/sql with modernc.org/sqlite — a pure-Go
-// driver, so CGO_ENABLED=0 builds stay possible (mobula ADR carried
+// driver, so CGO_ENABLED=0 builds stay possible (predecessor ADR carried
 // forward: sqlx/rusqlite required no such constraint, but Go's C-binding
 // SQLite drivers (mattn/go-sqlite3) do, which this project avoids).
 //
@@ -9,7 +9,7 @@
 // columns (audit_events, usage_samples, local auth) are plain columns so
 // SQL WHERE clauses do the filtering instead of an application-side scan.
 //
-// Ported from mobula-controller/src/store_sqlite.rs (retired Rust
+// Ported from the predecessor's controller crate, src/store_sqlite.rs (retired Rust
 // reference; cited here only for the file:line references that make
 // porting traceable — never in user-facing strings).
 package controller

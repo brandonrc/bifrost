@@ -14,10 +14,10 @@ import (
 //
 // The canonical Store implementation (internal/controller, Task 1) lands
 // independently of this task; this fake exists purely so local_test.go
-// can port every mobula-auth/src/local.rs test without a hard dependency
+// can port every the predecessor's auth crate, src/local.rs test without a hard dependency
 // on that package's landing order. Its lockout arithmetic mirrors the
 // values Task 1's Store uses (5 failures / 300s lock — see
-// mobula-controller/src/store.rs:339-352's next_login_failure_state),
+// the predecessor's controller crate, src/store.rs:339-352's next_login_failure_state),
 // duplicated here only as test scaffolding, not a second production
 // implementation.
 type fakeLocalStore struct {
@@ -160,7 +160,7 @@ func authenticatorWithUser(t *testing.T, username, password string, role core.Lo
 	return NewLocalAuthenticator(store, 3600, 90), store
 }
 
-// --- Ported from mobula-auth/src/local.rs:355-364 ---
+// --- Ported from the predecessor's auth crate, src/local.rs:355-364 ---
 
 func TestPasswordHashRoundTripAndMalformedHashFailsClosed(t *testing.T) {
 	hash, err := HashPassword("correct horse")
@@ -182,7 +182,7 @@ func TestPasswordHashRoundTripAndMalformedHashFailsClosed(t *testing.T) {
 	}
 }
 
-// --- Ported from mobula-auth/src/local.rs:366-394 ---
+// --- Ported from the predecessor's auth crate, src/local.rs:366-394 ---
 
 func TestMintedTokenFormatAndPrefixParsing(t *testing.T) {
 	prefix, token, err := MintTokenParts()
@@ -224,7 +224,7 @@ func TestMintedTokenFormatAndPrefixParsing(t *testing.T) {
 		t.Fatal("expected rejection of non-alphanumeric prefix")
 	}
 
-	// The retired mobula scheme. Renaming the prefix was a hard cutover with no
+	// The retired predecessor scheme. Renaming the prefix was a hard cutover with no
 	// compatibility window: an old token must not parse, so it can never reach
 	// the store lookup, let alone the bcrypt compare.
 	if _, ok := TokenPrefix("mob_abcd1234_0123456789abcdef0123456789abcdef"); ok {
@@ -248,7 +248,7 @@ func TestMintedTokenFormatAndPrefixParsing(t *testing.T) {
 	}
 }
 
-// --- Ported from mobula-auth/src/local.rs:396-408 ---
+// --- Ported from the predecessor's auth crate, src/local.rs:396-408 ---
 
 func TestUnknownUserTakesTheVerifyPath(t *testing.T) {
 	auth, _ := authenticatorWithUser(t, "alice", "pw", core.LocalRoleAdmin)
@@ -270,7 +270,7 @@ func TestUnknownUserTakesTheVerifyPath(t *testing.T) {
 	}
 }
 
-// --- Ported from mobula-auth/src/local.rs:410-429 ---
+// --- Ported from the predecessor's auth crate, src/local.rs:410-429 ---
 
 func TestLockoutStateMachine(t *testing.T) {
 	auth, store := authenticatorWithUser(t, "alice", "pw", core.LocalRoleAdmin)
@@ -309,7 +309,7 @@ func TestLockoutStateMachine(t *testing.T) {
 	}
 }
 
-// --- Ported from mobula-auth/src/local.rs:431-457 ---
+// --- Ported from the predecessor's auth crate, src/local.rs:431-457 ---
 
 func TestSuccessfulLoginClearsFailuresAndIssuesAWorkingToken(t *testing.T) {
 	auth, store := authenticatorWithUser(t, "alice", "pw", core.LocalRoleOperator)
@@ -345,7 +345,7 @@ func TestSuccessfulLoginClearsFailuresAndIssuesAWorkingToken(t *testing.T) {
 	}
 }
 
-// --- Ported from mobula-auth/src/local.rs:459-471 ---
+// --- Ported from the predecessor's auth crate, src/local.rs:459-471 ---
 
 func TestDisabledUserCannotLoginAndExistingTokensDie(t *testing.T) {
 	auth, store := authenticatorWithUser(t, "alice", "pw", core.LocalRoleViewer)
@@ -365,7 +365,7 @@ func TestDisabledUserCannotLoginAndExistingTokensDie(t *testing.T) {
 	}
 }
 
-// --- Ported from mobula-auth/src/local.rs:473-493 ---
+// --- Ported from the predecessor's auth crate, src/local.rs:473-493 ---
 
 func TestIssueTokenCapsTTLAndRequiresALiveUser(t *testing.T) {
 	auth, _ := authenticatorWithUser(t, "alice", "pw", core.LocalRoleViewer)
@@ -400,7 +400,7 @@ func TestIssueTokenCapsTTLAndRequiresALiveUser(t *testing.T) {
 	}
 }
 
-// --- Ported from mobula-auth/src/local.rs:495-525 ---
+// --- Ported from the predecessor's auth crate, src/local.rs:495-525 ---
 
 func TestExpiredAndRevokedTokensAreRejected(t *testing.T) {
 	auth, store := authenticatorWithUser(t, "alice", "pw", core.LocalRoleViewer)
@@ -441,7 +441,7 @@ func TestExpiredAndRevokedTokensAreRejected(t *testing.T) {
 	}
 }
 
-// --- Ported from mobula-auth/src/local.rs:527-542 ---
+// --- Ported from the predecessor's auth crate, src/local.rs:527-542 ---
 
 func TestRoleChangesApplyLive(t *testing.T) {
 	// ADR-0011: roles are a column, resolved per request — a token minted

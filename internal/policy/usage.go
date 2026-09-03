@@ -3,7 +3,7 @@ package policy
 // Usage aggregation: turn the append-only usage-sample timeseries into
 // resource-hours and dollars. Pure functions over plain input shapes,
 // decoupled from the controller's stored sample type so this package stays
-// storage-agnostic. Ported from mobula-policy/src/usage.rs.
+// storage-agnostic. Ported from the predecessor's policy crate, src/usage.rs.
 
 import "sort"
 
@@ -70,7 +70,7 @@ func ResourceHours(samples []UsageSampleView, from, to uint64) float64 {
 }
 
 // PoolResource identifies a (pool, resource) series in WindowedResourceHours'
-// input — the same key convention as mobula_policy::usage's tuple key.
+// input — the same key convention as the predecessor's policy::usage's tuple key.
 type PoolResource struct {
 	Pool     string
 	Resource string

@@ -7,7 +7,7 @@ package controller
 // SQL WHERE clauses can do the filtering instead of an application-side
 // scan.
 //
-// Ported from mobula-controller/src/store_sqlite.rs's `SCHEMA` const
+// Ported from the predecessor's controller crate, src/store_sqlite.rs's `SCHEMA` const
 // (store_sqlite.rs:23-156). The Rust reference also carries a
 // `COLUMN_MIGRATIONS` slice of idempotent `ALTER TABLE ... ADD COLUMN`
 // statements (store_sqlite.rs:162-175) plus a one-time chain-hash backfill

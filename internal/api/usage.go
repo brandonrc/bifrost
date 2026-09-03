@@ -13,7 +13,7 @@
 // carry-in). Grouping is by (project, pool, owner); the pool-level aggregate rows
 // the Kueue path writes carry project = "" and OVERLAP the per-project
 // rows — consumers must not sum across project boundaries. Ported from
-// mobula-api's usage.rs.
+// the Rust predecessor's usage.rs.
 package api
 
 import (

@@ -6,7 +6,7 @@
 // workflow_dispatch / a weekly schedule, never on push/PR. Exercises the
 // full Provisioner contract: ensure namespace posture -> apply -> observe
 // until Running -> terminate. Ported (trimmed) from
-// mobula-provision/tests/kuberay_e2e.rs's `provisions_observes_and_terminates`.
+// the predecessor's provision crate, tests/kuberay_e2e.rs's `provisions_observes_and_terminates`.
 package live
 
 import (

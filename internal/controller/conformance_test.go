@@ -9,7 +9,7 @@ import (
 
 // TestMemoryStoreConformance is the acceptance gate for the SQLite and
 // Postgres backends (Tasks 3-4): it runs the full store-conformance
-// suite (ported from mobula-controller/tests/store.rs, see
+// suite (ported from the predecessor's controller crate, tests/store.rs, see
 // storetest's package doc comment) against NewMemoryStore. Every
 // backend must pass storetest.RunConformance the same way.
 func TestMemoryStoreConformance(t *testing.T) {

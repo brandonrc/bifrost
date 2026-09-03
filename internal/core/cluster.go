@@ -2,10 +2,10 @@
 // control plane. Bifrost orchestrates stock Ray clusters through their
 // stable seams (KubeRay CRDs, the Jobs REST API via a federating gateway,
 // Serve ingress). This package holds the provider-agnostic domain types; it
-// must never depend on a cloud SDK or Kubernetes client (see mobula
+// must never depend on a cloud SDK or Kubernetes client (see predecessor
 // ADR-0002), and it is I/O-free.
 //
-// Ported from mobula-core (Rust). Field names and enum wire values follow
+// Ported from the predecessor's core crate (Rust). Field names and enum wire values follow
 // the frozen OpenAPI contract (serde is the wire-format arbiter in the
 // Rust reference).
 package core

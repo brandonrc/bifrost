@@ -44,7 +44,7 @@
 // once if that checking is wanted later; see the task-4 report for the
 // full rationale.
 //
-// Ported from mobula-controller/src/store_postgres.rs (retired Rust
+// Ported from the predecessor's controller crate, src/store_postgres.rs (retired Rust
 // reference; cited here only for the file:line references that make
 // porting traceable — never in user-facing strings).
 package controller

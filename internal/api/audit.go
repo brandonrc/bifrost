@@ -11,7 +11,7 @@
 // GET /api/v1/audit/verify replays it. Reads (list, CSV export, verify)
 // themselves append audit_read rows. Both endpoints need Read on
 // Target::Audit — Admin's catch-all or Role::Auditor, nothing else. Ported
-// from mobula-api's audit.rs.
+// from the Rust predecessor's audit.rs.
 package api
 
 import (

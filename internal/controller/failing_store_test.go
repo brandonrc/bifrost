@@ -10,7 +10,7 @@ import (
 // FailingStore is a test-only Store that delegates to a MemoryStore but
 // fails the named methods with an injected backend error — for exercising
 // the reconcile/pool-reconcile loops' per-tick error discipline (log,
-// skip, never fatal). Ported from mobula-controller/src/store.rs's
+// skip, never fatal). Ported from the predecessor's controller crate, src/store.rs's
 // testkit::FailingStore.
 //
 // Unlike the Rust reference (which fails by matching its own snake_case

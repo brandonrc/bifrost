@@ -14,7 +14,7 @@ import (
 // the job gateway (T13/gateway.go).
 //
 // Format decision (T15, reconciled against .github/workflows/contract.yml):
-// JSON, not mobula's TOML. core.ClusterRegistry/ClusterEndpoint (T4,
+// JSON, not the Rust predecessor's TOML. core.ClusterRegistry/ClusterEndpoint (T4,
 // registry.go) already carry `json` struct tags and no `toml` ones, no
 // TOML library is vendored anywhere in go.mod, and T14 wired
 // contract.yml's fixture as `clusters.json` shaped exactly like
@@ -23,12 +23,12 @@ import (
 // wire shape (the contract) is unaffected either way: this file never
 // crosses the API.
 //
-// Steps mirror mobula-cli's load_registry: decode, log per-entry token
+// Steps mirror the predecessor CLI's load_registry: decode, log per-entry token
 // provenance (#57 — never a value), warn on a plaintext-token file that
 // is group/other readable (#4, unix only), resolve `auth_token_env`
 // indirections, then run the registry's own security validation
 // (duplicate ids/hostnames, URL scheme/SSRF posture, cleartext-token
-// refusal) — mobula-api never called ClusterRegistry::validate itself
+// refusal) — the Rust predecessor never called ClusterRegistry::validate itself
 // (it's a load-time gate), and neither does any internal/api caller in
 // this Go port, so the CLI is the one place it must run.
 func loadRegistry(path string, allowInsecureTransport bool) (*core.ClusterRegistry, error) {
@@ -62,7 +62,7 @@ func loadRegistry(path string, allowInsecureTransport bool) (*core.ClusterRegist
 	return &reg, nil
 }
 
-// registryPermissionWarning mirrors mobula-cli's registry_permission_warning:
+// registryPermissionWarning mirrors the predecessor CLI's registry_permission_warning:
 // a registry file carrying a plaintext auth_token is a bearer-equivalent
 // secret (#4) — warn (never fail) when it is readable by group/other.
 // Entries using auth_token_env hold no secret in the file and need no

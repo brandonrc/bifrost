@@ -2,7 +2,7 @@
 #
 # Two stages: a throwaway Go builder, and a UBI9-micro runtime carrying only
 # the static binary and a CA bundle. UBI9-micro is the posture docs/SPEC.md
-# records (inherited from mobula ADR-0008); it is a real, pullable Red Hat base
+# records (inherited from predecessor ADR-0008); it is a real, pullable Red Hat base
 # rather than an aspiration, so this follows it rather than substituting
 # scratch/distroless.
 #

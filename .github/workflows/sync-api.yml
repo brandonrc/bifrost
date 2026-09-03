@@ -13,7 +13,7 @@ name: Sync API contract
 #
 # Requires the repo secret BIFROST_API_PUSH_TOKEN (contents: write on
 # brandonrc/bifrost-api; GITHUB_TOKEN cannot push cross-repo). Unlike the
-# mobula template this was modelled on, a missing token is a HARD failure:
+# predecessor template this was modelled on, a missing token is a HARD failure:
 # a main push is expected to publish, and a silent skip would leave
 # bifrost-api's SDKs quietly behind the server (SPEC.md "Port governance",
 # "silent incompatibility is not admissible").

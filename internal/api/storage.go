@@ -81,7 +81,7 @@ func storageToWire(in []core.StorageEntry) []StorageEntry {
 
 // storageFromWire converts an incoming catalog and validates it as a
 // unit, refusing the edit with a precise 400 rather than letting every
-// later create fail (mobula's rule: validate at the edit). Checks: unique
+// later create fail (the Rust predecessor's rule: validate at the edit). Checks: unique
 // RFC 1123 names; an RFC 1123 secret_name; a known mode; for file mode a
 // mount_path that is absolute, unique across the catalog and neither a
 // reserved path nor under one; no mount_path for env mode; non-empty

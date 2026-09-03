@@ -21,7 +21,7 @@ import (
 
 // KubeRay backend: translate a Bifrost [core.ClusterSpec] into a typed
 // RayCluster custom resource, and map RayCluster status back to a
-// [core.ClusterState]. Ported from mobula-provision/src/kuberay.rs.
+// [core.ClusterState]. Ported from the predecessor's provision crate, src/kuberay.rs.
 //
 // This file is pure (no Kubernetes client) so the ADR-0007-equivalent
 // field-ownership rule is exhaustively testable: when Ray's in-tree

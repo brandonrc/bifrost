@@ -1,5 +1,5 @@
 // OAuth 2.0 token-acquisition flows (ADR-0003 Phase 2 port of
-// mobula-auth/src/flows.rs).
+// the predecessor's auth crate, src/flows.rs).
 //
 // Humans: Device Authorization Grant (RFC 8628) — `bifrost login` prints a
 // code, the user approves in a browser, the CLI polls for the token.
@@ -10,7 +10,7 @@
 // USER as subject, so jobs submitted through the gateway attribute to the
 // human, not the service account (#102, checkmaite-frontend#25).
 //
-// Reference: mobula-auth/src/flows.rs (retired Rust project; file:line
+// Reference: the predecessor's auth crate, src/flows.rs (retired Rust project; file:line
 // cites below are for that file, kept here only as a build note).
 package auth
 
@@ -35,7 +35,7 @@ import (
 // codebase for secret-bearing types); String redacts it too so an
 // accidental %v/%s log line can't leak it.
 //
-// Reference: mobula-auth/src/flows.rs:16-46 (DeviceAuthorization).
+// Reference: the predecessor's auth crate, src/flows.rs:16-46 (DeviceAuthorization).
 type DeviceAuthorization struct {
 	DeviceCode      string `json:"device_code"`
 	UserCode        string `json:"user_code"`
@@ -97,7 +97,7 @@ func (d DeviceAuthorization) GoString() string { return d.String() }
 // this type (mirroring flows.rs's Deserialize-only derive) and String
 // redacts both fields for safe logging.
 //
-// Reference: mobula-auth/src/flows.rs:48-72 (TokenResponse).
+// Reference: the predecessor's auth crate, src/flows.rs:48-72 (TokenResponse).
 type TokenResponse struct {
 	AccessToken  string  `json:"access_token"`
 	ExpiresIn    *uint64 `json:"expires_in,omitempty"`
@@ -214,7 +214,7 @@ func isSuccess(status int) bool { return status >= 200 && status < 300 }
 
 // DeviceAuthorize starts a device authorization (RFC 8628 §3.1).
 //
-// Reference: mobula-auth/src/flows.rs:82-98 (device_authorize).
+// Reference: the predecessor's auth crate, src/flows.rs:82-98 (device_authorize).
 func DeviceAuthorize(ctx context.Context, client *http.Client, deviceAuthorizationEndpoint, clientID, scope string) (*DeviceAuthorization, error) {
 	resp, err := postForm(ctx, client, deviceAuthorizationEndpoint, url.Values{
 		"client_id": {clientID},
@@ -278,7 +278,7 @@ type DevicePoll struct {
 // OR a 2xx body carrying no access_token, IS fatal — the IdP claims
 // success but the token is unusable.
 //
-// Reference: mobula-auth/src/flows.rs:112-159 (poll_device_token).
+// Reference: the predecessor's auth crate, src/flows.rs:112-159 (poll_device_token).
 func PollDeviceToken(ctx context.Context, client *http.Client, tokenEndpoint, clientID, deviceCode string) (DevicePoll, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenEndpoint, strings.NewReader(url.Values{
 		"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
@@ -335,7 +335,7 @@ func PollDeviceToken(ctx context.Context, client *http.Client, tokenEndpoint, cl
 // ClientCredentials performs a client-credentials grant for service
 // accounts (RFC 6749 §4.4).
 //
-// Reference: mobula-auth/src/flows.rs:162-197 (client_credentials).
+// Reference: the predecessor's auth crate, src/flows.rs:162-197 (client_credentials).
 func ClientCredentials(ctx context.Context, client *http.Client, tokenEndpoint, clientID, clientSecret string, scope *string) (*TokenResponse, error) {
 	form := url.Values{
 		"grant_type":    {"client_credentials"},
@@ -369,7 +369,7 @@ const (
 // serialize this type (it's a form-post parameter bag, never a wire DTO)
 // and String redacts both fields.
 //
-// Reference: mobula-auth/src/flows.rs:206-264 (TokenExchange).
+// Reference: the predecessor's auth crate, src/flows.rs:206-264 (TokenExchange).
 type TokenExchangeParams struct {
 	// ClientID is the requesting (trusted) service's confidential client
 	// id — the service that holds the user's gateway-verified token and
@@ -452,7 +452,7 @@ func (p TokenExchangeParams) GoString() string { return p.String() }
 // The requested_token_type is always an access token — that is what the
 // `ray job submit` bearer path and the gateway consume.
 //
-// Reference: mobula-auth/src/flows.rs:266-320 (exchange_token).
+// Reference: the predecessor's auth crate, src/flows.rs:266-320 (exchange_token).
 func ExchangeToken(ctx context.Context, client *http.Client, tokenEndpoint string, params TokenExchangeParams) (*TokenResponse, error) {
 	form := url.Values{
 		"grant_type":           {GrantTypeTokenExchange},

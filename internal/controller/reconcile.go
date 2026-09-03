@@ -7,7 +7,7 @@
 // crash — repeating an actuation with the same desired generation is a
 // no-op at the provider.
 //
-// Ported from mobula-controller/src/reconcile.rs (Rust reference, retired
+// Ported from the predecessor's controller crate, src/reconcile.rs (Rust reference, retired
 // project — cited here only where a file:line reference is genuinely
 // useful).
 //
@@ -40,7 +40,7 @@
 //
 // specChanged (store.go) deliberately skips Engine/Owner when deciding
 // whether to bump a cluster's generation — Rust parity, confirmed against
-// mobula-controller/src/store.rs's spec_changed, which skips the same two
+// the predecessor's controller crate, src/store.rs's spec_changed, which skips the same two
 // fields. Because paramsFingerprint (below) hashes the FULL spec —
 // Engine and Owner included, matching Rust's params_fingerprint, which
 // does the same over the whole ClusterSpec — an edit that changes only
@@ -544,7 +544,7 @@ func (r *Reconciler) reconcileOne(ctx context.Context, c *StoredCluster, now uin
 			// Wave 1 is Ray-only (Dask provisioning is out of scope,
 			// task-5-report.md); a future multi-engine EngineRouter
 			// (Wave 3) will dispatch this by spec.Engine the same way
-			// mobula's router.rs does.
+			// the Rust predecessor's router.rs does.
 			desiredFP := provision.OwnedSpecFingerprint(&c.Spec)
 			if observedFP != nil && *observedFP != desiredFP {
 				d := core.DriftConditionSpecDrift
@@ -738,7 +738,7 @@ func observedGone(observed *core.ClusterState) bool {
 
 // ObservedGone is observedGone's exported form, for Wave 1 T11's cluster
 // API purge guard (DELETE .../{id}?purge=true), ported from
-// mobula-controller's reconcile.rs observed_gone.
+// the predecessor controller crate's reconcile.rs observed_gone.
 func ObservedGone(observed *core.ClusterState) bool {
 	return observedGone(observed)
 }

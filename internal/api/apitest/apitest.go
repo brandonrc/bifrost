@@ -1,5 +1,5 @@
 // Package apitest provides dev-mode constructors for internal/api that
-// bypass authentication, mirroring mobula-api's `#[cfg(any(test,
+// bypass authentication, mirroring the Rust predecessor's `#[cfg(any(test,
 // feature = "test-util"))] build_router()`/`build_app()` family
 // (lib.rs): "defaults validator = None, which bypasses auth, so it must
 // never be reachable in a production build."
@@ -19,7 +19,7 @@ import (
 // local authenticator configured, and AllowUnauthenticated forced on, so
 // api.RequireAuth passes every request through and the fail-closed
 // non-loopback guard is never installed. This is the auth bypass
-// mobula-api gated behind `test-util` (#45) — for tests exercising
+// the Rust predecessor gated behind `test-util` (#45) — for tests exercising
 // handlers, not the auth middleware itself.
 func NewHandler(server api.StrictServerInterface) http.Handler {
 	return api.NewHandler(server, api.HandlerOptions{AllowUnauthenticated: true})

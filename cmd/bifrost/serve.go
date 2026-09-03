@@ -24,14 +24,14 @@ import (
 )
 
 // serveOptions holds every --serve flag. Flag names/semantics are ported
-// 1:1 from mobula-cli's Serve subcommand where mobula-cli had an
+// 1:1 from the predecessor CLI's Serve subcommand where the predecessor CLI had an
 // equivalent (bind/registry/dev-allow-unauthenticated/
 // allow-insecure-transport/reconcile-interval-secs); --store/--db replace
-// mobula's implicit --db prefix-sniffing with an explicit backend choice
+// the Rust predecessor's implicit --db prefix-sniffing with an explicit backend choice
 // (see store.go); --namespace replaces --kuberay-namespace (shorter,
 // nothing else in this CLI's surface says "kuberay"); --ray-autoscaling is
 // new (T15) — it exposes live.NewClient's autoscaling parameter (ADR-0007)
-// that mobula-cli hardcoded to false at its one call site.
+// that the predecessor CLI hardcoded to false at its one call site.
 //
 // Deliberately NOT ported this wave (see the task report): --demo (mock
 // provisioner, no Wave 1 equivalent exists), --policy (governance

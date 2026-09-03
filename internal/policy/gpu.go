@@ -22,7 +22,7 @@ package policy
 // Pure functions over plain inputs, mirroring the rest of this package: the
 // caller (the API edge) supplies the pool spec, the platform default, and
 // the tenant count — tenancy lives in allocations, which core types never
-// see. Ported from mobula-policy/src/gpu.rs.
+// see. Ported from the predecessor's policy crate, src/gpu.rs.
 
 import (
 	"fmt"

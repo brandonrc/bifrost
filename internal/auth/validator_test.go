@@ -20,14 +20,14 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// Port of the Validator-level cases from mobula-api/tests/auth.rs (a mock
+// Port of the Validator-level cases from the predecessor's api crate, tests/auth.rs (a mock
 // OIDC provider backed by a real RSA key, locally signed JWTs) — the
 // end-to-end HTTP/RBAC matrix (viewer_reads_but_cannot_submit and friends)
 // belongs to the API layer (Task 10+) and isn't ported here; the RBAC
 // wiring itself is covered by TestValidateResolvesRolesFromGroups below.
 
 // testIdp is a mock OIDC issuer serving discovery + JWKS for a fresh RSA
-// key, mirroring mobula-api/tests/auth.rs's spawn_idp().
+// key, mirroring the predecessor's api crate, tests/auth.rs's spawn_idp().
 type testIdp struct {
 	server *httptest.Server
 	issuer string
@@ -98,7 +98,7 @@ func (idp *testIdp) signRawKid(t *testing.T, kid string, claims jwt.MapClaims) s
 }
 
 // token is the common case: sub=user-123, configurable groups/aud/exp
-// offset, mirroring Idp::token in mobula-api/tests/auth.rs.
+// offset, mirroring Idp::token in the predecessor's api crate, tests/auth.rs.
 func (idp *testIdp) token(t *testing.T, groups []string, aud string, expOffset time.Duration) string {
 	t.Helper()
 	now := time.Now()
@@ -146,7 +146,7 @@ func authErrKind(t *testing.T, err error) AuthErrorKind {
 	return ae.Kind
 }
 
-// Port of http_issuer_is_refused_without_override (mobula-api/tests/auth.rs:194-212).
+// Port of http_issuer_is_refused_without_override (the predecessor's api crate, tests/auth.rs:194-212).
 func TestHTTPIssuerIsRefusedWithoutOverride(t *testing.T) {
 	idp := newTestIdp(t) // http://127.0.0.1:port
 	cfg := AuthConfig{Issuer: idp.issuer, Audience: "bifrost", GroupsClaim: "groups"}
@@ -168,7 +168,7 @@ func TestHTTPIssuerIsRefusedWithoutOverride(t *testing.T) {
 	}
 }
 
-// Port of token_without_subject_is_rejected (mobula-api/tests/auth.rs:214-235).
+// Port of token_without_subject_is_rejected (the predecessor's api crate, tests/auth.rs:214-235).
 func TestTokenWithoutSubjectIsRejected(t *testing.T) {
 	idp := newTestIdp(t)
 	v := discoverT(t, idp, RoleMappings{Developer: []string{"/ml-eng"}})
@@ -193,7 +193,7 @@ func TestTokenWithoutSubjectIsRejected(t *testing.T) {
 }
 
 // Port of tokens_missing_iss_aud_or_with_future_nbf_are_rejected
-// (mobula-api/tests/auth.rs:237-270).
+// (the predecessor's api crate, tests/auth.rs:237-270).
 func TestTokensMissingIssAudOrWithFutureNbfAreRejected(t *testing.T) {
 	idp := newTestIdp(t)
 	v := discoverT(t, idp, RoleMappings{Developer: []string{"/ml-eng"}})
@@ -231,7 +231,7 @@ func TestTokensMissingIssAudOrWithFutureNbfAreRejected(t *testing.T) {
 	})
 }
 
-// Port of garbage_and_expired_tokens_are_401 (mobula-api/tests/auth.rs:288-314),
+// Port of garbage_and_expired_tokens_are_401 (the predecessor's api crate, tests/auth.rs:288-314),
 // adapted to the Validator level (the 401 mapping is an API-layer concern).
 func TestGarbageAndExpiredTokensAreRejected(t *testing.T) {
 	idp := newTestIdp(t)
@@ -262,9 +262,9 @@ func TestGarbageAndExpiredTokensAreRejected(t *testing.T) {
 
 // Issuer cross-check (#16): a provider whose discovery document advertises
 // a different issuer than configured is rejected — Rust's hostile-provider
-// guard. Not directly exercised by mobula-api/tests/auth.rs (which relies
+// guard. Not directly exercised by the predecessor's api crate, tests/auth.rs (which relies
 // on the mock IdP always advertising its own address); ported fresh from
-// the Discover logic in mobula-auth/src/lib.rs:494-502.
+// the Discover logic in the predecessor's auth crate, src/lib.rs:494-502.
 func TestDiscoverIssuerCrossCheckRejectsMismatch(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
@@ -322,8 +322,8 @@ func TestDiscoverIssuerCrossCheckIsTrailingSlashInsensitive(t *testing.T) {
 // JWKS refresh cooldown: an unknown kid triggers at most one refresh per
 // cooldown window, and a new attempt is allowed once the window elapses.
 // Not directly present in the Rust test suite (no fake-clock harness in
-// mobula-api's tests); ported fresh from the REFRESH_COOLDOWN contract
-// documented at mobula-auth/src/lib.rs:456-458, 550-561. The cooldown is
+// the Rust predecessor's tests); ported fresh from the REFRESH_COOLDOWN contract
+// documented at the predecessor's auth crate, src/lib.rs:456-458, 550-561. The cooldown is
 // shrunk via the unexported field (same-package test) so the test doesn't
 // need to wait out the real 30s default.
 func TestJWKSRefreshIsCooldownGated(t *testing.T) {
@@ -461,7 +461,7 @@ func TestClockSkewLeeway(t *testing.T) {
 	})
 }
 
-// Port of wildcard-warning boot logging (#35), mobula-auth/src/lib.rs:504-512.
+// Port of wildcard-warning boot logging (#35), the predecessor's auth crate, src/lib.rs:504-512.
 func TestDiscoverLogsWildcardWarning(t *testing.T) {
 	idp := newTestIdp(t)
 	buf := captureLogs(t)
@@ -486,7 +486,7 @@ func TestDiscoverWithoutWildcardLogsNoWarning(t *testing.T) {
 	}
 }
 
-// Port of project_roles boot-time logging (#103), mobula-auth/src/lib.rs:514-529.
+// Port of project_roles boot-time logging (#103), the predecessor's auth crate, src/lib.rs:514-529.
 func TestDiscoverLogsProjectRolesBoot(t *testing.T) {
 	idp := newTestIdp(t)
 	buf := captureLogs(t)
@@ -516,7 +516,7 @@ func TestDiscoverWithoutProjectRolesLogsNothing(t *testing.T) {
 
 // End-to-end: Validate resolves group claims into Roles/ProjectRoles via
 // the configured mappings, and unmapped groups deny by default — the same
-// matrix mobula-api/tests/auth.rs exercises through the full HTTP app
+// matrix the predecessor's api crate, tests/auth.rs exercises through the full HTTP app
 // (developer_submits_and_unmapped_groups_are_denied,
 // operator_reads_but_cannot_submit_jobs), checked here directly against
 // the Identity the Validator produces.

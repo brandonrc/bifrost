@@ -6,7 +6,7 @@ package controller_test
 // excluded from the backend-agnostic conformance suite because they
 // exercise SQLite's own transaction-serialization strategy and
 // close+reopen durability, not Store-interface-level behavior — the
-// ported oracle is mobula-controller/tests/store.rs's
+// ported oracle is the predecessor's controller crate, tests/store.rs's
 // `sqlite_persists_across_reopen` and
 // `concurrent_distinct_upserts_do_not_collapse_generation` (retired Rust
 // reference; cited here only for traceability).
@@ -38,7 +38,7 @@ func newTestSqliteStore(t *testing.T, path string) *controller.SqliteStore {
 }
 
 // TestSqliteStoreConformance is the acceptance gate for Task 3: the full
-// store-conformance suite (ported from mobula-controller/tests/store.rs,
+// store-conformance suite (ported from the predecessor's controller crate, tests/store.rs,
 // see storetest's package doc comment) must pass against SqliteStore
 // exactly as it does against MemoryStore. Each subtest section gets its
 // own fresh temp-file database, mirroring the Rust reference's fresh

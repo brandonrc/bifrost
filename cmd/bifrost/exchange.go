@@ -62,7 +62,7 @@ func newExchangeCmd() *cobra.Command {
 }
 
 // runExchange performs an RFC 8693 token exchange, ported from
-// mobula-cli's exchange_user_token.
+// the predecessor CLI's exchange_user_token.
 func runExchange(
 	ctx context.Context,
 	issuer, clientID, clientSecret, subjectToken string,

@@ -15,7 +15,7 @@ import (
 	"github.com/brandonrc/bifrost/internal/core"
 )
 
-// Test parity: this file ports mobula-provision/src/kuberay.rs's `tests`
+// Test parity: this file ports the predecessor's provision crate, src/kuberay.rs's `tests`
 // module (kuberay.rs:1065-1872, the manifest-construction subset — see
 // task-5-report.md's parity table for the node/events/logs functions this
 // port deliberately leaves for Task 6, which does the Kubernetes reads
@@ -1027,7 +1027,7 @@ func TestTenantClustersStayIsolatedFromEachOther(t *testing.T) {
 	}
 }
 
-// kuberay.rs: no_mobula_policy_selects_namespace_wide (renamed: bifrost)
+// kuberay.rs: no_<predecessor>_policy_selects_namespace_wide (renamed: bifrost)
 func TestNoBifrostPolicySelectsNamespaceWide(t *testing.T) {
 	policies := []*networkingv1.NetworkPolicy{
 		DefaultDenyNetworkPolicy(),
@@ -1223,7 +1223,7 @@ func TestFileEntryWithoutMountPathIsNotMounted(t *testing.T) {
 // The owned fingerprint covers the storage projection: it round-trips
 // through the manifest, and a stripped mount or envFrom is drift (an
 // out-of-band edit that removes a tenant's credentials must be repaired,
-// as mobula's pod-shaping drift rule had it).
+// as the Rust predecessor's pod-shaping drift rule had it).
 func TestOwnedFingerprintCoversStorage(t *testing.T) {
 	spec := testSpec(t, wg("cpu", 0, 4, 2))
 	plain := OwnedSpecFingerprint(spec)

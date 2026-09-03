@@ -4,7 +4,7 @@
 // need Write — which Operator/Admin have and Developer does not.
 //
 // Handlers only manipulate *desired* state in the Store; the reconcile
-// engine converges the actual KubeRay resources. Ported from mobula-api's
+// engine converges the actual KubeRay resources. Ported from the Rust predecessor's
 // clusters.rs.
 package api
 
@@ -345,7 +345,7 @@ func satSub(a, b uint64) uint64 {
 
 // windowedConsumption computes a project's cumulative resource-hours over
 // [from, to], summed across pools — the budget-admission input (#77).
-// Ported from mobula-api's usage.rs windowed_consumption.
+// Ported from the Rust predecessor's usage.rs windowed_consumption.
 func (s *Server) windowedConsumption(ctx context.Context, project string, from, to uint64) (policy.ResourceMap, error) {
 	p := project
 	samples, err := s.Store.UsageSamples(ctx, &p, nil, nil, 0, to)

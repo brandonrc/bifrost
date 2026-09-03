@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// Ported from mobula-core/src/registry.rs #[cfg(test)] mod tests.
+// Ported from the predecessor's core crate, src/registry.rs #[cfg(test)] mod tests.
 
 func testRegistry() *ClusterRegistry {
 	return &ClusterRegistry{

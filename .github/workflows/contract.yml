@@ -1,16 +1,16 @@
 name: Contract
 
-# The Jobs-API drift alarm (Wave 1 T14/T16, ported from mobula's
+# The Jobs-API drift alarm (Wave 1 T14/T16, ported from the Rust predecessor's
 # contract.yml): the real Python JobSubmissionClient replayed through the
 # bifrost gateway against a live Ray head. Runs weekly (to catch new Ray
 # releases moving the surface underneath us) and on demand — deliberately
-# NOT on push/PR (unlike mobula's contract.yml, which also runs on every
+# NOT on push/PR (unlike the Rust predecessor's contract.yml, which also runs on every
 # push to crates/contract/workflow paths): a real `ray start --head` is
 # too heavy to run on every PR in this repo's CI posture, so the fast
 # ci.yml race/lint/vuln gates carry PR-time confidence and this workflow
 # is the periodic (plus on-demand) deep check.
 #
-# Matrix policy (mirrors mobula): the latest TWO Ray minor releases, each
+# Matrix policy (mirrors the Rust predecessor): the latest TWO Ray minor releases, each
 # pinned to a concrete patch, crossed with Ray token auth off/on (Ray
 # >=2.52 native token auth: head started with RAY_AUTH_MODE=token, stock
 # client presenting RAY_AUTH_TOKEN). When a new Ray minor ships, bump the
@@ -73,7 +73,7 @@ jobs:
         run: |
           echo "127.0.0.1 demo.ray.test" | sudo tee -a /etc/hosts
           # ADR-0002/registry.go's json tags are the registry file's wire
-          # format (JSON, not mobula's clusters.toml).
+          # format (JSON, not the Rust predecessor's clusters.toml).
           if [ "${{ matrix.token_auth }}" = "on" ]; then
             # The gateway holds the cluster token and presents it
             # southbound (internal/api/gateway.go, internal/api/gateway_ws.go).
@@ -94,7 +94,7 @@ jobs:
           # --allow-insecure-transport with exactly these names, and the
           # registry file really is JSON shaped like core.ClusterEndpoint's
           # json tags (id/hostname/api_base_url/auth_token) — see T15's
-          # task report for why JSON (not mobula's clusters.toml) is the
+          # task report for why JSON (not the Rust predecessor's clusters.toml) is the
           # right call. --store/--db (sqlite/postgres/memory) default to
           # "memory", which is all this gateway-only replay needs.
           go build -o ./bifrost-bin ./cmd/bifrost
@@ -116,7 +116,7 @@ jobs:
             export RAY_AUTH_TOKEN="$RAY_CONTRACT_TOKEN"
           fi
           echo "replay leg: ${{ matrix.ray }} token_auth=${{ matrix.token_auth }}"
-          # contract/jobs_client_replay.py is copied VERBATIM from mobula
+          # contract/jobs_client_replay.py is copied VERBATIM from the Rust predecessor
           # (see the file's own header) — it reads BIFROST_ADDRESS, not a
           # bifrost-specific env var name, by construction.
           python contract/jobs_client_replay.py

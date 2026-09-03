@@ -7,14 +7,14 @@
 // bcrypt-hashed at rest, looked up by prefix. Roles are a column on the user
 // row and resolved per request, so role changes apply live.
 //
-// The prefix was `mob_` until the mobula product identity was retired from
+// The prefix was `mob_` until the predecessor's product identity was retired from
 // the shipped surface. That earlier ruling kept it verbatim for wire/UX
 // compatibility; the rename was taken deliberately, with no compatibility
 // window, because the deployment was being rebuilt and every token reissued.
 // It is a hard cutover — see [TokenScheme] for why no migration is possible.
 //
 // Brute-force posture (mirroring artifact-keeper's local half, ported from
-// mobula-auth/src/local.rs):
+// the predecessor's auth crate, src/local.rs):
 //   - unknown usernames run a constant-time dummy bcrypt verify so login
 //     timing does not enumerate accounts;
 //   - 5 consecutive failures lock the account for 5 minutes (the store's
@@ -65,7 +65,7 @@ import (
 // identically — the port's wire compatibility holds all the way down to the
 // hash cost.
 //
-// Reference: mobula-auth/src/local.rs:28 (COST).
+// Reference: the predecessor's auth crate, src/local.rs:28 (COST).
 const bcryptCost = 12
 
 // dummyHash is a pre-computed bcrypt hash (cost 12) of a dummy password.
@@ -74,7 +74,7 @@ const bcryptCost = 12
 // Reused verbatim from the Rust reference: the hash format is a portable
 // standard, not implementation-specific.
 //
-// Reference: mobula-auth/src/local.rs:33 (DUMMY_HASH).
+// Reference: the predecessor's auth crate, src/local.rs:33 (DUMMY_HASH).
 const dummyHash = "$2b$12$dcjUjjUwxXC4Z9wsZzBD3.8Ec1/3r8C.XkqTVfQsgyrNz9sJGUt.K"
 
 // HashPassword hashes password with bcrypt at bcryptCost.
@@ -91,7 +91,7 @@ const dummyHash = "$2b$12$dcjUjjUwxXC4Z9wsZzBD3.8Ec1/3r8C.XkqTVfQsgyrNz9sJGUt.K"
 // port either — spawn_blocking's own thread pool is the only mechanism,
 // and Go's goroutine scheduler is that mechanism's structural equivalent).
 //
-// Reference: mobula-auth/src/local.rs:35-42 (hash_password).
+// Reference: the predecessor's auth crate, src/local.rs:35-42 (hash_password).
 func HashPassword(password string) (string, error) {
 	return HashPasswordWithCost(password, bcryptCost)
 }
@@ -134,7 +134,7 @@ const bcryptMaxPasswordBytes = 72
 // (bcryptMaxPasswordBytes — see its doc comment), returns false, not an
 // error — a corrupt row, or an oversized input, must fail closed, not 500.
 //
-// Reference: mobula-auth/src/local.rs:44-54 (verify_password).
+// Reference: the predecessor's auth crate, src/local.rs:44-54 (verify_password).
 func VerifyPassword(password, hash string) bool {
 	if len(password) > bcryptMaxPasswordBytes {
 		return false
@@ -145,12 +145,12 @@ func VerifyPassword(password, hash string) bool {
 // HashToken hashes a token for storage (same bcrypt posture as
 // passwords).
 //
-// Reference: mobula-auth/src/local.rs:118-121 (hash_token).
+// Reference: the predecessor's auth crate, src/local.rs:118-121 (hash_token).
 func HashToken(token string) (string, error) { return HashPassword(token) }
 
 // VerifyToken verifies a presented token against its stored bcrypt hash.
 //
-// Reference: mobula-auth/src/local.rs:123-126 (verify_token).
+// Reference: the predecessor's auth crate, src/local.rs:123-126 (verify_token).
 func VerifyToken(storedHash, presented string) bool { return VerifyPassword(presented, storedHash) }
 
 // TokenScheme is the literal every opaque Bifrost PAT starts with, and the
@@ -201,7 +201,7 @@ func randomAlphanumeric(n int) (string, error) {
 // chars (16 random bytes). The prefix is the store lookup key — not secret;
 // the 128-bit suffix carries the entropy.
 //
-// Reference: mobula-auth/src/local.rs:68-88 (TOKEN_PREFIX_LEN,
+// Reference: the predecessor's auth crate, src/local.rs:68-88 (TOKEN_PREFIX_LEN,
 // mint_token_parts).
 func MintTokenParts() (prefix, token string, err error) {
 	prefix, err = randomAlphanumeric(tokenPrefixLen)
@@ -220,7 +220,7 @@ func MintTokenParts() (prefix, token string, err error) {
 // characters — used by the CLI to bootstrap the first local admin
 // (ADR-0011).
 //
-// Reference: mobula-auth/src/local.rs:90-98 (random_password).
+// Reference: the predecessor's auth crate, src/local.rs:90-98 (random_password).
 func RandomPassword(length int) (string, error) {
 	return randomAlphanumeric(length)
 }
@@ -236,7 +236,7 @@ func isASCIIHexDigit(b byte) bool {
 // TokenPrefix extracts the lookup prefix from a presented token, checking
 // the scheme. ok is false for anything not shaped like a Bifrost token.
 //
-// Reference: mobula-auth/src/local.rs:100-116 (token_prefix).
+// Reference: the predecessor's auth crate, src/local.rs:100-116 (token_prefix).
 func TokenPrefix(presented string) (prefix string, ok bool) {
 	rest, hasPrefix := strings.CutPrefix(presented, TokenScheme)
 	if !hasPrefix {
@@ -278,7 +278,7 @@ func nowUnix() uint64 { return uint64(time.Now().Unix()) }
 // directly, exactly as core.LocalUserRecord/core.ApiTokenRecord require a
 // View().
 //
-// Reference: mobula-auth/src/local.rs:56-66 (MintedToken).
+// Reference: the predecessor's auth crate, src/local.rs:56-66 (MintedToken).
 type MintedToken struct {
 	// Prefix is the 8-character lookup prefix (the `<prefix>` in
 	// `bfr_<prefix>_…`).
@@ -318,7 +318,7 @@ func (t MintedToken) GoString() string { return t.String() }
 
 // LoginOutcome is what a successful login returns.
 //
-// Reference: mobula-auth/src/local.rs:128-136 (LoginOutcome).
+// Reference: the predecessor's auth crate, src/local.rs:128-136 (LoginOutcome).
 type LoginOutcome struct {
 	// Token is the plaintext token (shown once).
 	Token MintedToken
@@ -364,7 +364,7 @@ const (
 // chain to the underlying cause, mirroring Rust's thiserror source field
 // on the Backend variant.
 //
-// Reference: mobula-auth/src/local.rs:141-155 (LocalAuthError).
+// Reference: the predecessor's auth crate, src/local.rs:141-155 (LocalAuthError).
 type LocalAuthError struct {
 	Kind LocalAuthErrorKind
 	// Message carries the detail text for Backend.
@@ -400,7 +400,7 @@ func (e LocalAuthError) Unwrap() error { return e.Source }
 // doc comment for why this is a small consumer-defined interface rather
 // than a direct dependency on internal/controller.Store.
 //
-// Reference: the subset of mobula-controller::Store that local.rs's
+// Reference: the subset of the predecessor's controller::Store that local.rs's
 // LocalAuthenticator calls (get_local_user, record_login_failure/success,
 // create_api_token, get_api_token_by_prefix, touch_api_token).
 type LocalUserStore interface {
@@ -454,7 +454,7 @@ func localRoleToRole(r core.LocalRole) (role Role, ok bool) {
 // An unrecognized Role value (see localRoleToRole) leaves Roles nil —
 // deny-by-default, not a silent grant of Viewer or any other role.
 //
-// Reference: mobula-auth/src/local.rs:173-185 (identity_of).
+// Reference: the predecessor's auth crate, src/local.rs:173-185 (identity_of).
 func identityOf(user *core.LocalUserRecord) Identity {
 	username := user.Username
 	// Clone rather than alias user.Email: user is a record the caller
@@ -483,7 +483,7 @@ func identityOf(user *core.LocalUserRecord) Identity {
 // LocalAuthenticator is local username/password + PAT authentication
 // against the store (ADR-0011).
 //
-// Reference: mobula-auth/src/local.rs:189-333 (LocalAuthenticator).
+// Reference: the predecessor's auth crate, src/local.rs:189-333 (LocalAuthenticator).
 type LocalAuthenticator struct {
 	store LocalUserStore
 	// loginTTLSecs is the lifetime of a token issued by Login.
@@ -528,7 +528,7 @@ func (a *LocalAuthenticator) Store() LocalUserStore { return a.store }
 // every failure path costs one bcrypt. On success the lockout counters
 // clear and a login token (TTL loginTTLSecs) is stored.
 //
-// Reference: mobula-auth/src/local.rs:210-252 (LocalAuthenticator::login).
+// Reference: the predecessor's auth crate, src/local.rs:210-252 (LocalAuthenticator::login).
 func (a *LocalAuthenticator) Login(ctx context.Context, username, password string) (*LoginOutcome, error) {
 	user, err := a.store.GetLocalUser(ctx, username)
 	if err != nil {
@@ -581,7 +581,7 @@ func (a *LocalAuthenticator) Login(ctx context.Context, username, password strin
 // decision, not an oversight). Role is read from the user row per request
 // — role changes apply live.
 //
-// Reference: mobula-auth/src/local.rs:254-275 (authenticate_token).
+// Reference: the predecessor's auth crate, src/local.rs:254-275 (authenticate_token).
 func (a *LocalAuthenticator) AuthenticateToken(ctx context.Context, presented string) *Identity {
 	prefix, ok := TokenPrefix(presented)
 	if !ok {
@@ -615,7 +615,7 @@ func (a *LocalAuthenticator) AuthenticateToken(ctx context.Context, presented st
 // tokenMaxDays. Returns the minted token (plaintext shown once) and the
 // stored record.
 //
-// Reference: mobula-auth/src/local.rs:279-306 (issue_token).
+// Reference: the predecessor's auth crate, src/local.rs:279-306 (issue_token).
 func (a *LocalAuthenticator) IssueToken(ctx context.Context, username, label string, ttlDays uint64) (*MintedToken, *core.ApiTokenRecord, error) {
 	if ttlDays == 0 || ttlDays > a.tokenMaxDays {
 		return nil, nil, LocalAuthError{Kind: LocalAuthErrTTLTooLong}
@@ -651,7 +651,7 @@ func (a *LocalAuthenticator) IssueToken(ctx context.Context, username, label str
 // storeToken mints, hashes, and persists a token, returning the minted
 // (plaintext-bearing) value.
 //
-// Reference: mobula-auth/src/local.rs:308-332 (store_token).
+// Reference: the predecessor's auth crate, src/local.rs:308-332 (store_token).
 func (a *LocalAuthenticator) storeToken(ctx context.Context, username, label string, expiresAt uint64) (*MintedToken, error) {
 	prefix, plaintext, err := MintTokenParts()
 	if err != nil {

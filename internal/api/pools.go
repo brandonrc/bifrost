@@ -7,7 +7,7 @@
 // store is truth); the pool reconcile loop (Task 9) actuates the
 // ResourceFlavor / ClusterQueue / LocalQueue objects through Kueue and
 // records status observations back onto the pool rows. Ported from
-// mobula-api's pools.rs.
+// the Rust predecessor's pools.rs.
 package api
 
 import (

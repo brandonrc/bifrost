@@ -1,5 +1,5 @@
 // Federating gateway websocket bridge (Wave 1 T14, ADR-0002/ADR-0003).
-// Ported from mobula-api's gateway.rs's `mod ws` (gateway.rs:399-597):
+// Ported from the Rust predecessor's gateway.rs's `mod ws` (gateway.rs:399-597):
 // Ray's job log tail (`.../logs/tail`) is a websocket endpoint served by
 // the cluster's dashboard head, and the gateway bridges it end to end
 // with the same credential swap as the plain-HTTP proxy in gateway.go.

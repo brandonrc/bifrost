@@ -10,7 +10,7 @@
 // are CPU (cores), Memory (GiB, not bytes — the map keeps the old mem_gib
 // semantics under the K8s resource name), and GPU (devices).
 //
-// Ported from mobula-policy (Rust). Field names and enum wire values
+// Ported from the predecessor's policy crate (Rust). Field names and enum wire values
 // follow the frozen OpenAPI contract (serde is the wire-format arbiter in
 // the Rust reference).
 package policy

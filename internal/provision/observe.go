@@ -24,7 +24,7 @@ import (
 // (internal/provision/live) does only the I/O (get RayCluster, list
 // pods/events, fetch pod logs) and hands the raw typed results here.
 //
-// Ported from mobula-provision/src/kuberay.rs:869-1063 (node_breakdown,
+// Ported from the predecessor's provision crate, src/kuberay.rs:869-1063 (node_breakdown,
 // events_from_k8s, tail_lines and their quantity/label helpers). See each
 // function's doc comment for the typed-API divergences from the Rust
 // reference oracle, which read untyped serde_json::Value against a

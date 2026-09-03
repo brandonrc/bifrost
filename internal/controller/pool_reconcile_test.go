@@ -11,7 +11,7 @@ import (
 	"github.com/brandonrc/bifrost/internal/provision"
 )
 
-// Tests below are ported from mobula-controller/src/pool_reconcile.rs's
+// Tests below are ported from the predecessor's controller crate, src/pool_reconcile.rs's
 // #[cfg(test)] mod tests (pool_reconcile.rs:236-604).
 
 // mockPools is the Go equivalent of pool_reconcile.rs's MockPools test

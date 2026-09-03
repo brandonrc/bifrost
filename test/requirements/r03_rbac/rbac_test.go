@@ -14,7 +14,7 @@ import (
 	"github.com/brandonrc/bifrost/test/requirements/target"
 )
 
-// The permission model (internal/auth/rbac.go, ported from mobula): a
+// The permission model (internal/auth/rbac.go, ported from the Rust predecessor): a
 // developer is read-only on clusters; cluster lifecycle needs operator,
 // globally or on the project. Found the hard way on grace 2026-09-02 when
 // the first e2e pass seeded developers and every create was 403.

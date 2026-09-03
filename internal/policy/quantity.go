@@ -1,7 +1,7 @@
 package policy
 
 // Minimal Kubernetes quantity parsing for CPU, memory, GPU, and arbitrary
-// resource strings. Ported from mobula-policy/src/quantity.rs.
+// resource strings. Ported from the predecessor's policy crate, src/quantity.rs.
 
 import (
 	"fmt"

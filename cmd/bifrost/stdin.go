@@ -10,7 +10,7 @@ import (
 
 // readLineFromStdin reads one trimmed, non-empty line from stdin — for
 // piped secrets (--password-stdin, --subject-token-stdin), ported from
-// mobula-cli's read_line_from_stdin.
+// the predecessor CLI's read_line_from_stdin.
 func readLineFromStdin() (string, error) {
 	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {

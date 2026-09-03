@@ -10,7 +10,7 @@ import (
 	"github.com/brandonrc/bifrost/internal/core"
 )
 
-// Test parity: this file ports mobula-provision/src/kueue.rs's `tests`
+// Test parity: this file ports the predecessor's provision crate, src/kueue.rs's `tests`
 // module (kueue.rs:189-364) onto the typed kueue.x-k8s.io/v1beta2 structs.
 
 func testFlavor(name string, resources ...[2]string) core.FlavorSpec {

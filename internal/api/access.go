@@ -2,7 +2,7 @@
 // is "who am I" for the shell's identity chip and role-gated rendering;
 // GET /api/v1/access/roles exposes the effective group->role mappings; the
 // /api/v1/access/assignments routes are the scoped role-binding CRUD (#49).
-// Ported from mobula-api's access.rs.
+// Ported from the Rust predecessor's access.rs.
 //
 // GET /identity mounts unconditionally and needs no permission check — every
 // deployment has an identity, and in dev mode (no validator, no local auth)

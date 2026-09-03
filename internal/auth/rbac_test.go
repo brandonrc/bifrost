@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// Port of mobula-auth/src/lib.rs #[cfg(test)] mod tests (lines 707-1064).
+// Port of the predecessor's auth crate, src/lib.rs #[cfg(test)] mod tests (lines 707-1064).
 
 func testMappings() RoleMappings {
 	return RoleMappings{
@@ -505,7 +505,7 @@ func TestAuthConfigParsesProjectRoles(t *testing.T) {
 
 // Fix round 1, #5 — marshal guards. The report's original Rust analogy was
 // inverted: Rust's "no Serialize derive" on Identity/Role/PermissionType/
-// Target is a COMPILE error at every marshal site (mobula-auth/src/lib.rs
+// Target is a COMPILE error at every marshal site (the predecessor's auth crate, src/lib.rs
 // never derives Serialize for any of them); Go has no such compile-time
 // guard, so an unguarded Identity/Role/etc. would marshal SILENTLY —
 // Identity as a raw struct dump (including Email, and via ProjectRoles the

@@ -10,7 +10,7 @@ import (
 	"github.com/brandonrc/bifrost/internal/core"
 )
 
-// Ported from mobula-policy/src/lib.rs #[cfg(test)] mod tests.
+// Ported from the predecessor's policy crate, src/lib.rs #[cfg(test)] mod tests.
 
 func testSpec(min, max uint32, gpu *string) *core.ClusterSpec {
 	return &core.ClusterSpec{
