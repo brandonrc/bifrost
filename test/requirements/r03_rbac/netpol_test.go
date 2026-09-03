@@ -130,3 +130,47 @@ sys.exit(1 if open_ports else 0)
 		t.Fatalf("a non-owner pod reached the head:\n%s", res.Logs)
 	}
 }
+
+// TestKubeRayOperatorPeerReachesTheHeadDashboard: RayJob status and
+// RayService readiness both depend on the KubeRay operator polling the
+// head's dashboard (:8265) from its own namespace, which the tenant policy
+// admits by pod label from any namespace. On kind (runs 33802820554 and
+// 33808304909) the operator timed out on every poll while the submitter
+// and Bifrost's proxy reached the same dashboard, so this pins the
+// operator-shaped path down: an operator-labelled probe from the probe
+// namespace and from "kuberay" must connect; an unlabelled one must not.
+func TestKubeRayOperatorPeerReachesTheHeadDashboard(t *testing.T) {
+	tgt := target.Get(t)
+	req.Covers(t, 3, "the tenant policy admits KubeRay's operator, by pod label from any namespace, to the head dashboard that RayJob and RayService status depend on")
+	req.NeedsCapability(t, tgt, "probes")
+	pr, ok := tgt.(req.PodRunner)
+	if !ok {
+		t.Fatalf("target %s declares capability probes but is not a req.PodRunner", tgt.Name())
+	}
+	ctx := context.Background()
+	id := req.Name("oppeer")
+	fixture.MustCreate(t, tgt, "dev-a", id, "team-a")
+	fixture.WaitObserved(t, tgt, "dev-a", id, "running")
+	head := fmt.Sprintf("%s-head-svc.%s.svc:8265", id, tgt.Namespace())
+	operator := map[string]string{"app.kubernetes.io/name": "kuberay-operator"}
+	for _, ns := range []string{"", "kuberay"} {
+		res, err := pr.RunPod(ctx, req.PodSpec{
+			Namespace: ns,
+			Labels:    operator,
+			Image:     agnhost,
+			Command:   []string{"/agnhost", "connect", head, "--timeout=5s"},
+			Timeout:   2 * time.Minute,
+		})
+		if err != nil || !res.Succeeded {
+			t.Errorf("operator-labelled probe from namespace %q could not reach %s: err=%v logs=%s", ns, head, err, res.Logs)
+		}
+	}
+	res, err := pr.RunPod(ctx, req.PodSpec{
+		Image:   agnhost,
+		Command: []string{"/agnhost", "connect", head, "--timeout=5s"},
+		Timeout: 2 * time.Minute,
+	})
+	if err == nil && res.Succeeded {
+		t.Errorf("negative control: an unlabelled probe reached %s; the tenant policy is not enforcing", head)
+	}
+}

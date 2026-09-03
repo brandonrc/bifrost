@@ -45,10 +45,10 @@
       "n": 3,
       "title": "RBAC for model serving and cluster access; direct Ray Serve/dashboard/Jobs/GCS access blocked",
       "priority": "HIGH",
-      "tests": 13,
+      "tests": 14,
       "passed": 10,
       "failed": 0,
-      "skipped": 3,
+      "skipped": 4,
       "not_yet_built": 0,
       "status": "partial",
       "test_names": [
@@ -61,6 +61,7 @@
         "TestEveryNonPublicOperationRequiresAToken",
         "TestEveryRequiredFieldIsEnforced",
         "TestHeadJobsApiOnlyThroughGateway",
+        "TestKubeRayOperatorPeerReachesTheHeadDashboard",
         "TestLogoutInvalidatesTheSession",
         "TestPermissionMatrix",
         "TestPersonalAccessTokenLifecycle",
@@ -69,7 +70,8 @@
       "skip_reasons": [
         "bifrost-pack chart not checked out (set PACK_CHART)",
         "target inproc lacks capability probes",
-        "target inproc lacks capability calico"
+        "target inproc lacks capability calico",
+        "target inproc lacks capability probes"
       ]
     },
     {
