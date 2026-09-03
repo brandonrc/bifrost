@@ -31,11 +31,15 @@ func (s *Server) ListRegistry(ctx context.Context, _ ListRegistryRequestObject) 
 		all := s.Registry.Snapshot()
 		entries = make([]RegistryEntryView, 0, len(all))
 		for _, c := range all {
+			source := RegistryEntryViewSource(c.Source)
+			target := RegistryEntryViewTarget(c.Target)
 			entries = append(entries, RegistryEntryView{
 				Id:         c.Id.String(),
 				Hostname:   c.Hostname,
 				ApiBaseUrl: c.ApiBaseUrl,
 				TokenSet:   c.AuthToken != nil,
+				Source:     &source,
+				Target:     &target,
 			})
 		}
 	}

@@ -97,11 +97,18 @@ func (s AuthState) configured() bool {
 // server requests (unlike axum, which keeps it in the header map), so
 // this reads r.Host rather than r.Header.Get("Host").
 func hostIsCluster(registry *core.ClusterRegistry, r *http.Request) bool {
-	if registry == nil {
-		return false
-	}
-	_, ok := registry.ByHostname(r.Host)
+	_, ok := clusterForRequest(registry, r)
 	return ok
+}
+
+// clusterForRequest resolves r's Host to its registry entry (hostIsCluster
+// with the entry kept: the gateway authorization below needs its Project
+// and Target).
+func clusterForRequest(registry *core.ClusterRegistry, r *http.Request) (core.ClusterEndpoint, bool) {
+	if registry == nil {
+		return core.ClusterEndpoint{}, false
+	}
+	return registry.ByHostname(r.Host)
 }
 
 // requiredGatewayPermission mirrors auth_layer.rs's required_permission:
@@ -119,9 +126,18 @@ func requiredGatewayPermission(method string) auth.PermissionType {
 	}
 }
 
-// authorizeGatewayRequest enforces the Target::Job permission cluster-
-// host traffic requires. identity is always non-nil here — RequireAuth
-// only reaches this call after successfully resolving one.
+// authorizeGatewayRequest enforces the permission cluster-host traffic
+// requires. identity is always non-nil here — RequireAuth only reaches
+// this call after successfully resolving one.
+//
+// The target follows the entry: a `jobs` entry fronts a Ray Jobs API
+// (auth.TargetJob), a `serve` entry a Serve application (auth.TargetService).
+// A static entry (Project "") keeps the original global check; a dynamic
+// entry registered by the reconciler for a project's cluster, job or
+// service is authorized within that project — the same rule the project's
+// own routes apply (authorizeInProject): a caller narrowed to other
+// projects is refused, then global roles or a covering assignment must
+// grant the verb's permission.
 //
 // Deliberately NOT authz.go's shared Authorize helper: auth_layer.rs's
 // require_auth doesn't call its own authorize() either, because this
@@ -131,9 +147,13 @@ func requiredGatewayPermission(method string) auth.PermissionType {
 // authorization call has no comparable use for them. EmitAudit,
 // PermissionStr, TargetStr, grantedRoleStrs, and ErrForbidden ARE reused
 // from authz.go — only the denial's field population differs.
-func authorizeGatewayRequest(store controller.Store, identity *auth.Identity, r *http.Request) error {
+func authorizeGatewayRequest(store controller.Store, identity *auth.Identity, r *http.Request, endpoint core.ClusterEndpoint) error {
 	required := requiredGatewayPermission(r.Method)
-	if identity.Permits(required, auth.TargetJob) {
+	target := auth.TargetJob
+	if endpoint.Target == core.RegistryTargetServe {
+		target = auth.TargetService
+	}
+	if gatewayPermitted(r.Context(), store, identity, required, target, endpoint.Project) {
 		return nil
 	}
 	subject := identity.Subject
@@ -149,10 +169,24 @@ func authorizeGatewayRequest(store controller.Store, identity *auth.Identity, r 
 		Method:       &method,
 		Path:         &path,
 		Status:       &status,
-		Required:     &core.AuditRequired{Action: PermissionStr(required), Target: TargetStr(auth.TargetJob)},
+		Required:     &core.AuditRequired{Action: PermissionStr(required), Target: TargetStr(target)},
 		GrantedRoles: grantedRoleStrs(identity.Roles),
 	})
 	return ErrForbidden
+}
+
+// gatewayPermitted is the decision half of authorizeGatewayRequest: the
+// global check for a static entry (project ""), the project-scoped rule
+// (see authorizeInProject) for a dynamic one.
+func gatewayPermitted(ctx context.Context, store controller.Store, identity *auth.Identity, required auth.PermissionType, target auth.Target, project string) bool {
+	if project == "" {
+		return identity.Permits(required, target)
+	}
+	assignments, narrowed := readScope(ctx, store, identity)
+	if len(narrowed) > 0 && !containsString(narrowed, project) {
+		return false
+	}
+	return identity.Permits(required, target) || identity.PermitsScoped(required, target, assignments, project)
 }
 
 func bearerToken(r *http.Request) (string, bool) {
@@ -258,7 +292,7 @@ func RequireAuth(state AuthState) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			onClusterHost := hostIsCluster(state.Registry, r)
+			endpoint, onClusterHost := clusterForRequest(state.Registry, r)
 			if !onClusterHost && isPublic(r.URL.Path) {
 				next.ServeHTTP(w, r)
 				return
@@ -279,7 +313,7 @@ func RequireAuth(state AuthState) func(http.Handler) http.Handler {
 				return
 			}
 			if onClusterHost {
-				if err := authorizeGatewayRequest(state.Store, identity, r); err != nil {
+				if err := authorizeGatewayRequest(state.Store, identity, r, endpoint); err != nil {
 					WriteError(w, r, err)
 					return
 				}

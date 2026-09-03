@@ -128,8 +128,10 @@ func workerGroupsFromWire(in []WorkerGroup) ([]core.WorkerGroup, error) {
 }
 
 // clusterView converts a StoredCluster (+ the effective price sheet, when
-// configured) into the wire ClusterView.
-func clusterView(c *controller.StoredCluster, prices policy.PriceSheet) ClusterView {
+// configured) into the wire ClusterView. queue is the project's Kueue
+// LocalQueue (nil = none) and gatewayURL the cluster's gateway address
+// while registered (nil = not routable) — both resolved by the caller.
+func clusterView(c *controller.StoredCluster, prices policy.PriceSheet, queue, gatewayURL *string) ClusterView {
 	view := ClusterView{
 		Id:                 c.ID.String(),
 		Generation:         int64(c.Generation),
@@ -138,6 +140,9 @@ func clusterView(c *controller.StoredCluster, prices policy.PriceSheet) ClusterV
 		Project:            c.Spec.Project,
 		Engine:             c.Spec.Engine.String(),
 		RayVersion:         c.Spec.RayVersion,
+		Owner:              c.Spec.Owner,
+		Queue:              queue,
+		GatewayUrl:         gatewayURL,
 	}
 	if c.ObservedState != nil {
 		v := c.ObservedState.String()
@@ -238,6 +243,7 @@ func (s *Server) ListClusters(ctx context.Context, _ ListClustersRequestObject) 
 		return nil, wrapStoreErr(err)
 	}
 	views := make([]ClusterView, 0, len(clusters))
+	queues := map[string]*string{}
 	for i := range clusters {
 		c := &clusters[i]
 		var visible bool
@@ -250,7 +256,12 @@ func (s *Server) ListClusters(ctx context.Context, _ ListClustersRequestObject) 
 			visible = true
 		}
 		if visible {
-			views = append(views, clusterView(c, prices))
+			q, ok := queues[c.Spec.Project]
+			if !ok {
+				q = s.queueNameForProject(ctx, c.Spec.Project)
+				queues[c.Spec.Project] = q
+			}
+			views = append(views, clusterView(c, prices, q, s.gatewayURLFor(c.ID)))
 		}
 	}
 	return ListClusters200JSONResponse(views), nil
@@ -280,7 +291,7 @@ func (s *Server) GetCluster(ctx context.Context, req GetClusterRequestObject) (G
 	if err != nil {
 		return nil, wrapStoreErr(err)
 	}
-	return GetCluster200JSONResponse(clusterView(c, prices)), nil
+	return GetCluster200JSONResponse(clusterView(c, prices, s.queueNameForProject(ctx, c.Spec.Project), s.gatewayURLFor(c.ID))), nil
 }
 
 // withProjectAdmitLock serializes concurrent same-project cluster creates
