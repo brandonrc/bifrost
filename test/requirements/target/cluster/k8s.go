@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -181,9 +182,16 @@ func (h *k8sHandle) postflight(ctx context.Context, prefix, probeNS string) erro
 		}
 	}
 
+	// The sweep gets its own deadline so a slow teardown reports what is
+	// still there instead of inheriting a parent context that has already
+	// expired ("left objects behind: [] (context deadline exceeded)" was the
+	// symptom: the list was empty only because the last poll never ran).
+	sweepCtx, cancel := context.WithTimeout(context.Background(), postflightBudget())
+	defer cancel()
 	var left []string
-	err := wait.PollUntilContextTimeout(ctx, 3*time.Second, 3*time.Minute, true, func(ctx context.Context) (bool, error) {
-		left = left[:0]
+	err := wait.PollUntilContextTimeout(sweepCtx, 3*time.Second, postflightBudget(), true, func(ctx context.Context) (bool, error) {
+		seen := left[:0:0]
+		left = seen
 		var rcs rayv1.RayClusterList
 		if err := h.raw.List(ctx, &rcs, ctrlclient.InNamespace(h.ns)); err != nil {
 			return false, err
@@ -254,6 +262,18 @@ func (h *k8sHandle) postflight(ctx context.Context, prefix, probeNS string) erro
 		return fmt.Errorf("run %s left objects behind: %v (%v)", req.RunID(), left, err)
 	}
 	return nil
+}
+
+// postflightBudget is how long the sweep waits for Kubernetes to show the
+// run's objects gone: REQ_POSTFLIGHT_TIMEOUT (Go duration), default 4m — a
+// RayService teardown on a small runner can take most of that.
+func postflightBudget() time.Duration {
+	if v := os.Getenv("REQ_POSTFLIGHT_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+	}
+	return 4 * time.Minute
 }
 
 func uniq(a, b string) []string {

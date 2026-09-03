@@ -112,6 +112,10 @@ jobs:
           REQ_CONTROL_PLANE_SELECTOR: app.kubernetes.io/name=bifrost-pack
           # Head-only clusters: see fixture.WorkerReplicas.
           REQ_WORKER_REPLICAS: "0"
+          # A 4-vCPU runner starts a RayService or RayJob slowly; give convergence
+          # and teardown room before calling it a failure.
+          REQ_EVENTUALLY_TIMEOUT: 10m
+          REQ_POSTFLIGHT_TIMEOUT: 6m
           # What manifests.yaml configured, so r07 can assert it.
           REQ_ADMISSION_DISALLOWED_IMAGE: docker.io/library/nginx:1.27
           REQ_ADMISSION_MAX_WORKERS: "4"
