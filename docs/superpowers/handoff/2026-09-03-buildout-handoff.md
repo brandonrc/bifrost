@@ -22,6 +22,12 @@ happened the orchestrator finished the package from the agent's worktree (noted 
 | #13 | G private-storage | Catalogued Secret names (env/file) resolved at create, projected as `envFrom.secretRef` / read-only Secret volumes; metadata-only existence check; fingerprint covers stripped mounts; storetest tie-order flake fixed. **Row 12 built.** Finished from the agent's worktree by the orchestrator. |
 | #14 | P pack tests | Chart-side assertions for the gateway flags and RayJob/Secret RBAC (skip without `PACK_CHART`). |
 | #15 | ci grace lane | grace target declares `gateway`; the lane reaches the API through the in-cluster Service so Host-routed gateway tests work. |
+| #16 | job-storage | `SubmitJob` resolves `spec.storage` through the same catalog as clusters (B/G gap); `TestJobStorageReferenceIsResolvedLikeAClusters`. |
+| #17 | J rename | Every "mobula" mention outside a short allowlist renamed to bifrost; guard test `internal/legacy_identity_test.go` + `scripts/legacy-identity-sweep.sh` keep it that way. |
+| #18 | grace-lane fixes | `contract.Load` falls back to `GET /api/v1/openapi.json`; job-history submitter compared via `fixture.Subject`; matrix rows calibrated (`delete_assignment` needs `?role&scope`, `list_registry`/`list_roles` admin-only). |
+| #19 | kind shards | l3-kind split into 4 shards (rbac-selfserve, jobs-cleanup, serving, governance) + a report job merging `shards/*/l3.json`; per-ref concurrency; 14 stale runs cancelled. |
+| #20 | kind robustness | postflight gets its own budget (`REQ_POSTFLIGHT_TIMEOUT`), `REQ_EVENTUALLY_TIMEOUT` (kind 10m/6m), quota test limit `1+workers`. |
+| #21 | matrix cleanup + tester guide | `TestPermissionMatrix` reaps the cluster/service/job it creates (the leak behind every "left objects behind: [] (deadline)" cascade on grace and kind); postflight reports the last complete snapshot; `docs/testing/requirements-verification-guide.md`. |
 
 bifrost-pack (local, no remote): main fast-forwarded to `effe718` — `gateway.*`, `services.perProject`, RBAC for
 `rayjobs` and a metadata-only `secrets get`, plus the SSO/runtime-config and admission/metering values from the day
