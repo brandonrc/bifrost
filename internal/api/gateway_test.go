@@ -293,7 +293,7 @@ func TestAuthorizeGatewayRequestDenialAuditsMethodAndPath(t *testing.T) {
 	identity := &auth.Identity{Subject: "auditor-1", Roles: []auth.Role{auth.RoleAuditor}}
 	req := httptest.NewRequest(http.MethodGet, "/api/jobs/", nil)
 
-	err := authorizeGatewayRequest(nil, identity, req)
+	err := authorizeGatewayRequest(nil, identity, req, core.ClusterEndpoint{})
 	if err != ErrForbidden {
 		t.Fatalf("err = %v, want ErrForbidden", err)
 	}
@@ -313,7 +313,7 @@ func TestAuthorizeGatewayRequestDenialAuditsMethodAndPath(t *testing.T) {
 func TestAuthorizeGatewayRequestAllowsPermittedRole(t *testing.T) {
 	identity := &auth.Identity{Subject: "dev-1", Roles: []auth.Role{auth.RoleDeveloper}}
 	req := httptest.NewRequest(http.MethodPost, "/api/jobs/", nil)
-	if err := authorizeGatewayRequest(nil, identity, req); err != nil {
+	if err := authorizeGatewayRequest(nil, identity, req, core.ClusterEndpoint{}); err != nil {
 		t.Fatalf("developer POST to the job surface: unexpected error %v", err)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -350,4 +351,142 @@ func DeleteService(t req.T, tgt req.Target, principal, name string) int {
 		t.Fatalf("delete service %s as %s: %v", name, principal, err)
 	}
 	return resp.StatusCode()
+}
+
+// --- Ephemeral jobs (requirement 5) ---
+
+// SubmitJobBody is the canonical minimal job: entrypoint on RayImage() with
+// the contract's default head shape and no workers (the requirement is
+// about the cluster's lifetime, not its size). ttl is
+// ttl_seconds_after_finished; nil = the server default.
+func SubmitJobBody(id, project, entrypoint string, ttl *int32) client.SubmitJobJSONRequestBody {
+	ttlJSON := "null"
+	if ttl != nil {
+		ttlJSON = fmt.Sprint(*ttl)
+	}
+	raw := fmt.Sprintf(`{"id":%q,"spec":{"project":%q,"entrypoint":%q,"image":%q,"ttl_seconds_after_finished":%s}}`,
+		id, project, entrypoint, RayImage(), ttlJSON)
+	var body client.SubmitJobJSONRequestBody
+	if err := json.Unmarshal([]byte(raw), &body); err != nil {
+		panic("fixture: SubmitJobBody: " + err.Error())
+	}
+	return body
+}
+
+// SubmitJob posts body as principal and returns the status and body. A
+// job the server accepted is deleted as admin at test cleanup — the
+// contract has no list operation for jobs, so a target's Cleanup cannot
+// find them by run prefix the way it finds clusters.
+func SubmitJob(t req.T, tgt req.Target, principal string, body client.SubmitJobJSONRequestBody) (int, []byte) {
+	t.Helper()
+	resp, err := tgt.As(principal).API().SubmitJobWithResponse(context.Background(), body)
+	if err != nil {
+		t.Fatalf("submit job as %s: %v", principal, err)
+	}
+	if resp.StatusCode() == http.StatusCreated {
+		var view struct {
+			Id string `json:"id"`
+		}
+		_ = json.Unmarshal(resp.Body, &view)
+		t.Cleanup(func() {
+			_, _ = tgt.As("admin").API().DeleteJobWithResponse(context.Background(), view.Id, nil)
+		})
+	}
+	return resp.StatusCode(), resp.Body
+}
+
+// MustSubmitJob is SubmitJob asserting 201 and returning the view.
+func MustSubmitJob(t req.T, tgt req.Target, principal string, body client.SubmitJobJSONRequestBody) map[string]any {
+	t.Helper()
+	st, b := SubmitJob(t, tgt, principal, body)
+	if st != http.StatusCreated {
+		t.Fatalf("submit job as %s = %d %s, want 201", principal, st, b)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("submit job: unmarshal: %v", err)
+	}
+	return m
+}
+
+// GetJob fetches a job view as principal. view is nil unless status is 200.
+func GetJob(t req.T, tgt req.Target, principal, id string) (int, map[string]any) {
+	t.Helper()
+	resp, err := tgt.As(principal).API().GetJobWithResponse(context.Background(), id)
+	if err != nil {
+		t.Fatalf("get job %s as %s: %v", id, principal, err)
+	}
+	if resp.StatusCode() != http.StatusOK {
+		return resp.StatusCode(), nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(resp.Body, &m); err != nil {
+		t.Fatalf("get job %s: unmarshal: %v", id, err)
+	}
+	return resp.StatusCode(), m
+}
+
+// WaitJob polls until the job's Ray status is want (PENDING | RUNNING |
+// SUCCEEDED | FAILED | STOPPED) and returns that view. A job that reaches a
+// different terminal status first fails the test at once — waiting out the
+// lane budget for a SUCCEEDED that can no longer come hides the real
+// failure.
+func WaitJob(t req.T, tgt req.Target, principal, id, want string) map[string]any {
+	t.Helper()
+	var view map[string]any
+	req.Eventually(t, tgt, func() (bool, string) {
+		st, v := GetJob(t, tgt, principal, id)
+		if st != http.StatusOK {
+			return false, fmt.Sprintf("get=%d", st)
+		}
+		status, _ := v["status"].(string)
+		dep, _ := v["deployment_status"].(string)
+		if status == want {
+			view = v
+			return true, status
+		}
+		if status != want && (status == "SUCCEEDED" || status == "FAILED" || status == "STOPPED") {
+			msg, _ := v["message"].(string)
+			t.Fatalf("job %s ended %s (%s) while waiting for %s: %s", id, status, dep, want, msg)
+		}
+		return false, fmt.Sprintf("status=%q deployment_status=%q", status, dep)
+	})
+	return view
+}
+
+// GatewayHost is the Host header a client presents to reach a registered
+// cluster or job through the gateway, read from the view's gateway_url
+// (the server is the authority on its own hostname scheme). "" while the
+// view carries none.
+func GatewayHost(view map[string]any) string {
+	raw, _ := view["gateway_url"].(string)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return u.Host
+}
+
+// GatewayRequest sends GET path to the target's API address with Host set
+// to host — the way a caller reaches a dynamically registered cluster
+// without DNS for the gateway domain — authenticated as principal ("anon"
+// = no bearer). Returns the status and body.
+func GatewayRequest(t req.T, tgt req.Target, principal, host, path string) (int, []byte) {
+	t.Helper()
+	r, err := http.NewRequestWithContext(context.Background(), http.MethodGet, tgt.BaseURL()+path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Host = host
+	tgt.As(principal).Authorize(r)
+	resp, err := HTTPClient(tgt).Do(r)
+	if err != nil {
+		t.Fatalf("gateway GET %s%s: %v", host, path, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, b
 }

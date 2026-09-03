@@ -228,9 +228,8 @@ func buildServer(ctx context.Context, opts serveOptions) (*builtServer, error) {
 		liveClient = c
 		cfg.Provisioner = c
 		cfg.ServiceProvisioner = live.NewServiceClient(c)
-		// cfg.JobProvisioner stays nil until the live RayJob client lands
-		// (requirement 5); the flags above are already parsed and carried.
-		slog.Info("cluster lifecycle controller + services enabled", "namespace", opts.Namespace)
+		cfg.JobProvisioner = live.NewJobClient(c)
+		slog.Info("cluster lifecycle controller + services + jobs enabled", "namespace", opts.Namespace)
 	}
 
 	a, err := app.New(cfg)
