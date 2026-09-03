@@ -83,3 +83,27 @@ func mustNotContain(t testing.TB, hay, needle, why string) {
 		t.Errorf("rendered chart contains %q — %s", needle, why)
 	}
 }
+
+// indexAfter returns the index just past the first occurrence of needle, or -1.
+func indexAfter(s, needle string) int {
+	i := strings.Index(s, needle)
+	if i < 0 {
+		return -1
+	}
+	return i + len(needle)
+}
+
+// ruleAfter returns the rendered text from idx to the next rule or block
+// boundary ("- apiGroups" or "---"), i.e. the rest of one RBAC rule.
+func ruleAfter(s string, idx int) string {
+	rest := s[idx:]
+	end := len(rest)
+	for _, stop := range []string{"- apiGroups", "\n---"} {
+		if j := strings.Index(rest, stop); j >= 0 && j < end {
+			end = j
+		}
+	}
+	return rest[:end]
+}
+
+func containsVerb(rule, verb string) bool { return strings.Contains(rule, verb) }
