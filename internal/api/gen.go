@@ -1,6 +1,9 @@
 // Package api is the generated + hand-written HTTP surface of the Bifrost
-// control plane, spec-first from the frozen contract vendored at
-// openapi.json (github.com/brandonrc/bifrost-api).
+// control plane, spec-first from the contract at openapi.json — which is
+// the source of truth for the Bifrost REST API (ADR-0006). It is edited
+// here, in the same PR as the handler that implements the change, and
+// published downstream to github.com/brandonrc/bifrost-api (the SDK
+// pipeline's home) by .github/workflows/sync-api.yml on every push to main.
 //
 // zz_generated_api.go is produced by oapi-codegen from openapi.json and
 // MUST NOT be hand-edited; regenerate with `go generate ./internal/api/...`
