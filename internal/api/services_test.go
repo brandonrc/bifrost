@@ -366,6 +366,9 @@ func TestDeployService_NoIdentityStampsNoOwner(t *testing.T) {
 // the view names the serving queue.
 func TestDeployService_ServingAllocationCapsProjectDemand(t *testing.T) {
 	s := newServiceServer(t)
+	// These tests are about the serving ledger, not the one-service-per-project
+	// rule (requirement 2), which would otherwise refuse the second name first.
+	s.ServicesPerProject = 10
 	ctx := context.Background()
 	serving := core.PoolPurposeServing
 	if _, err := s.Store.UpsertPool(ctx, "serve", core.PoolSpec{Name: "serve", Cohort: "c", FairSharingWeight: 1, Purpose: serving,
@@ -426,6 +429,9 @@ func TestDeployService_ServingAllocationCapsProjectDemand(t *testing.T) {
 // queue-free, and an allocation with an empty nominal declares no limit.
 func TestDeployService_ComputeAllocationIsNotAServingLimit(t *testing.T) {
 	s := newServiceServer(t)
+	// These tests are about the serving ledger, not the one-service-per-project
+	// rule (requirement 2), which would otherwise refuse the second name first.
+	s.ServicesPerProject = 10
 	ctx := context.Background()
 	if _, err := s.Store.UpsertPool(ctx, "cpu", core.PoolSpec{Name: "cpu", Cohort: "c", FairSharingWeight: 1,
 		Flavors: []core.FlavorSpec{{Name: "f", Resources: map[string]string{"cpu": "64"}}}}); err != nil {
