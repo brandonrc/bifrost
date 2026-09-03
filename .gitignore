@@ -10,3 +10,4 @@ dist/
 .l3/
 l3-*.json
 l3-report/
+l3-*.log

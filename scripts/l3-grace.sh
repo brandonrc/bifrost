@@ -21,7 +21,11 @@ RUN_ID=${REQ_RUN_ID:-t$(printf '%x' "$(date +%s)")}
 MODULE=$(go list -m)
 REMOTE_DIR="work/l3-$RUN_ID"
 KUBECONFIG_REMOTE=/var/snap/microk8s/current/credentials/client.config
-BIFROST_URL_REMOTE=${BIFROST_URL:-https://bifrost-api.100-89-230-107.sslip.io}
+# The in-cluster Service, not the sslip host: the gateway tests send a Host
+# header naming <cluster>.<gateway domain>, and Envoy has no wildcard route for
+# that yet — the Service answers by Host directly. Resolved on grace below.
+BIFROST_URL_REMOTE=${BIFROST_URL:-in-cluster}
+GATEWAY_DOMAIN=${REQ_GATEWAY_DOMAIN:-ray.100-89-230-107.sslip.io}
 
 # Requirement packages only (r??_*). The generated contract negatives are
 # L2-verified and deliberately send malformed bodies; against a deployment
@@ -43,10 +47,13 @@ scp -q .l3/bin/*.test "$HOST:~/$REMOTE_DIR/"
 
 # Run every binary in one ssh session; the admin password never leaves grace.
 remote_status=0
-ssh -o BatchMode=yes "$HOST" bash -s -- "$REMOTE_DIR" "$RUN_ID" "$BIFROST_URL_REMOTE" "$KUBECONFIG_REMOTE" <<'REMOTE' || remote_status=$?
+ssh -o BatchMode=yes "$HOST" bash -s -- "$REMOTE_DIR" "$RUN_ID" "$BIFROST_URL_REMOTE" "$KUBECONFIG_REMOTE" "$GATEWAY_DOMAIN" <<'REMOTE' || remote_status=$?
 set -u
-DIR=$1 RUN_ID=$2 URL=$3 KC=$4
+DIR=$1 RUN_ID=$2 URL=$3 KC=$4 GW=$5
 export KUBECONFIG=$KC
+if [ "$URL" = in-cluster ]; then
+  URL="http://$(kubectl -n bifrost get svc bifrost -o jsonpath='{.spec.clusterIP}'):8484"
+fi
 PW=$(kubectl -n bifrost get secret bifrost-local-admin -o jsonpath='{.data.BIFROST_LOCAL_ADMIN_PASSWORD}' | base64 -d)
 cd ~/$DIR
 status=0
@@ -56,6 +63,7 @@ for t in *.test; do
   REQ_TARGET=grace REQ_RUN_ID=$RUN_ID BIFROST_URL=$URL BIFROST_INSECURE_TLS=1 \
   BIFROST_ADMIN_PASSWORD=$PW REQ_CONTROL_PLANE_SELECTOR=app.kubernetes.io/name=bifrost-pack \
   REQ_NOWGET_RAY_IMAGE=${REQ_NOWGET_RAY_IMAGE:-localhost:32000/checkmaite-api:2.56.0-r1} \
+  REQ_GATEWAY_DOMAIN=$GW \
     ./$t -test.v=test2json -test.timeout 40m > "$name.out" 2>&1 || status=1
   tail -3 "$name.out" >&2
 done
