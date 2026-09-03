@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"net/http"
 	"net/url"
 	"os"
@@ -71,6 +72,15 @@ func HeadCPU() string {
 		return v
 	}
 	return "1"
+}
+
+// HeadCPUValue is HeadCPU() as a number, for quota arithmetic.
+func HeadCPUValue() float64 {
+	q, err := resource.ParseQuantity(HeadCPU())
+	if err != nil {
+		panic("fixture: REQ_HEAD_CPU is not a quantity: " + err.Error())
+	}
+	return q.AsApproximateFloat64()
 }
 
 // ClusterBody is the canonical minimal cluster: one 1-CPU head and
