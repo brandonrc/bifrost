@@ -58,6 +58,40 @@ func TestPermissionMatrix(t *testing.T) {
 		_, _ = adminAPI.DeleteAssignmentWithResponse(context.Background(), userName, nil)
 	})
 
+	// The scoped operations dev-a is allowed to perform really run:
+	// create_cluster, deploy_service and submit_job leave a RayCluster, a
+	// RayService and a RayJob behind. Reap them here (LIFO: before the
+	// target's postflight), otherwise postflight waits its whole budget for
+	// the run's objects to disappear on every later test in the package.
+	mxCluster, mxService, mxJob := req.Name("mxc"), req.Name("mxsvc"), req.Name("mxj2")
+	t.Cleanup(func() {
+		bg := context.Background()
+		_ = fixture.Delete(t, tgt, "admin", mxCluster)
+		_ = fixture.DeleteService(t, tgt, "admin", mxService)
+		_, _ = adminAPI.DeleteJobWithResponse(bg, mxJob, nil)
+		_, _ = adminAPI.DeletePoolWithResponse(bg, req.Name("mxp2"))
+		_, _ = adminAPI.UpdateUserWithResponse(bg, req.Name("mxu2"), disableBody())
+		fixture.WaitGone(t, tgt, "admin", mxCluster)
+		req.Eventually(t, tgt, func() (bool, string) {
+			st, v := fixture.GetService(t, tgt, "admin", mxService)
+			if st == http.StatusNotFound || v["state"] == "terminated" {
+				return true, "service gone"
+			}
+			return false, fmt.Sprintf("service %s get=%d state=%v", mxService, st, v["state"])
+		})
+		req.Eventually(t, tgt, func() (bool, string) {
+			// delete_job tombstones the record as STOPPED (the reconciler
+			// removes the RayJob; purge is a separate step), so a terminal
+			// status is "gone" from the API's point of view.
+			st, v := fixture.GetJob(t, tgt, "admin", mxJob)
+			status, _ := v["status"].(string)
+			if st == http.StatusNotFound || status == "STOPPED" || status == "SUCCEEDED" || status == "FAILED" {
+				return true, "job " + status
+			}
+			return false, fmt.Sprintf("job %s get=%d status=%q", mxJob, st, status)
+		})
+	})
+
 	// Path parameters: the contract's placeholders → this run's objects.
 	// `{id}` is a cluster id on /clusters/... and a job id on /jobs/...; the
 	// job is never created (submit_job is destructive-if-allowed), so its
