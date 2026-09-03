@@ -37,10 +37,11 @@ func TestProjectQuotaRefusesOverCommit(t *testing.T) {
 	// A limit map must name every resource a spec requests: a resource absent
 	// from the limit reads as zero and refuses everything. cpu admits exactly
 	// one canonical cluster; memory is generous so cpu is the binding one.
-	// Exactly one canonical cluster's cpu (head 1 + one per worker) fits; a
+	// Exactly one canonical cluster's cpu (head + one per worker) fits; a
 	// second of any size exceeds it. On head-only lanes (REQ_WORKER_REPLICAS=0)
-	// that is a limit of 1, not 3 — the old "+1" let two head-only clusters in.
-	set(fmt.Sprintf(`{%q:{"cpu":%d,"memory":1024}}`, project, 1+fixture.WorkerReplicas()))
+	// that is the head alone — the old "+1" let two head-only clusters in, and
+	// a fixed "1" refused even the first once REQ_HEAD_CPU grew the head.
+	set(fmt.Sprintf(`{%q:{"cpu":%g,"memory":1024}}`, project, fixture.HeadCPUValue()+float64(fixture.WorkerReplicas())))
 	t.Cleanup(func() {
 		var body client.UpdatePolicyJSONRequestBody
 		_ = json.Unmarshal([]byte(`{"quotas":{}}`), &body)
