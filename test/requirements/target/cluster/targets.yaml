@@ -19,4 +19,8 @@ grace:
   namespace: bifrost
   probeNamespace: jupyter
   contexts: ["^microk8s$", "^grace$"]
-  capabilities: [calico, probes, restart, consumers]
+  # gateway: grace's deployment sets --gateway-domain (bifrost-sso-values.yaml);
+  # there is no wildcard HTTPRoute yet, so the lane must reach the API through
+  # the in-cluster Service (BIFROST_URL=http://<clusterIP>:8484), which honours
+  # the Host header — scripts/l3-grace.sh does exactly that.
+  capabilities: [calico, probes, restart, consumers, gateway]
