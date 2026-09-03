@@ -74,9 +74,31 @@ func flavorsFromWire(in []FlavorSpec) []core.FlavorSpec {
 	return out
 }
 
+// poolPurposeFromWire converts the wire PoolPurpose enum (#4) to
+// core.PoolPurpose: absent = compute (every pre-#4 pool); anything but the
+// two known values is a client error (the generated type is a bare
+// string, so ingress validation happens here, as for gpu_sharing).
+func poolPurposeFromWire(w *PoolPurpose) (core.PoolPurpose, error) {
+	if w == nil {
+		return core.DefaultPoolPurpose, nil
+	}
+	switch *w {
+	case Compute:
+		return core.PoolPurposeCompute, nil
+	case Serving:
+		return core.PoolPurposeServing, nil
+	default:
+		return "", badRequest(fmt.Sprintf("invalid purpose %q (want compute or serving)", string(*w)))
+	}
+}
+
 // poolSpecFromWire converts the generated wire PoolSpec into core.PoolSpec.
 func poolSpecFromWire(w *PoolSpec) (core.PoolSpec, error) {
 	gpuSharing, err := gpuSharingFromWire(w.GpuSharing)
+	if err != nil {
+		return core.PoolSpec{}, err
+	}
+	purpose, err := poolPurposeFromWire(w.Purpose)
 	if err != nil {
 		return core.PoolSpec{}, err
 	}
@@ -87,6 +109,7 @@ func poolSpecFromWire(w *PoolSpec) (core.PoolSpec, error) {
 		FairSharingWeight: w.FairSharingWeight,
 		Elastic:           w.Elastic,
 		GpuSharing:        gpuSharing,
+		Purpose:           purpose,
 	}, nil
 }
 
@@ -140,6 +163,10 @@ func poolView(p *controller.StoredPool) PoolView {
 		v := GpuSharing(*p.Spec.GpuSharing)
 		gpuSharing = &v
 	}
+	// purpose is always written (compute when the stored spec predates
+	// #4) so a client can tell serving pools apart without knowing the
+	// default.
+	purpose := PoolPurpose(p.Spec.Purpose.OrDefault())
 	flavors := make([]FlavorSpec, len(p.Spec.Flavors))
 	for i, f := range p.Spec.Flavors {
 		taints := make([]TaintSpec, len(f.Taints))
@@ -157,6 +184,7 @@ func poolView(p *controller.StoredPool) PoolView {
 		FairSharingWeight: p.Spec.FairSharingWeight,
 		Elastic:           p.Spec.Elastic,
 		GpuSharing:        gpuSharing,
+		Purpose:           &purpose,
 		TotalNominal:      totalNominal,
 	}
 }

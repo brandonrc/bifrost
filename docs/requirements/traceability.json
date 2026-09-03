@@ -75,16 +75,20 @@
       "n": 4,
       "title": "Serving in separate resource pool from compute clusters",
       "priority": "CRITICAL",
-      "tests": 1,
-      "passed": 0,
+      "tests": 3,
+      "passed": 2,
       "failed": 0,
-      "skipped": 0,
-      "not_yet_built": 1,
-      "status": "not-yet-built",
+      "skipped": 1,
+      "not_yet_built": 0,
+      "status": "partial",
       "test_names": [
-        "TestServingHasItsOwnPool"
+        "TestComputeClusterCannotConsumeServingQuota",
+        "TestServingHasItsOwnPool",
+        "TestServingLocalQueueExists"
       ],
-      "skip_reasons": null
+      "skip_reasons": [
+        "target inproc has no Kubernetes"
+      ]
     },
     {
       "n": 5,

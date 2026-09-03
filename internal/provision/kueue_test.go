@@ -199,7 +199,7 @@ func TestQuotaLandsUnderTheRightFlavorAndResource(t *testing.T) {
 
 // kueue.rs: local_queue_points_at_pool_in_project_namespace
 func TestLocalQueuePointsAtPoolInProjectNamespace(t *testing.T) {
-	lq := LocalQueueFor(testAlloc())
+	lq := LocalQueueFor(testAlloc(), core.PoolPurposeCompute)
 	if lq.APIVersion != KueueAPIVersion || lq.Kind != "LocalQueue" {
 		t.Fatalf("apiVersion/kind = %q/%q", lq.APIVersion, lq.Kind)
 	}
@@ -219,7 +219,7 @@ func TestLocalQueuePointsAtPoolInProjectNamespace(t *testing.T) {
 
 // kueue.rs: local_queue_annotations_record_allocation_limits
 func TestLocalQueueAnnotationsRecordAllocationLimits(t *testing.T) {
-	lq := LocalQueueFor(testAlloc())
+	lq := LocalQueueFor(testAlloc(), core.PoolPurposeCompute)
 	var nominal map[string]string
 	if err := json.Unmarshal([]byte(lq.Annotations[NominalAnnotation]), &nominal); err != nil {
 		t.Fatalf("unmarshal nominal: %v", err)
@@ -293,5 +293,24 @@ func TestClusterQueueForRejectsNonFiniteFairSharingWeight(t *testing.T) {
 	p.FairSharingWeight = math.NaN()
 	if _, err := ClusterQueueFor(p); err == nil {
 		t.Fatalf("expected an error for a non-finite fair_sharing_weight")
+	}
+}
+
+// #4: a serving pool's LocalQueue is `<project>-serving` so a project
+// allocated to both a compute and a serving pool in one namespace gets two
+// queues; compute keeps the bare project name (no migration).
+func TestLocalQueueNameByPurpose(t *testing.T) {
+	if got := LocalQueueName("proj-a", core.PoolPurposeCompute); got != "proj-a" {
+		t.Fatalf("compute name = %q", got)
+	}
+	if got := LocalQueueName("proj-a", ""); got != "proj-a" {
+		t.Fatalf("zero-value purpose name = %q, want compute's", got)
+	}
+	if got := LocalQueueName("proj-a", core.PoolPurposeServing); got != "proj-a-serving" {
+		t.Fatalf("serving name = %q", got)
+	}
+	lq := LocalQueueFor(testAlloc(), core.PoolPurposeServing)
+	if lq.Name != "proj-a-serving" || lq.Namespace != "proj-a" || string(lq.Spec.ClusterQueue) != "gpu-pool" {
+		t.Fatalf("serving LocalQueue = %s/%s -> %s", lq.Namespace, lq.Name, lq.Spec.ClusterQueue)
 	}
 }

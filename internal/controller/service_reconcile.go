@@ -158,7 +158,16 @@ func (r *ServiceReconciler) reconcileOne(ctx context.Context, svc *StoredService
 			return ServiceActionNone, err
 		}
 		r.deregister(svc.Name)
-		if err := r.provisioner.Deploy(ctx, svc.Name, &svc.Spec, svc.Generation); err != nil {
+		// The serving-pool queue (requirement 4) is re-derived from the
+		// store on every apply, like the cluster reconciler's compute
+		// queue: an allocation added after the deploy is picked up by the
+		// next roll, and a project with no serving allocation deploys
+		// queue-free.
+		queue, err := QueueAssignmentForProjectPurpose(ctx, r.store, svc.Spec.Project, core.PoolPurposeServing)
+		if err != nil {
+			return ServiceActionNone, err
+		}
+		if err := r.provisioner.Deploy(ctx, svc.Name, &svc.Spec, svc.Generation, queue); err != nil {
 			return ServiceActionNone, wrapProvisionErr(err)
 		}
 		return ServiceActionDeploy, nil

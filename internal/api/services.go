@@ -19,12 +19,44 @@ package api
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/brandonrc/bifrost/internal/auth"
 	"github.com/brandonrc/bifrost/internal/controller"
 	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/brandonrc/bifrost/internal/policy"
 )
+
+// servingQueues memoizes the per-project serving-queue lookup for one
+// request: ListServices resolves it once per project, not once per row.
+// A lookup failure is logged and read as queue-free — the view is a read
+// path, and the reconciler re-derives the queue at apply time anyway.
+type servingQueues struct {
+	store     controller.Store
+	byProject map[string]*string
+}
+
+func (s *Server) newServingQueues() *servingQueues {
+	return &servingQueues{store: s.Store, byProject: map[string]*string{}}
+}
+
+func (q *servingQueues) queue(ctx context.Context, project string) *string {
+	if v, ok := q.byProject[project]; ok {
+		return v
+	}
+	var out *string
+	qa, err := controller.QueueAssignmentForProjectPurpose(ctx, q.store, project, core.PoolPurposeServing)
+	switch {
+	case err != nil:
+		slog.Warn("api: serving queue lookup failed", "project", project, "error", err)
+	case qa != nil:
+		name := qa.QueueName
+		out = &name
+	}
+	q.byProject[project] = out
+	return out
+}
 
 // serviceView merges a stored service with its last observation into the
 // wire ServiceView. State is the observed state, except that a service
@@ -33,9 +65,14 @@ import (
 // reaps); a row nothing has observed yet is provisioning. gateway_url is
 // filled only while the reconciler has the service registered as a
 // `serve` endpoint and an external base is configured. queue is the
-// serving-pool package's (requirement 4) — nil until it lands.
-func (s *Server) serviceView(svc *controller.StoredService) ServiceView {
+// project's serving-pool LocalQueue (requirement 4) — the queue the
+// reconciler stamps on the RayService — or null when the project has no
+// serving allocation.
+func (s *Server) serviceView(ctx context.Context, svc *controller.StoredService, queues *servingQueues) ServiceView {
 	view := ServiceView{Name: svc.Name, Project: svc.Spec.Project, Owner: svc.Owner, Url: svc.ObservedURL}
+	if svc.Desired != controller.DesiredTerminated {
+		view.Queue = queues.queue(ctx, svc.Spec.Project)
+	}
 	switch {
 	case svc.Desired == controller.DesiredTerminated:
 		view.State = core.ClusterStateTerminating.String()
@@ -75,6 +112,7 @@ func (s *Server) ListServices(ctx context.Context, _ ListServicesRequestObject) 
 		return nil, wrapStoreErr(err)
 	}
 	views := make([]ServiceView, 0, len(rows))
+	queues := s.newServingQueues()
 	for i := range rows {
 		svc := &rows[i]
 		var visible bool
@@ -87,7 +125,7 @@ func (s *Server) ListServices(ctx context.Context, _ ListServicesRequestObject) 
 			visible = true
 		}
 		if visible {
-			views = append(views, s.serviceView(svc))
+			views = append(views, s.serviceView(ctx, svc, queues))
 		}
 	}
 	return ListServices200JSONResponse(views), nil
@@ -111,7 +149,7 @@ func (s *Server) GetService(ctx context.Context, req GetServiceRequestObject) (G
 	if err := AuthorizeScoped(ctx, s.Store, identity, auth.Read, auth.TargetService, svc.Spec.Project); err != nil {
 		return nil, err
 	}
-	return GetService200JSONResponse(s.serviceView(svc)), nil
+	return GetService200JSONResponse(s.serviceView(ctx, svc, s.newServingQueues())), nil
 }
 
 // serviceSpecFromWire converts the generated wire ServiceSpec into
@@ -202,10 +240,16 @@ func (s *Server) DeployService(ctx context.Context, req DeployServiceRequestObje
 		return nil, err
 	}
 
-	// HOOK(serving-pool, package E): admit against the project's serving
-	// allocation (policy.ServiceDemand vs the serving pool's nominal), 409
-	// on over-commit, and resolve the serving QueueAssignment the
-	// reconciler stamps on the RayService (view.queue).
+	// Serving-pool admission (requirement 4): the project's serving
+	// allocation nominal is its serving limit; a deploy whose demand plus
+	// the project's other live services would exceed it is 409. Compute
+	// clusters admit against the policy's quotas and the compute pool and
+	// never read this ledger — compute cannot consume serving quota. The
+	// serving QueueAssignment itself is re-derived by the reconciler at
+	// apply time and by serviceView on read (like clusters).
+	if err := s.admitServing(ctx, identity, name, &spec); err != nil {
+		return nil, err
+	}
 
 	if identity != nil && identity.Subject != "" {
 		// Owner is server-stamped from the authenticated identity; the
@@ -227,41 +271,93 @@ func (s *Server) DeployService(ctx context.Context, req DeployServiceRequestObje
 	return DeployService202Response{}, nil
 }
 
-// enforceServicesPerProject is the one-service-per-project rule (ruling
-// D8): counting the project's live rows (desired running or suspended)
-// under other names, a deploy that would exceed s.ServicesPerProject is
-// 409 and audited as a deny (reason service_limit), the same shape as
-// denyCreate's quota refusals for clusters. A cap of zero or less means
-// the default of one (app.New sets it, but a bare Server must not be
-// wide open).
-func (s *Server) enforceServicesPerProject(ctx context.Context, identity *auth.Identity, name, project string) error {
-	limit := s.ServicesPerProject
-	if limit <= 0 {
-		limit = 1
+// servingAllocation is the project's allocation in a serving pool — the
+// first one found, the same allocation whose LocalQueue the service is
+// admitted through — or nil when the project has none.
+func (s *Server) servingAllocation(ctx context.Context, project string) (*core.AllocationSpec, error) {
+	pools, err := s.Store.ListPools(ctx)
+	if err != nil {
+		return nil, wrapStoreErr(err)
 	}
+	for i := range pools {
+		if pools[i].Spec.Purpose.OrDefault() != core.PoolPurposeServing {
+			continue
+		}
+		allocs, err := s.Store.ListAllocations(ctx, pools[i].Name)
+		if err != nil {
+			return nil, wrapStoreErr(err)
+		}
+		for j := range allocs {
+			if allocs[j].Project == project {
+				return &allocs[j], nil
+			}
+		}
+	}
+	return nil, nil //nolint:nilnil // no serving allocation is a normal answer, not an error
+}
+
+// admitServing enforces the serving ledger (requirement 4): the project's
+// serving allocation `nominal` map, read as a ResourceMap, caps the summed
+// ServiceDemand of the project's live (desired running) services plus this
+// deploy. A same-name redeploy replaces its own row, so the existing row
+// is excluded from in-use. No serving allocation, or one with an empty
+// nominal (no limit declared), admits. Over-commit is 409 with an audit
+// deny (`serving_quota_exceeded`).
+func (s *Server) admitServing(ctx context.Context, identity *auth.Identity, name string, spec *core.ServiceSpec) error {
+	alloc, err := s.servingAllocation(ctx, spec.Project)
+	if err != nil {
+		return err
+	}
+	if alloc == nil || len(alloc.Nominal) == 0 {
+		return nil
+	}
+	limit, lerr := policy.LimitFromQuantities(alloc.Nominal)
+	if lerr != nil {
+		// An allocation the administrator wrote that cannot be read as a
+		// limit must fail closed: admitting would make the cap silently
+		// void.
+		slog.Error("api: serving allocation nominal does not parse; refusing deploy", "pool", alloc.Pool, "project", spec.Project, "error", lerr)
+		return HTTPError{Status: http.StatusInternalServerError, Code: "internal_error",
+			Message: "serving quota accounting failed: the project's serving allocation has an invalid nominal"}
+	}
+	requested, derr := policy.ServiceDemand(spec)
+	if derr != nil {
+		return badRequest("invalid spec: " + derr.Error())
+	}
+
+	unlock := s.withProjectAdmitLock("serving/" + spec.Project)
+	defer unlock()
 	rows, err := s.Store.ListServices(ctx)
 	if err != nil {
 		return wrapStoreErr(err)
 	}
-	var live []string
+	inUse := policy.ResourceMap{}
 	for i := range rows {
 		row := &rows[i]
-		if row.Spec.Project != project || row.Name == name || row.Desired == controller.DesiredTerminated {
+		if row.Spec.Project != spec.Project || row.Name == name || row.Desired != controller.DesiredRunning {
 			continue
 		}
-		live = append(live, row.Name)
+		// A stored spec that fails to parse must FAIL CLOSED — zeroing
+		// would undercount usage and admit past the limit.
+		m, derr := policy.ServiceDemand(&row.Spec)
+		if derr != nil {
+			slog.Error("api: unparseable stored service spec blocks serving quota accounting", "service", row.Name, "error", derr)
+			return HTTPError{Status: http.StatusInternalServerError, Code: "internal_error",
+				Message: "serving quota accounting failed: an existing service has an invalid spec"}
+		}
+		inUse = inUse.Add(m)
 	}
-	if len(live) < limit {
-		return nil
+	if aerr := policy.AdmitQuota(spec.Project, limit, inUse, requested); aerr != nil {
+		reason := "serving_quota_exceeded"
+		action := "deploy_service"
+		status := uint16(http.StatusConflict)
+		EmitAudit(ctx, s.Store, &core.AuditEvent{
+			Ts: controller.NowUnix(), Subject: identitySubject(identity),
+			Decision: core.AuditDecisionDeny, Reason: &reason, Action: &action, Cluster: &name, Status: &status,
+		})
+		return conflict("serving quota: " + aerr.Error())
 	}
-	reason := "service_limit"
-	action := "deploy_service"
-	status := uint16(http.StatusConflict)
-	EmitAudit(ctx, s.Store, &core.AuditEvent{
-		Ts: controller.NowUnix(), Subject: identitySubject(identity),
-		Decision: core.AuditDecisionDeny, Reason: &reason, Action: &action, Cluster: &name, Status: &status,
-	})
-	return conflict(fmt.Sprintf("project %s already has service %s; redeploy it under that name or delete it first", project, live[0]))
+	return nil
 }
 
 // DeleteService requests teardown: desired → terminated; the reconciler
@@ -302,4 +398,41 @@ func (s *Server) DeleteService(ctx context.Context, req DeleteServiceRequestObje
 		Decision: core.AuditDecisionAllow, Action: &action, Cluster: &name, Status: &status,
 	})
 	return DeleteService202Response{}, nil
+}
+
+// enforceServicesPerProject is the one-service-per-project rule (ruling
+// D8): counting the project's live rows (desired running or suspended)
+// under other names, a deploy that would exceed s.ServicesPerProject is
+// 409 and audited as a deny (reason service_limit), the same shape as
+// denyCreate's quota refusals for clusters. A cap of zero or less means
+// the default of one (app.New sets it, but a bare Server must not be
+// wide open).
+func (s *Server) enforceServicesPerProject(ctx context.Context, identity *auth.Identity, name, project string) error {
+	limit := s.ServicesPerProject
+	if limit <= 0 {
+		limit = 1
+	}
+	rows, err := s.Store.ListServices(ctx)
+	if err != nil {
+		return wrapStoreErr(err)
+	}
+	var live []string
+	for i := range rows {
+		row := &rows[i]
+		if row.Spec.Project != project || row.Name == name || row.Desired == controller.DesiredTerminated {
+			continue
+		}
+		live = append(live, row.Name)
+	}
+	if len(live) < limit {
+		return nil
+	}
+	reason := "service_limit"
+	action := "deploy_service"
+	status := uint16(http.StatusConflict)
+	EmitAudit(ctx, s.Store, &core.AuditEvent{
+		Ts: controller.NowUnix(), Subject: identitySubject(identity),
+		Decision: core.AuditDecisionDeny, Reason: &reason, Action: &action, Cluster: &name, Status: &status,
+	})
+	return conflict(fmt.Sprintf("project %s already has service %s; redeploy it under that name or delete it first", project, live[0]))
 }

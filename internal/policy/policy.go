@@ -233,6 +233,51 @@ func ClusterDemand(spec *core.ClusterSpec) (min, max ResourceMap, err error) {
 	return min, max, nil
 }
 
+// ServiceDemand is the resource demand of a Ray Serve service (requirement
+// 4): head + worker_replicas × worker shape. Serve worker replicas are
+// fixed (autoscaling of Serve deployments is Ray Serve's own concern, not
+// a replica range on the cluster), so there is no min/max split — one map,
+// admitted as-is against the project's serving allocation. Emits exactly
+// the keys cpu and memory (GiB); services carry no GPU shape today.
+func ServiceDemand(spec *core.ServiceSpec) (ResourceMap, error) {
+	head, err := headUnit(&core.ClusterSpec{HeadCpu: spec.HeadCpu, HeadMemory: spec.HeadMemory})
+	if err != nil {
+		return nil, err
+	}
+	worker, err := workerUnit(&core.WorkerGroup{Cpu: spec.WorkerCpu, Memory: spec.WorkerMemory})
+	if err != nil {
+		return nil, err
+	}
+	return head.Add(worker.Scale(float64(spec.WorkerReplicas))), nil
+}
+
+// LimitFromQuantities converts a quantity-string map — an allocation's
+// nominal (`{"cpu":"4","memory":"16Gi"}`) — into a ResourceMap in the
+// units ClusterDemand/ServiceDemand emit: cpu in cores, memory in GiB, any
+// other resource name as a plain count via ParseQuantity. A map that
+// parses is directly usable as AdmitQuota's limit; like every limit map, a
+// resource it does not name reads as zero and refuses any demand for it.
+func LimitFromQuantities(m map[string]string) (ResourceMap, error) {
+	out := make(ResourceMap, len(m))
+	for k, v := range m {
+		var q float64
+		var err error
+		switch k {
+		case CPU:
+			q, err = CPUCores(v)
+		case Memory:
+			q, err = MemGiB(v)
+		default:
+			q, err = ParseQuantity(v)
+		}
+		if err != nil {
+			return nil, QuantityError{Msg: fmt.Sprintf("%s: %s", k, err.Error())}
+		}
+		out[k] = q
+	}
+	return out, nil
+}
+
 // PriceSheet is the hourly price per unit of each resource key (pluggable;
 // a static sheet is fine at v0). Deserialized from config as a flat map of
 // resource name -> price: cpu = $/core-hour, memory = $/GiB-hour,

@@ -425,6 +425,13 @@ func (s *Server) CreateCluster(ctx context.Context, req CreateClusterRequestObje
 	}
 	for i := range pools {
 		p := &pools[i]
+		// A cluster is admitted through a compute pool only (requirement
+		// 4): a serving pool's sharing mode and tenancy are irrelevant to
+		// it, and reading them here would let the serving allocation
+		// shape compute admission.
+		if p.Spec.Purpose.OrDefault() != core.PoolPurposeCompute {
+			continue
+		}
 		allocs, err := s.Store.ListAllocations(ctx, p.Name)
 		if err != nil {
 			return nil, wrapStoreErr(err)

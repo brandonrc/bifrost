@@ -36,7 +36,7 @@ func (fakeProvisioner) List(context.Context) ([]provision.ObservedCluster, error
 // services_test.go and the burn-down smoke test.
 type fakeServiceProvisioner struct{}
 
-func (fakeServiceProvisioner) Deploy(context.Context, string, *core.ServiceSpec, uint64) error {
+func (fakeServiceProvisioner) Deploy(context.Context, string, *core.ServiceSpec, uint64, *provision.QueueAssignment) error {
 	return nil
 }
 func (fakeServiceProvisioner) Get(context.Context, string) (*provision.ObservedService, error) {

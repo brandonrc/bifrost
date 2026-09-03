@@ -126,14 +126,19 @@ func derefOr(p *string, def string) string {
 	return *p
 }
 
-// poolFor is the pool the project is allocated to, or "" when it has no
-// allocation — the same lookup create's quota admission makes.
+// poolFor is the compute pool the project is allocated to, or "" when it
+// has no compute allocation — the same lookup the cluster queue assignment
+// makes. Serving pools are skipped: clusters and jobs are never admitted
+// there (requirement 4), so their usage must not be attributed to one.
 func (r *Reconciler) poolFor(ctx context.Context, project string) string {
 	pools, err := r.store.ListPools(ctx)
 	if err != nil {
 		return ""
 	}
 	for i := range pools {
+		if pools[i].Spec.Purpose.OrDefault() != core.PoolPurposeCompute {
+			continue
+		}
 		allocs, err := r.store.ListAllocations(ctx, pools[i].Name)
 		if err != nil {
 			continue

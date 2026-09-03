@@ -155,13 +155,15 @@ const (
 	PoolSpecErrDuplicateFlavor
 	PoolSpecErrInvalidFairSharingWeight
 	PoolSpecErrFlavor
+	PoolSpecErrInvalidPurpose
 )
 
 // PoolSpecError reports why a PoolSpec failed validation.
 type PoolSpecError struct {
 	Kind PoolSpecErrorKind
 	// Name holds the offending pool/cohort/flavor name for InvalidName,
-	// InvalidCohort, and DuplicateFlavor.
+	// InvalidCohort, and DuplicateFlavor, and the offending purpose for
+	// InvalidPurpose.
 	Name string
 	// Flavor and Source are set for the Flavor variant: the flavor whose
 	// validation failed, and why.
@@ -183,6 +185,8 @@ func (e PoolSpecError) Error() string {
 		return "fair_sharing_weight must be a finite, non-negative number"
 	case PoolSpecErrFlavor:
 		return fmt.Sprintf("flavor %s: %s", e.Flavor, e.Source.Error())
+	case PoolSpecErrInvalidPurpose:
+		return fmt.Sprintf("purpose %q is not one of compute, serving", e.Name)
 	}
 	return "pool spec error"
 }
@@ -198,12 +202,16 @@ func (e PoolSpecError) Unwrap() error {
 	return e.Source
 }
 
-// Validate checks a PoolSpec's shape: names, flavor uniqueness, and the
-// fair-sharing weight. It never validates quantity syntax (that is the
+// Validate checks a PoolSpec's shape: names, flavor uniqueness, the
+// fair-sharing weight, and the purpose (#4: compute | serving; the zero
+// value reads as compute). It never validates quantity syntax (that is the
 // policy package's job).
 func (p *PoolSpec) Validate() error {
 	if !IsK8sName(p.Name) {
 		return PoolSpecError{Kind: PoolSpecErrInvalidName, Name: p.Name}
+	}
+	if !p.Purpose.OrDefault().isValid() {
+		return PoolSpecError{Kind: PoolSpecErrInvalidPurpose, Name: string(p.Purpose)}
 	}
 	if !IsK8sName(p.Cohort) {
 		return PoolSpecError{Kind: PoolSpecErrInvalidCohort, Name: p.Cohort}

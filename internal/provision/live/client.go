@@ -507,7 +507,7 @@ func (c *Client) ClusterLogs(ctx context.Context, id core.ClusterId, pod *string
 
 // Deploy server-side-applies the RayService for name. Ported from
 // kuberay_client.rs:640-664.
-func (s *ServiceClient) Deploy(ctx context.Context, name string, spec *core.ServiceSpec, generation uint64) error {
+func (s *ServiceClient) Deploy(ctx context.Context, name string, spec *core.ServiceSpec, generation uint64, queue *provision.QueueAssignment) error {
 	// Service pods carry the same cluster-id label (RayServiceFor's pod
 	// templates stamp it), so they get the same per-cluster allow —
 	// including across a RayService zero-downtime upgrade, where old and
@@ -517,9 +517,9 @@ func (s *ServiceClient) Deploy(ctx context.Context, name string, spec *core.Serv
 	if err := s.ensureClusterAllow(ctx, name, nil); err != nil {
 		return err
 	}
-	// Queue assignment (serving pool, requirement 4) is nil until the
-	// serving-pool package threads the project's serving LocalQueue here.
-	manifest, err := provision.RayServiceFor(name, spec, generation, nil)
+	// queue is the project's serving LocalQueue (requirement 4), resolved
+	// by the service reconciler from the serving pool's allocation.
+	manifest, err := provision.RayServiceFor(name, spec, generation, queue)
 	if err != nil {
 		return provision.ProvisionError{Kind: provision.ProvisionErrBackend, Message: err.Error()}
 	}
@@ -611,7 +611,7 @@ func (c *Client) ApplyPool(ctx context.Context, spec *core.PoolSpec, allocs []co
 		return wrapErr(err)
 	}
 	for i := range allocs {
-		lq := provision.LocalQueueFor(&allocs[i])
+		lq := provision.LocalQueueFor(&allocs[i], spec.Purpose)
 		if err := applySSA(ctx, c.c, lq, client.FieldOwner(provision.FieldManager)); err != nil {
 			return wrapErr(err)
 		}

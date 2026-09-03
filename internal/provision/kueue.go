@@ -195,18 +195,33 @@ func marshalLimits(m map[string]string) string {
 	return string(b)
 }
 
+// LocalQueueName is the LocalQueue a project's allocation in a pool of
+// the given purpose is named (#4). Compute keeps the bare project name
+// (every pre-#4 LocalQueue, so no migration); serving appends "-serving"
+// so a project allocated to both a compute and a serving pool in one
+// namespace gets two distinct queues instead of one object fought over by
+// two pools' applies. Clusters and jobs are admitted through the compute
+// queue, RayServices through the serving one.
+func LocalQueueName(project string, purpose core.PoolPurpose) string {
+	if purpose.OrDefault() == core.PoolPurposeServing {
+		return project + "-serving"
+	}
+	return project
+}
+
 // LocalQueueFor builds a project allocation's LocalQueue: the namespaced
-// tenant handle pointing at the pool's ClusterQueue. The reserved
+// tenant handle pointing at the pool's ClusterQueue, named per
+// [LocalQueueName] for the owning pool's purpose. The reserved
 // nominal/borrowing/lending limits are recorded as JSON annotations (see
 // module docs above) — these are opaque record-keeping, not typed Kueue
 // spec fields, so they stay JSON-encoded strings exactly as in the Rust
 // reference rather than becoming typed resource.Quantity values. Ported
 // from kueue.rs:169-187.
-func LocalQueueFor(alloc *core.AllocationSpec) *kueuev1beta2.LocalQueue {
+func LocalQueueFor(alloc *core.AllocationSpec, purpose core.PoolPurpose) *kueuev1beta2.LocalQueue {
 	return &kueuev1beta2.LocalQueue{
 		TypeMeta: metav1.TypeMeta{APIVersion: KueueAPIVersion, Kind: "LocalQueue"},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      alloc.Project,
+			Name:      LocalQueueName(alloc.Project, purpose),
 			Namespace: alloc.Namespace,
 			Labels:    map[string]string{PoolLabel: alloc.Pool},
 			Annotations: map[string]string{
