@@ -56,7 +56,7 @@ package boundaries with an enforced import graph (depguard):
 | mobula-provision | `internal/provision` | The ONLY k8s-aware package. Provisioner interface; spec→manifest translators for KubeRay/Kueue/Dask (typed upstream APIs); EngineRouter. |
 | mobula-controller | `internal/controller` | Store interface (memory/SQLite/Postgres) + level-triggered observation-first reconcile engine, pool reconciler, metering loop. |
 | mobula-auth | `internal/auth` | OIDC discovery/JWKS/RS256 validation, RBAC permission sets, device-code/client-credentials/token-exchange flows, local users + `bfr_*` PATs (bcrypt). |
-| mobula-api | `internal/api` | REST surface (all frozen-contract operations), auth middleware, **federating Ray Jobs gateway** (Host-based routing, credential strip-and-swap, WS bridge). |
+| mobula-api | `internal/api` | REST surface (every contract operation), auth middleware, **federating Ray Jobs gateway** (Host-based routing, credential strip-and-swap, WS bridge). |
 | mobula-proxy | `internal/proxy` | Standalone-mode single-upstream identity proxy. |
 | mobula-cli | `cmd/bifrost` | Single binary: serve, login, token, exchange. |
 
@@ -70,23 +70,34 @@ Key invariants carried over verbatim:
 - Gateway limits: 64 MiB body cap, 64 in-flight, WS connect/idle timeouts,
   frame/message caps.
 
-## The frozen contract
+## The contract
 
-`openapi.json` exported from mobula (verified complete: **47 operations across
+`openapi.json` was exported from mobula (verified complete: **47 operations across
 36 paths**, registry-completeness now enforced by the guard test
 `openapi_document_registers_every_annotated_operation` on mobula branch
 `fix/openapi-complete-registry`), normalized once for stable key ordering, is
-the founding commit of `bifrost-api` and the port's specification. Per ADR-0001 the Go
-server is **spec-first**: oapi-codegen strict-server stubs are generated from
-the frozen file and the file itself is served via `go:embed` — parity is by
-construction and handler/spec drift is a compile error. The
-TS/Python/Rust SDK pipeline in `bifrost-api` is inherited from `mobula-api`
+the founding commit of `bifrost-api` and the port's Wave 1 parity target. It is
+**no longer frozen**: since 2026-09-02 (ADR-0006) `internal/api/openapi.json`
+in this repo is the contract's source of truth, edited here in the same PR as
+the handler that implements a change, and `bifrost-api` is a downstream
+publish target — it hosts the published copy and the SDK pipeline, and its
+copy is written only by `.github/workflows/sync-api.yml` on every push to
+`main` (a missing push token there is a hard failure, not a skip). The old
+`spec-sync` CI gate (byte-diff against `bifrost-api@main`) is gone; the
+lockstep gate is the `api + client codegen drift` step in `ci.yml`, which
+regenerates both `zz_generated_*` files and fails on any difference. Per
+ADR-0001 the Go server is **spec-first**: oapi-codegen strict-server stubs
+are generated from the contract and the file itself is served via
+`go:embed` — parity is by construction and handler/spec drift is a compile
+error. The TS/Python/Rust SDK pipeline in `bifrost-api` is inherited from `mobula-api`
 unchanged except: push token actually configured; secret-gated steps fail red
 instead of skipping silently; SBOM generation added. `bifrost-api`'s contract
 identity (`info.title`/`info.description`, `VersionInfo.name`) has been
-rebranded from mobula to Bifrost; the remaining shape is byte-for-byte the
-frozen mobula contract, so parity checks against the Rust reference normalize
-out the info block and identity strings before diffing.
+rebranded from mobula to Bifrost; the Wave 1 shape was otherwise byte-for-byte the
+mobula export, so parity checks against the Rust reference normalize
+out the info block and identity strings before diffing, and Wave 2 additions
+(operations the Rust reference never had) are expected to show up in that
+diff as bifrost-only.
 
 ## Language-independent acceptance assets
 
@@ -114,10 +125,18 @@ out the info block and identity strings before diffing.
   exclude. `internal/controller/storetest` (test-support code whose coverage
   worsens as the conformance suite gets more thorough — a T2 review finding)
   and `internal/api/zz_generated_api.go` (oapi-codegen output, regenerated
-  verbatim from the frozen contract and never hand-edited; the CI spec-diff
+  verbatim from the contract and never hand-edited; the CI codegen-drift
   step is its correctness gate, not this one) are excluded for the same
   reason: none of the three is meaningfully unit-testable hand-written logic.
-- Spec-diff check against the frozen contract (once `internal/api` exists).
+- Contract lockstep (ADR-0006): the `api + client codegen drift` CI step
+  regenerates `internal/api/zz_generated_api.go` and
+  `pkg/client/zz_generated_client.go` from `internal/api/openapi.json` and
+  fails on any difference — a contract change without its generated output
+  (or vice versa) cannot merge. Publication to `bifrost-api` is
+  `sync-api.yml` on push to `main`, hard-failing without its push token;
+  bifrost-api's own advisory `upstream-drift` job surfaces a missed push.
+  The former `spec-sync` byte-diff against `bifrost-api@main` is retired —
+  after the flip it would have failed on every legitimate change.
 - `govulncheck` in CI.
 - No cgo in shipped binaries (`CGO_ENABLED=0 go build ./...` enforced as an
   explicit CI step). Race-enabled test runs (`go test -race`) use cgo — the
@@ -205,7 +224,8 @@ Wave 1 (CRITICAL parity — reqs 3, 6, 7, 8) is **complete**: Tasks 1-16 of
   (`buildSouthboundGatewayClient`) surfaced by the load rig; `bifrost-ui`
   swapped from `@brandonrc/mobula-client` to `@brandonrc/bifrost-client`
   with the remaining legacy-string sweep; an `internal/api/openapi.json`-
-  vs-`bifrost-api` spec-sync CI gate added (`ci.yml`'s `spec-sync` job).
+  vs-`bifrost-api` spec-sync CI gate added (`ci.yml`'s `spec-sync` job;
+  retired 2026-09-02 by ADR-0006, which flipped the sync direction).
 
 > **Correction (2026-09-02).** The paragraph below is left as written for
 > the record, but two of its claims are false and the requirement table

@@ -1,6 +1,10 @@
 # ADR-0002: OpenAPI codegen de-risk spike — result
 
 Status: accepted · Wave 0 · Resolves the load-bearing bet flagged in ADR-0001 #2/Risks.
+**Superseded in part by [ADR-0006](0006-contract-source-of-truth.md)** (2026-09-02): the
+contract is no longer frozen and `internal/api/openapi.json` in this repo — not
+bifrost-api — is its source of truth. The codegen verdict, command, and the 3.1
+findings below still stand; the "47 operations" figure is a point-in-time count.
 
 ## Outcome
 
