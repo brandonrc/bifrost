@@ -8,6 +8,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -62,6 +63,10 @@ const (
 	// clusters). Value is core.ClusterSpec.Owner. Frozen-contract label
 	// key (see bifrost-api openapi.json ClusterSpec.owner description).
 	OwnerLabel = "bifrost.dev/owner"
+	// ProjectLabel is stamped on a RayService so the live client can read
+	// the owning project back (requirement 2: project-scoped services)
+	// without a store lookup — the resource itself says whose it is.
+	ProjectLabel = "bifrost.dev/project"
 	// NotebookNamespace is the namespace the interactive notebooks
 	// (JupyterHub singleuser pods) run in — the only namespace the
 	// per-owner Ray-client ingress rule admits from.
@@ -516,7 +521,20 @@ func SuspendPatch(suspend bool) []byte {
 // ServeConfigV2 is passed through verbatim; the upgrade strategy selects
 // canary (NewCluster — zero-downtime with safe rollback) vs in-place
 // (None). Ported from kuberay.rs:644-683.
-func RayServiceFor(name string, spec *core.ServiceSpec) (*rayv1.RayService, error) {
+//
+// generation is the Bifrost spec generation being applied, stamped as
+// [GenerationAnnotation] so the service reconciler can tell a RayService
+// that already carries the current spec from one that is behind (the
+// same contract RayClusterFor has). queue, when non-nil, stamps
+// [QueueLabel] so Kueue can admit the RayCluster KubeRay derives from
+// this RayService (KubeRay copies RayService labels onto it); the
+// serving-pool package fills it, nil keeps the manifest label-free.
+//
+// TODO(private-storage, #12): a storage projection parameter
+// ([]core.ResolvedStorage → envFrom/secret volumes on both pod templates)
+// belongs here once podTemplate grows it; until then spec.StorageResolved
+// is persisted but not projected.
+func RayServiceFor(name string, spec *core.ServiceSpec, generation uint64, queue *QueueAssignment) (*rayv1.RayService, error) {
 	var upgradeType rayv1.RayServiceUpgradeType
 	switch spec.Upgrade {
 	case core.UpgradeStrategyCanary:
@@ -542,14 +560,26 @@ func RayServiceFor(name string, spec *core.ServiceSpec) (*rayv1.RayService, erro
 		return nil, fmt.Errorf("provision: service head group: %w", err)
 	}
 
+	labels := map[string]string{
+		ManagedByLabel: FieldManager,
+		ClusterIDLabel: name,
+	}
+	if spec.Project != "" {
+		labels[ProjectLabel] = spec.Project
+	}
+	if queue != nil {
+		labels[QueueLabel] = queue.QueueName
+	}
+	annotations := map[string]string{
+		GenerationAnnotation: strconv.FormatUint(generation, 10),
+	}
+
 	return &rayv1.RayService{
 		TypeMeta: metav1.TypeMeta{APIVersion: APIVersion, Kind: ServiceKind},
 		ObjectMeta: metav1.ObjectMeta{
-			Name: name,
-			Labels: map[string]string{
-				ManagedByLabel: FieldManager,
-				ClusterIDLabel: name,
-			},
+			Name:        name,
+			Labels:      labels,
+			Annotations: annotations,
 		},
 		Spec: rayv1.RayServiceSpec{
 			ServeConfigV2:   spec.ServeConfigV2,
@@ -567,16 +597,33 @@ func RayServiceFor(name string, spec *core.ServiceSpec) (*rayv1.RayService, erro
 }
 
 // ServiceStatusToState maps a RayService status to a [core.ClusterState].
-// KubeRay reports "Running" once the Serve app is healthy and serving.
-// Ported from kuberay.rs:687-695.
 //
-// ServiceStatus is deprecated upstream (KubeRay v1.3.0+) in favor of
-// Conditions, but it is what the Rust reference oracle reads and what this
-// port's pinned KubeRay version (v1.7.0, ADR-0003) still populates for
-// back-compat — a Conditions-based rewrite is a deliberate follow-up, not
-// this port's job (fidelity to the oracle, not improvement).
+// Conditions first (KubeRay >= 1.3, the pinned v1.7.0 populates them):
+// Ready=True means requests can be served (the serve Service has at least
+// one healthy endpoint) → running; UpgradeInProgress/RollbackInProgress
+// = True means a new version is rolling out or being rolled back →
+// updating; Suspending/Suspended → the matching states. With no
+// recognised condition the deprecated ServiceStatus is the fallback —
+// "Running" is the only value v1.7 still writes there (it is defined as
+// equivalent to Ready=True), and the older "Restarting"/"UpgradingCluster"
+// values are kept for a downgraded operator. Anything else is still
+// coming up → provisioning. Ported from kuberay.rs:687-695 and extended
+// for the conditions API.
 func ServiceStatusToState(status rayv1.RayServiceStatuses) core.ClusterState {
-	switch string(status.ServiceStatus) { //nolint:staticcheck // SA1019: ported fidelity, see doc comment
+	if meta.IsStatusConditionTrue(status.Conditions, string(rayv1.RayServiceReady)) {
+		return core.ClusterStateRunning
+	}
+	if meta.IsStatusConditionTrue(status.Conditions, string(rayv1.UpgradeInProgress)) ||
+		meta.IsStatusConditionTrue(status.Conditions, string(rayv1.RollbackInProgress)) {
+		return core.ClusterStateUpdating
+	}
+	if meta.IsStatusConditionTrue(status.Conditions, string(rayv1.RayServiceSuspended)) {
+		return core.ClusterStateSuspended
+	}
+	if meta.IsStatusConditionTrue(status.Conditions, string(rayv1.RayServiceSuspending)) {
+		return core.ClusterStateSuspending
+	}
+	switch string(status.ServiceStatus) { //nolint:staticcheck // SA1019: deliberate fallback for operators that only write the deprecated field, see doc comment
 	case "Running":
 		return core.ClusterStateRunning
 	// A new version is being rolled out / health-checked.

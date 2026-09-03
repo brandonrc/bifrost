@@ -478,7 +478,7 @@ func TestPodTemplatesCarryTheClusterIDLabel(t *testing.T) {
 	}
 
 	svcSpec := testServiceSpec(core.UpgradeStrategyCanary)
-	rs, err := RayServiceFor("svc", svcSpec)
+	rs, err := RayServiceFor("svc", svcSpec, 1, nil)
 	if err != nil {
 		t.Fatalf("RayServiceFor: %v", err)
 	}
@@ -550,7 +550,7 @@ func testServiceSpec(upgrade core.UpgradeStrategy) *core.ServiceSpec {
 
 // kuberay.rs: rayservice_canary_vs_inplace_upgrade_strategy
 func TestRayServiceCanaryVsInplaceUpgradeStrategy(t *testing.T) {
-	canary, err := RayServiceFor("svc", testServiceSpec(core.UpgradeStrategyCanary))
+	canary, err := RayServiceFor("svc", testServiceSpec(core.UpgradeStrategyCanary), 1, nil)
 	if err != nil {
 		t.Fatalf("RayServiceFor: %v", err)
 	}
@@ -567,7 +567,7 @@ func TestRayServiceCanaryVsInplaceUpgradeStrategy(t *testing.T) {
 		t.Fatalf("service worker replicas = %v", canary.Spec.RayClusterSpec.WorkerGroupSpecs[0].Replicas)
 	}
 
-	inplace, err := RayServiceFor("svc", testServiceSpec(core.UpgradeStrategyInPlace))
+	inplace, err := RayServiceFor("svc", testServiceSpec(core.UpgradeStrategyInPlace), 1, nil)
 	if err != nil {
 		t.Fatalf("RayServiceFor: %v", err)
 	}
@@ -581,7 +581,7 @@ func TestRayServiceCanaryVsInplaceUpgradeStrategy(t *testing.T) {
 func TestRayServiceForRejectsUnparseableQuantity(t *testing.T) {
 	svc := testServiceSpec(core.UpgradeStrategyCanary)
 	svc.WorkerCpu = "not-a-quantity"
-	if _, err := RayServiceFor("svc", svc); err == nil {
+	if _, err := RayServiceFor("svc", svc, 1, nil); err == nil {
 		t.Fatalf("expected an error for an unparseable worker cpu quantity")
 	}
 }
@@ -594,7 +594,7 @@ func TestRayServiceForRejectsUnparseableQuantity(t *testing.T) {
 // since ServiceSpec values can be constructed directly in-process.
 func TestRayServiceForRejectsUnknownUpgradeStrategy(t *testing.T) {
 	svc := testServiceSpec(core.UpgradeStrategy("bogus"))
-	if _, err := RayServiceFor("svc", svc); err == nil {
+	if _, err := RayServiceFor("svc", svc, 1, nil); err == nil {
 		t.Fatalf("expected an error for an unknown upgrade strategy")
 	}
 }
@@ -605,7 +605,7 @@ func TestRayServiceForRejectsUnknownUpgradeStrategy(t *testing.T) {
 // individual meaningful fields rather than a whole-struct comparison
 // against the Go zero value.
 func TestRayServiceForNeverPopulatesStatus(t *testing.T) {
-	rs, err := RayServiceFor("svc", testServiceSpec(core.UpgradeStrategyCanary))
+	rs, err := RayServiceFor("svc", testServiceSpec(core.UpgradeStrategyCanary), 1, nil)
 	if err != nil {
 		t.Fatalf("RayServiceFor: %v", err)
 	}
@@ -636,7 +636,9 @@ func TestRayServiceForNeverPopulatesStatus(t *testing.T) {
 	}
 }
 
-// kuberay.rs: rayservice_status_mapping
+// kuberay.rs: rayservice_status_mapping — the deprecated ServiceStatus
+// fallback, exercised with no conditions present (an operator that only
+// writes the legacy field).
 func TestRayServiceStatusMapping(t *testing.T) {
 	cases := []struct {
 		status string
@@ -652,6 +654,94 @@ func TestRayServiceStatusMapping(t *testing.T) {
 		if got != c.want {
 			t.Errorf("ServiceStatusToState(%q) = %q, want %q", c.status, got, c.want)
 		}
+	}
+}
+
+func condition(typ rayv1.RayServiceConditionType, status metav1.ConditionStatus) metav1.Condition {
+	return metav1.Condition{Type: string(typ), Status: status, Reason: "test"}
+}
+
+// Requirement 1: KubeRay v1.7 reports readiness through Conditions;
+// Ready=True is the serving signal and wins over the legacy field, an
+// upgrade/rollback in progress is "updating", and Ready=False alone (the
+// Initializing phase) is still provisioning.
+func TestRayServiceStatusPrefersConditions(t *testing.T) {
+	cases := []struct {
+		name  string
+		conds []metav1.Condition
+		want  core.ClusterState
+	}{
+		{"ready", []metav1.Condition{condition(rayv1.RayServiceReady, metav1.ConditionTrue)}, core.ClusterStateRunning},
+		{"initializing", []metav1.Condition{condition(rayv1.RayServiceReady, metav1.ConditionFalse)}, core.ClusterStateProvisioning},
+		{"upgrading keeps serving", []metav1.Condition{
+			condition(rayv1.RayServiceReady, metav1.ConditionTrue),
+			condition(rayv1.UpgradeInProgress, metav1.ConditionTrue),
+		}, core.ClusterStateRunning},
+		{"upgrading not ready", []metav1.Condition{
+			condition(rayv1.RayServiceReady, metav1.ConditionFalse),
+			condition(rayv1.UpgradeInProgress, metav1.ConditionTrue),
+		}, core.ClusterStateUpdating},
+		{"rollback", []metav1.Condition{condition(rayv1.RollbackInProgress, metav1.ConditionTrue)}, core.ClusterStateUpdating},
+		{"suspending", []metav1.Condition{condition(rayv1.RayServiceSuspending, metav1.ConditionTrue)}, core.ClusterStateSuspending},
+		{"suspended", []metav1.Condition{condition(rayv1.RayServiceSuspended, metav1.ConditionTrue)}, core.ClusterStateSuspended},
+	}
+	for _, c := range cases {
+		got := ServiceStatusToState(rayv1.RayServiceStatuses{Conditions: c.conds})
+		if got != c.want {
+			t.Errorf("%s: ServiceStatusToState = %q, want %q", c.name, got, c.want)
+		}
+	}
+	// A Ready=False condition does not mask a legacy "Running": the two
+	// disagree only on a downgraded operator, and the fallback is what
+	// the legacy field says.
+	legacy := rayv1.RayServiceStatuses{
+		Conditions:    []metav1.Condition{condition(rayv1.RayServiceReady, metav1.ConditionFalse)},
+		ServiceStatus: "Running", //nolint:staticcheck // SA1019: fallback under test
+	}
+	if got := ServiceStatusToState(legacy); got != core.ClusterStateRunning {
+		t.Errorf("legacy fallback = %q, want running", got)
+	}
+}
+
+// Requirement 1/2: the RayService carries the Bifrost generation (so the
+// service reconciler can detect a spec behind the store) and the owning
+// project (so the live client can report it without a store lookup).
+func TestRayServiceForStampsGenerationAndProject(t *testing.T) {
+	spec := testServiceSpec(core.UpgradeStrategyInPlace)
+	spec.Project = "team-a"
+	rs, err := RayServiceFor("svc", spec, 7, nil)
+	if err != nil {
+		t.Fatalf("RayServiceFor: %v", err)
+	}
+	if got := rs.Annotations[GenerationAnnotation]; got != "7" {
+		t.Errorf("generation annotation = %q, want 7", got)
+	}
+	if got := rs.Labels[ProjectLabel]; got != "team-a" {
+		t.Errorf("project label = %q, want team-a", got)
+	}
+	if _, ok := rs.Labels[QueueLabel]; ok {
+		t.Errorf("no queue assignment must leave %s unset", QueueLabel)
+	}
+	spec.Project = ""
+	rs, err = RayServiceFor("svc", spec, 1, nil)
+	if err != nil {
+		t.Fatalf("RayServiceFor: %v", err)
+	}
+	if _, ok := rs.Labels[ProjectLabel]; ok {
+		t.Errorf("an empty project must not stamp an empty %s label", ProjectLabel)
+	}
+}
+
+// Requirement 4 seam: a queue assignment stamps the Kueue queue label on
+// the RayService (KubeRay copies RayService labels onto the RayCluster it
+// derives, so this is how a serving cluster reaches its LocalQueue).
+func TestRayServiceForStampsQueueLabel(t *testing.T) {
+	rs, err := RayServiceFor("svc", testServiceSpec(core.UpgradeStrategyInPlace), 1, &QueueAssignment{QueueName: "team-a-serving"})
+	if err != nil {
+		t.Fatalf("RayServiceFor: %v", err)
+	}
+	if got := rs.Labels[QueueLabel]; got != "team-a-serving" {
+		t.Errorf("queue label = %q, want team-a-serving", got)
 	}
 }
 

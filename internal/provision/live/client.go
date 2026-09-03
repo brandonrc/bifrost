@@ -507,7 +507,7 @@ func (c *Client) ClusterLogs(ctx context.Context, id core.ClusterId, pod *string
 
 // Deploy server-side-applies the RayService for name. Ported from
 // kuberay_client.rs:640-664.
-func (s *ServiceClient) Deploy(ctx context.Context, name string, spec *core.ServiceSpec) error {
+func (s *ServiceClient) Deploy(ctx context.Context, name string, spec *core.ServiceSpec, generation uint64) error {
 	// Service pods carry the same cluster-id label (RayServiceFor's pod
 	// templates stamp it), so they get the same per-cluster allow —
 	// including across a RayService zero-downtime upgrade, where old and
@@ -517,7 +517,9 @@ func (s *ServiceClient) Deploy(ctx context.Context, name string, spec *core.Serv
 	if err := s.ensureClusterAllow(ctx, name, nil); err != nil {
 		return err
 	}
-	manifest, err := provision.RayServiceFor(name, spec)
+	// Queue assignment (serving pool, requirement 4) is nil until the
+	// serving-pool package threads the project's serving LocalQueue here.
+	manifest, err := provision.RayServiceFor(name, spec, generation, nil)
 	if err != nil {
 		return provision.ProvisionError{Kind: provision.ProvisionErrBackend, Message: err.Error()}
 	}
@@ -534,8 +536,22 @@ func (s *ServiceClient) Get(ctx context.Context, name string) (*provision.Observ
 		}
 		return nil, wrapErr(err)
 	}
-	url := serviceURL(s.namespace, name)
-	return &provision.ObservedService{Name: name, State: provision.ServiceStatusToState(rs.Status), Url: &url}, nil
+	return s.observedService(&rs), nil
+}
+
+// observedService reads the observation off a RayService: state from its
+// conditions/status, the in-cluster Serve URL, the owning project from
+// [provision.ProjectLabel] and the applied generation from
+// [provision.GenerationAnnotation] (nil when either is absent).
+func (s *ServiceClient) observedService(rs *rayv1.RayService) *provision.ObservedService {
+	url := serviceURL(s.namespace, rs.Name)
+	return &provision.ObservedService{
+		Name:       rs.Name,
+		State:      provision.ServiceStatusToState(rs.Status),
+		Url:        &url,
+		Project:    rs.Labels[provision.ProjectLabel],
+		Generation: observedGeneration(rs),
+	}
 }
 
 // Delete deletes the RayService and its per-cluster allow policy.
@@ -557,9 +573,7 @@ func (s *ServiceClient) List(ctx context.Context) ([]provision.ObservedService, 
 	}
 	out := make([]provision.ObservedService, 0, len(list.Items))
 	for i := range list.Items {
-		rs := &list.Items[i]
-		url := serviceURL(s.namespace, rs.Name)
-		out = append(out, provision.ObservedService{Name: rs.Name, State: provision.ServiceStatusToState(rs.Status), Url: &url})
+		out = append(out, *s.observedService(&list.Items[i]))
 	}
 	return out, nil
 }
