@@ -18,6 +18,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 
 	"github.com/brandonrc/bifrost/internal/auth"
@@ -176,6 +177,15 @@ func (s *Server) DeployService(ctx context.Context, req DeployServiceRequestObje
 	if err := AuthorizeScoped(ctx, s.Store, identity, auth.Write, auth.TargetService, spec.Project); err != nil {
 		return nil, err
 	}
+	// A caller whose scoped bindings narrow them to some projects operates
+	// only in those (readScope's pinned edge case) — a global Developer
+	// role does not let a team-b member deploy into team-a (requirement 2).
+	// Reads and delete already follow the same narrowing; deploy is the
+	// one write that has no row to 404 on, so it is a plain 403.
+	if _, narrowed := readScope(ctx, s.Store, identity); len(narrowed) > 0 && !containsString(narrowed, spec.Project) {
+		emitAuthzDenial(ctx, s.Store, identity, auth.Write, auth.TargetService)
+		return nil, ErrForbidden
+	}
 
 	// HOOK(private-storage, package G): resolve spec.Storage against the
 	// policy catalog here — `spec.StorageResolved, err = s.resolveStorage(ctx,
@@ -183,9 +193,14 @@ func (s *Server) DeployService(ctx context.Context, req DeployServiceRequestObje
 	// project may not use. Runs before admission so a refused reference
 	// never consumes quota.
 
-	// HOOK(group-serving, package D): one service per project (ruling D8).
-	// List the live (desired running) rows; another name in spec.Project
-	// → 409 unless s.ServicesPerProject allows more. Same name = update.
+	// One service per project (requirement 2, plan ruling D8): a project
+	// shares a single RayService, so a second name in the same project is
+	// refused until the first is gone. `--services-per-project` raises the
+	// cap. Same name = update (the upsert below); a row already headed for
+	// termination no longer counts, so delete-then-redeploy needs no wait.
+	if err := s.enforceServicesPerProject(ctx, identity, name, spec.Project); err != nil {
+		return nil, err
+	}
 
 	// HOOK(serving-pool, package E): admit against the project's serving
 	// allocation (policy.ServiceDemand vs the serving pool's nominal), 409
@@ -210,6 +225,43 @@ func (s *Server) DeployService(ctx context.Context, req DeployServiceRequestObje
 		Decision: core.AuditDecisionAllow, Action: &action, Cluster: &name, Status: &status,
 	})
 	return DeployService202Response{}, nil
+}
+
+// enforceServicesPerProject is the one-service-per-project rule (ruling
+// D8): counting the project's live rows (desired running or suspended)
+// under other names, a deploy that would exceed s.ServicesPerProject is
+// 409 and audited as a deny (reason service_limit), the same shape as
+// denyCreate's quota refusals for clusters. A cap of zero or less means
+// the default of one (app.New sets it, but a bare Server must not be
+// wide open).
+func (s *Server) enforceServicesPerProject(ctx context.Context, identity *auth.Identity, name, project string) error {
+	limit := s.ServicesPerProject
+	if limit <= 0 {
+		limit = 1
+	}
+	rows, err := s.Store.ListServices(ctx)
+	if err != nil {
+		return wrapStoreErr(err)
+	}
+	var live []string
+	for i := range rows {
+		row := &rows[i]
+		if row.Spec.Project != project || row.Name == name || row.Desired == controller.DesiredTerminated {
+			continue
+		}
+		live = append(live, row.Name)
+	}
+	if len(live) < limit {
+		return nil
+	}
+	reason := "service_limit"
+	action := "deploy_service"
+	status := uint16(http.StatusConflict)
+	EmitAudit(ctx, s.Store, &core.AuditEvent{
+		Ts: controller.NowUnix(), Subject: identitySubject(identity),
+		Decision: core.AuditDecisionDeny, Reason: &reason, Action: &action, Cluster: &name, Status: &status,
+	})
+	return conflict(fmt.Sprintf("project %s already has service %s; redeploy it under that name or delete it first", project, live[0]))
 }
 
 // DeleteService requests teardown: desired → terminated; the reconciler

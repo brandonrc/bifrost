@@ -35,9 +35,9 @@ operations:
   list_profiles:    {admin: allow, operator: allow, dev-a: allow, dev-b: allow}
   # --- services (target Service: developer full, operator read)
   list_services:    {admin: allow, operator: allow, dev-a: allow, dev-b: allow}
-  deploy_service:   {admin: allow, operator: deny,  dev-a: allow, dev-b: allow}
-  get_service:      {admin: allow, operator: allow, dev-a: allow, dev-b: allow}
-  delete_service:   {admin: allow, operator: deny,  dev-a: allow, dev-b: allow}
+  deploy_service:   {admin: allow, operator: deny,  dev-a: scoped, dev-b: scoped}
+  get_service:      {admin: allow, operator: allow, dev-a: scoped, dev-b: scoped}
+  delete_service:   {admin: allow, operator: deny,  dev-a: scoped, dev-b: scoped}
   # --- pools (target Pool: read developer+, mutations admin only)
   list_pools:        {admin: allow, operator: allow, dev-a: allow, dev-b: allow}
   create_pool:       {admin: allow, operator: deny,  dev-a: deny,  dev-b: deny}
