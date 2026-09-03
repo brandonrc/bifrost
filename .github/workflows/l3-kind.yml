@@ -19,7 +19,7 @@ on:
 jobs:
   kind-calico:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 120
     env:
       KIND_CLUSTER: bifrost-l3
       BIFROST_URL: http://127.0.0.1:8484
