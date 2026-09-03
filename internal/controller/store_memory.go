@@ -36,6 +36,12 @@ type MemoryStore struct {
 	usageMu sync.Mutex
 	usage   []UsageSample
 
+	servicesMu sync.Mutex
+	services   map[string]StoredService
+
+	rayJobsMu sync.Mutex
+	rayJobs   map[core.ClusterId]StoredRayJob
+
 	// policy is the singleton governance-policy row; nil = never seeded,
 	// never edited.
 	policyMu sync.Mutex
@@ -78,6 +84,8 @@ func NewMemoryStore() Store {
 		jobs:        make(map[string]core.JobRecord),
 		pools:       make(map[string]StoredPool),
 		allocations: make(map[allocationKey]core.AllocationSpec),
+		services:    make(map[string]StoredService),
+		rayJobs:     make(map[core.ClusterId]StoredRayJob),
 		localUsers:  make(map[string]core.LocalUserRecord),
 		apiTokens:   make(map[string]core.ApiTokenRecord),
 		assignments: make(map[assignmentKey]RoleAssignment),
@@ -470,7 +478,7 @@ func (s *MemoryStore) RecordUsageSamples(_ context.Context, samples []UsageSampl
 	return nil
 }
 
-func (s *MemoryStore) UsageSamples(_ context.Context, project, pool *string, from, to uint64) ([]UsageSample, error) {
+func (s *MemoryStore) UsageSamples(_ context.Context, project, pool, owner *string, from, to uint64) ([]UsageSample, error) {
 	s.usageMu.Lock()
 	defer s.usageMu.Unlock()
 	out := make([]UsageSample, 0)
@@ -482,6 +490,9 @@ func (s *MemoryStore) UsageSamples(_ context.Context, project, pool *string, fro
 			continue
 		}
 		if pool != nil && u.Pool != *pool {
+			continue
+		}
+		if owner != nil && u.Owner != *owner {
 			continue
 		}
 		out = append(out, u)
@@ -841,4 +852,208 @@ func (s *MemoryStore) DeleteRoleAssignment(_ context.Context, principal, role, s
 	}
 	delete(s.assignments, key)
 	return nil
+}
+
+// --- Services ---
+
+func (s *MemoryStore) UpsertService(_ context.Context, name string, spec core.ServiceSpec, owner *string) (uint64, error) {
+	s.servicesMu.Lock()
+	defer s.servicesMu.Unlock()
+	// Deep-copy on ingress: spec/owner are caller-owned.
+	spec = cloneServiceSpec(spec)
+	owner = clonePtr(owner)
+	cur, ok := s.services[name]
+	switch {
+	case !ok:
+		s.services[name] = StoredService{
+			Name: name, Spec: spec, Owner: owner, Generation: 1,
+			Desired: DesiredRunning, CreatedAt: NowUnix(),
+		}
+		return 1, nil
+	case cur.Desired == DesiredTerminated:
+		// Store.UpsertService: a terminated record is re-created.
+		gen := cur.Generation + 1
+		s.services[name] = StoredService{
+			Name: name, Spec: spec, Owner: owner, Generation: gen,
+			Desired: DesiredRunning, CreatedAt: NowUnix(),
+		}
+		return gen, nil
+	default:
+		if serviceSpecChanged(&cur.Spec, &spec) {
+			cur.Generation++
+		}
+		cur.Spec = spec
+		s.services[name] = cur
+		return cur.Generation, nil
+	}
+}
+
+func (s *MemoryStore) GetService(_ context.Context, name string) (*StoredService, error) {
+	s.servicesMu.Lock()
+	defer s.servicesMu.Unlock()
+	c, ok := s.services[name]
+	if !ok {
+		return nil, nil
+	}
+	cc := cloneStoredService(c)
+	return &cc, nil
+}
+
+func (s *MemoryStore) ListServices(_ context.Context) ([]StoredService, error) {
+	s.servicesMu.Lock()
+	defer s.servicesMu.Unlock()
+	out := make([]StoredService, 0, len(s.services))
+	for _, c := range s.services {
+		out = append(out, cloneStoredService(c))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (s *MemoryStore) SetServiceDesired(_ context.Context, name string, desired DesiredState) error {
+	if !desired.isValid() {
+		return errBadDesiredState(string(desired))
+	}
+	s.servicesMu.Lock()
+	defer s.servicesMu.Unlock()
+	c, ok := s.services[name]
+	if !ok {
+		return errNoSuchService(name)
+	}
+	c.Desired = desired
+	if desired == DesiredTerminated {
+		if c.TerminatedAt == nil {
+			now := NowUnix()
+			c.TerminatedAt = &now
+		}
+	} else {
+		c.TerminatedAt = nil
+	}
+	s.services[name] = c
+	return nil
+}
+
+func (s *MemoryStore) RecordServiceObservation(_ context.Context, name string, observed *core.ClusterState, url *string) error {
+	s.servicesMu.Lock()
+	defer s.servicesMu.Unlock()
+	c, ok := s.services[name]
+	if !ok {
+		return nil
+	}
+	c.ObservedState = clonePtr(observed)
+	c.ObservedURL = clonePtr(url)
+	s.services[name] = c
+	return nil
+}
+
+func (s *MemoryStore) RemoveService(_ context.Context, name string) (bool, error) {
+	s.servicesMu.Lock()
+	defer s.servicesMu.Unlock()
+	_, ok := s.services[name]
+	if ok {
+		delete(s.services, name)
+	}
+	return ok, nil
+}
+
+// --- Ephemeral Ray jobs ---
+
+func (s *MemoryStore) UpsertRayJob(_ context.Context, id core.ClusterId, spec core.RayJobSpec, owner *string) error {
+	s.rayJobsMu.Lock()
+	defer s.rayJobsMu.Unlock()
+	spec = cloneRayJobSpec(spec)
+	owner = clonePtr(owner)
+	cur, ok := s.rayJobs[id]
+	if !ok {
+		s.rayJobs[id] = StoredRayJob{ID: id, Spec: spec, Owner: owner, Desired: DesiredRunning, SubmittedAt: NowUnix()}
+		return nil
+	}
+	cur.Spec = spec
+	cur.Owner = owner
+	s.rayJobs[id] = cur
+	return nil
+}
+
+func (s *MemoryStore) GetRayJob(_ context.Context, id core.ClusterId) (*StoredRayJob, error) {
+	s.rayJobsMu.Lock()
+	defer s.rayJobsMu.Unlock()
+	j, ok := s.rayJobs[id]
+	if !ok {
+		return nil, nil
+	}
+	jj := cloneStoredRayJob(j)
+	return &jj, nil
+}
+
+func (s *MemoryStore) ListRayJobs(_ context.Context) ([]StoredRayJob, error) {
+	s.rayJobsMu.Lock()
+	defer s.rayJobsMu.Unlock()
+	out := make([]StoredRayJob, 0, len(s.rayJobs))
+	for _, j := range s.rayJobs {
+		out = append(out, cloneStoredRayJob(j))
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].SubmittedAt != out[j].SubmittedAt {
+			return out[i].SubmittedAt > out[j].SubmittedAt
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out, nil
+}
+
+func (s *MemoryStore) SetRayJobDesired(_ context.Context, id core.ClusterId, desired DesiredState) error {
+	if !desired.isValid() {
+		return errBadDesiredState(string(desired))
+	}
+	s.rayJobsMu.Lock()
+	defer s.rayJobsMu.Unlock()
+	j, ok := s.rayJobs[id]
+	if !ok {
+		return errNoSuchRayJob(string(id))
+	}
+	j.Desired = desired
+	s.rayJobs[id] = j
+	return nil
+}
+
+func (s *MemoryStore) RecordRayJobObservation(_ context.Context, id core.ClusterId, obs RayJobObservation) error {
+	s.rayJobsMu.Lock()
+	defer s.rayJobsMu.Unlock()
+	j, ok := s.rayJobs[id]
+	if !ok {
+		return nil
+	}
+	obs = cloneRayJobObservation(obs)
+	j.Status = obs.Status
+	j.DeploymentStatus = obs.DeploymentStatus
+	j.ClusterName = obs.ClusterName
+	j.DashboardURL = obs.DashboardURL
+	j.Message = obs.Message
+	j.StartedAt = obs.StartedAt
+	j.FinishedAt = obs.FinishedAt
+	s.rayJobs[id] = j
+	return nil
+}
+
+func (s *MemoryStore) RecordRayJobAttempt(_ context.Context, id core.ClusterId, failureCount uint32, nextAttemptAt uint64) error {
+	s.rayJobsMu.Lock()
+	defer s.rayJobsMu.Unlock()
+	j, ok := s.rayJobs[id]
+	if !ok {
+		return nil
+	}
+	j.FailureCount = failureCount
+	j.NextAttemptAt = nextAttemptAt
+	s.rayJobs[id] = j
+	return nil
+}
+
+func (s *MemoryStore) RemoveRayJob(_ context.Context, id core.ClusterId) (bool, error) {
+	s.rayJobsMu.Lock()
+	defer s.rayJobsMu.Unlock()
+	_, ok := s.rayJobs[id]
+	if ok {
+		delete(s.rayJobs, id)
+	}
+	return ok, nil
 }

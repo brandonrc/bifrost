@@ -18,10 +18,10 @@ package controller
 // created it with this exact shape — so there is nothing to migrate from,
 // and this file has no ALTER-TABLE-if-missing step or backfill pass at
 // all (ADR-0004's ruling: no production legacy chains exist, so the chain
-// is implemented fresh). If Bifrost's SQLite schema ever needs a
-// backward-incompatible change after this ships, that change gets its own
-// additive migration step here — this comment is the marker for where it
-// belongs.
+// is implemented fresh). Additive changes after that first shape go into
+// sqliteColumnMigrations below: the CREATE TABLE here carries the current
+// column set for fresh databases, and the migration adds the column to a
+// database created before it existed.
 const sqliteSchema = `
 CREATE TABLE IF NOT EXISTS clusters (
     id                  TEXT PRIMARY KEY,
@@ -80,15 +80,49 @@ CREATE TABLE IF NOT EXISTS allocations (
 -- Usage metering timeseries: append-only, no primary key. project = '' is
 -- the pool-level aggregate row; pool = '' means the project has no
 -- allocation. source is 'kueue_ledger' or 'observed_spec'.
+-- owner is the per-user attribution (requirement 14); '' = unattributed.
 CREATE TABLE IF NOT EXISTS usage_samples (
     ts       INTEGER NOT NULL,
     project  TEXT NOT NULL,
     pool     TEXT NOT NULL,
     resource TEXT NOT NULL,
     quantity REAL NOT NULL,
-    source   TEXT NOT NULL
+    source   TEXT NOT NULL,
+    owner    TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS usage_samples_project_ts ON usage_samples (project, ts);
+-- Serve services (requirements 1/2): the store is truth for desired state;
+-- the RayService is actuation. Same column shape as clusters minus the
+-- backoff/drift columns the service reconciler does not need yet.
+CREATE TABLE IF NOT EXISTS services (
+    name           TEXT PRIMARY KEY,
+    spec_json      TEXT NOT NULL,
+    owner          TEXT,
+    generation     INTEGER NOT NULL,
+    desired        TEXT NOT NULL,
+    observed_state TEXT,
+    observed_url   TEXT,
+    created_at     INTEGER NOT NULL DEFAULT 0,
+    terminated_at  INTEGER
+);
+-- Ephemeral Ray jobs (requirement 5): submitted intent plus the last
+-- KubeRay RayJob observation. No generation: a job spec is submitted once.
+CREATE TABLE IF NOT EXISTS ray_jobs (
+    id                TEXT PRIMARY KEY,
+    spec_json         TEXT NOT NULL,
+    owner             TEXT,
+    desired           TEXT NOT NULL,
+    status            TEXT NOT NULL DEFAULT '',
+    deployment_status TEXT NOT NULL DEFAULT '',
+    cluster_name      TEXT,
+    dashboard_url     TEXT,
+    message           TEXT,
+    submitted_at      INTEGER NOT NULL DEFAULT 0,
+    started_at        INTEGER,
+    finished_at       INTEGER,
+    failure_count     INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at   INTEGER NOT NULL DEFAULT 0
+);
 -- Persisted audit trail (api-v1.md §5.9): append-only. seq is the
 -- pagination cursor (rows are read newest-first). chain_hash is the
 -- tamper-evidence chain: sha256 over (previous row's chain_hash ‖ this
@@ -156,3 +190,20 @@ CREATE TABLE IF NOT EXISTS role_assignments (
     PRIMARY KEY (principal, role, scope)
 );
 `
+
+// sqliteColumnMigration is one idempotent additive column migration: when
+// Table exists without Column, Statement is run. SQLite has no `ADD COLUMN
+// IF NOT EXISTS`, so NewSqliteStore checks PRAGMA table_info first.
+type sqliteColumnMigration struct {
+	Table, Column, Statement string
+}
+
+// sqliteColumnMigrations upgrades databases created by an older Bifrost
+// schema. Append-only; every entry must also be reflected in sqliteSchema
+// so a fresh database never needs it.
+var sqliteColumnMigrations = []sqliteColumnMigration{
+	// Requirement 14 per-user attribution: samples recorded before the
+	// column existed are unattributed ('').
+	{Table: "usage_samples", Column: "owner",
+		Statement: "ALTER TABLE usage_samples ADD COLUMN owner TEXT NOT NULL DEFAULT ''"},
+}

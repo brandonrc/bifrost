@@ -13,6 +13,7 @@ package controller_test
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -293,4 +294,61 @@ func reopenSpecFixture(replicas uint32) core.ClusterSpec {
 			Replicas:    replicas,
 		}},
 	}
+}
+
+// TestSqliteMigratesUsageSamplesOwnerColumn: the first real additive
+// migration (requirement 14). A database created before usage_samples had
+// an owner column must open, gain the column, read its old rows back as
+// unattributed (”), and accept owned samples afterwards.
+func TestSqliteMigratesUsageSamplesOwnerColumn(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "legacy.db")
+
+	legacy, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.ExecContext(ctx, `
+		CREATE TABLE usage_samples (
+		    ts       INTEGER NOT NULL,
+		    project  TEXT NOT NULL,
+		    pool     TEXT NOT NULL,
+		    resource TEXT NOT NULL,
+		    quantity REAL NOT NULL,
+		    source   TEXT NOT NULL
+		);
+		INSERT INTO usage_samples VALUES (100, 'proj-a', 'gpu', 'cpu', 4.0, 'kueue_ledger');
+	`); err != nil {
+		t.Fatalf("create legacy schema: %v", err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store := newTestSqliteStore(t, path)
+	old, err := store.UsageSamples(ctx, nil, nil, nil, 0, ^uint64(0))
+	if err != nil || len(old) != 1 || old[0].Owner != "" || old[0].Quantity != 4.0 {
+		t.Fatalf("legacy row after migration: %+v err=%v", old, err)
+	}
+	if err := store.RecordUsageSamples(ctx, []controller.UsageSample{
+		{Ts: 200, Project: "proj-a", Pool: "gpu", Resource: "cpu", Quantity: 1.0, Source: controller.UsageSourceKueueLedger, Owner: "alice"},
+	}); err != nil {
+		t.Fatalf("record owned sample: %v", err)
+	}
+	owner := "alice"
+	alice, err := store.UsageSamples(ctx, nil, nil, &owner, 0, ^uint64(0))
+	if err != nil || len(alice) != 1 || alice[0].Ts != 200 {
+		t.Fatalf("owner filter after migration: %+v err=%v", alice, err)
+	}
+
+	// Reopening an already-migrated database must be a no-op, not a
+	// duplicate-column error.
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	again, err := controller.NewSqliteStore(ctx, path)
+	if err != nil {
+		t.Fatalf("reopen migrated db: %v", err)
+	}
+	_ = again.Close()
 }

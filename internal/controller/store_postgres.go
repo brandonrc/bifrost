@@ -136,15 +136,53 @@ var postgresSchemaStatements = []string{
 	// Usage metering timeseries: append-only, no primary key. project = ''
 	// is the pool-level aggregate row; pool = '' means the project has no
 	// allocation. source is 'kueue_ledger' or 'observed_spec'.
+	// owner is the per-user attribution (requirement 14); '' = unattributed.
 	`CREATE TABLE IF NOT EXISTS usage_samples (
 	    ts       BIGINT NOT NULL,
 	    project  TEXT NOT NULL,
 	    pool     TEXT NOT NULL,
 	    resource TEXT NOT NULL,
 	    quantity DOUBLE PRECISION NOT NULL,
-	    source   TEXT NOT NULL
+	    source   TEXT NOT NULL,
+	    owner    TEXT NOT NULL DEFAULT ''
 	)`,
+	// Additive migration for databases created before the owner column
+	// existed (the SQLite twin is sqliteColumnMigrations). Postgres guards
+	// it natively; every pre-existing row reads back as unattributed.
+	`ALTER TABLE usage_samples ADD COLUMN IF NOT EXISTS owner TEXT NOT NULL DEFAULT ''`,
 	`CREATE INDEX IF NOT EXISTS usage_samples_project_ts ON usage_samples (project, ts)`,
+	// Serve services (requirements 1/2): the store is truth for desired
+	// state; the RayService is actuation.
+	`CREATE TABLE IF NOT EXISTS services (
+	    name           TEXT PRIMARY KEY,
+	    spec_json      TEXT NOT NULL,
+	    owner          TEXT,
+	    generation     BIGINT NOT NULL,
+	    desired        TEXT NOT NULL,
+	    observed_state TEXT,
+	    observed_url   TEXT,
+	    created_at     BIGINT NOT NULL DEFAULT 0,
+	    terminated_at  BIGINT
+	)`,
+	// Ephemeral Ray jobs (requirement 5): submitted intent plus the last
+	// KubeRay RayJob observation. No generation: a job spec is submitted
+	// once.
+	`CREATE TABLE IF NOT EXISTS ray_jobs (
+	    id                TEXT PRIMARY KEY,
+	    spec_json         TEXT NOT NULL,
+	    owner             TEXT,
+	    desired           TEXT NOT NULL,
+	    status            TEXT NOT NULL DEFAULT '',
+	    deployment_status TEXT NOT NULL DEFAULT '',
+	    cluster_name      TEXT,
+	    dashboard_url     TEXT,
+	    message           TEXT,
+	    submitted_at      BIGINT NOT NULL DEFAULT 0,
+	    started_at        BIGINT,
+	    finished_at       BIGINT,
+	    failure_count     BIGINT NOT NULL DEFAULT 0,
+	    next_attempt_at   BIGINT NOT NULL DEFAULT 0
+	)`,
 	// Persisted audit trail (api-v1.md §5.9): append-only. seq is the
 	// pagination cursor (rows are read newest-first). chain_hash is the
 	// tamper-evidence chain (see AuditChainHash in store.go); genesis
@@ -807,8 +845,8 @@ func (s *PostgresStore) RecordUsageSamples(ctx context.Context, samples []UsageS
 
 	for _, smp := range samples {
 		if _, err := tx.Exec(ctx,
-			"INSERT INTO usage_samples (ts, project, pool, resource, quantity, source) VALUES ($1, $2, $3, $4, $5, $6)",
-			clampI64(smp.Ts), smp.Project, smp.Pool, smp.Resource, smp.Quantity, smp.Source.AsStr()); err != nil {
+			"INSERT INTO usage_samples (ts, project, pool, resource, quantity, source, owner) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+			clampI64(smp.Ts), smp.Project, smp.Pool, smp.Resource, smp.Quantity, smp.Source.AsStr(), smp.Owner); err != nil {
 			return storeErrorf("insert usage sample: %v", err)
 		}
 	}
@@ -818,20 +856,21 @@ func (s *PostgresStore) RecordUsageSamples(ctx context.Context, samples []UsageS
 	return nil
 }
 
-func (s *PostgresStore) UsageSamples(ctx context.Context, project, pool *string, from, to uint64) ([]UsageSample, error) {
-	// $3/$4 need an explicit ::text cast: unlike sqlx (which conveys the
-	// bind type up front), pgx's default extended-protocol Parse leaves
+func (s *PostgresStore) UsageSamples(ctx context.Context, project, pool, owner *string, from, to uint64) ([]UsageSample, error) {
+	// $3/$4/$5 need an explicit ::text cast: unlike sqlx (which conveys
+	// the bind type up front), pgx's default extended-protocol Parse leaves
 	// parameter type inference to Postgres, and a placeholder used only in
 	// an `IS NULL` context gives the planner nothing to infer from
 	// (SQLSTATE 42P18) — the cast also lets each value bind once instead
 	// of the Rust reference's $3/$4, $5/$6 double-bind.
 	rows, err := s.pool.Query(ctx, `
-		SELECT ts, project, pool, resource, quantity, source FROM usage_samples
+		SELECT ts, project, pool, resource, quantity, source, owner FROM usage_samples
 		WHERE ts >= $1 AND ts <= $2
 		AND ($3::text IS NULL OR project = $3)
 		AND ($4::text IS NULL OR pool = $4)
+		AND ($5::text IS NULL OR owner = $5)
 		ORDER BY ts ASC
-	`, clampI64(from), clampI64(to), project, pool)
+	`, clampI64(from), clampI64(to), project, pool, owner)
 	if err != nil {
 		return nil, storeErrorf("usage samples: %v", err)
 	}
@@ -840,12 +879,12 @@ func (s *PostgresStore) UsageSamples(ctx context.Context, project, pool *string,
 	out := make([]UsageSample, 0)
 	for rows.Next() {
 		var (
-			ts                            int64
-			projectVal, poolVal, resource string
-			quantity                      float64
-			sourceStr                     string
+			ts                                      int64
+			projectVal, poolVal, resource, ownerVal string
+			quantity                                float64
+			sourceStr                               string
 		)
-		if err := rows.Scan(&ts, &projectVal, &poolVal, &resource, &quantity, &sourceStr); err != nil {
+		if err := rows.Scan(&ts, &projectVal, &poolVal, &resource, &quantity, &sourceStr, &ownerVal); err != nil {
 			return nil, storeErrorf("usage samples: %v", err)
 		}
 		source, err := ParseUsageSource(sourceStr)
@@ -854,7 +893,7 @@ func (s *PostgresStore) UsageSamples(ctx context.Context, project, pool *string,
 		}
 		out = append(out, UsageSample{
 			Ts: uint64(ts), Project: projectVal, Pool: poolVal, Resource: resource,
-			Quantity: quantity, Source: source,
+			Quantity: quantity, Source: source, Owner: ownerVal,
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -1414,4 +1453,245 @@ func (s *PostgresStore) DeleteRoleAssignment(ctx context.Context, principal, rol
 		return errNoSuchAssignment(principal, role, scope)
 	}
 	return nil
+}
+
+// --- Services ---
+
+// UpsertService mirrors UpsertDesired: per-name advisory lock so two
+// upserts serialize, and a terminated record is a fresh create.
+func (s *PostgresStore) UpsertService(ctx context.Context, name string, spec core.ServiceSpec, owner *string) (uint64, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, storeErrorf("begin transaction: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtext($1))", "service:"+name); err != nil {
+		return 0, storeErrorf("advisory lock: %v", err)
+	}
+
+	var revive bool
+	generation, err := func() (uint64, error) {
+		var curJSON, curDesired string
+		var curGen int64
+		err := tx.QueryRow(ctx, "SELECT spec_json, generation, desired FROM services WHERE name = $1", name).
+			Scan(&curJSON, &curGen, &curDesired)
+		switch {
+		case err == nil:
+			if curDesired == DesiredTerminated.AsStr() {
+				revive = true
+				return uint64(curGen) + 1, nil
+			}
+			var cur core.ServiceSpec
+			if uerr := json.Unmarshal([]byte(curJSON), &cur); uerr != nil {
+				return 0, jsonErr(uerr)
+			}
+			if serviceSpecChanged(&cur, &spec) {
+				return uint64(curGen) + 1, nil
+			}
+			return uint64(curGen), nil
+		case errors.Is(err, pgx.ErrNoRows):
+			return 1, nil
+		default:
+			return 0, storeErrorf("read service: %v", err)
+		}
+	}()
+	if err != nil {
+		return 0, err
+	}
+	specJSON, err := json.Marshal(spec)
+	if err != nil {
+		return 0, jsonErr(err)
+	}
+	if revive {
+		_, err = tx.Exec(ctx, `
+			UPDATE services SET spec_json = $1, owner = $2, generation = $3, desired = 'running',
+				observed_state = NULL, observed_url = NULL, created_at = $4, terminated_at = NULL
+			WHERE name = $5
+		`, string(specJSON), owner, int64(generation), int64(NowUnix()), name)
+	} else {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO services (name, spec_json, owner, generation, desired, created_at)
+			VALUES ($1, $2, $3, $4, 'running', $5)
+			ON CONFLICT (name) DO UPDATE SET
+				spec_json = excluded.spec_json,
+				generation = excluded.generation
+		`, name, string(specJSON), owner, int64(generation), int64(NowUnix()))
+	}
+	if err != nil {
+		return 0, storeErrorf("upsert service: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, storeErrorf("commit: %v", err)
+	}
+	return generation, nil
+}
+
+func (s *PostgresStore) GetService(ctx context.Context, name string) (*StoredService, error) {
+	row := s.pool.QueryRow(ctx, "SELECT "+serviceColumns+" FROM services WHERE name = $1", name)
+	c, err := scanService(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+func (s *PostgresStore) ListServices(ctx context.Context) ([]StoredService, error) {
+	rows, err := s.pool.Query(ctx, "SELECT "+serviceColumns+" FROM services ORDER BY name ASC")
+	if err != nil {
+		return nil, storeErrorf("list services: %v", err)
+	}
+	defer rows.Close()
+	out := make([]StoredService, 0)
+	for rows.Next() {
+		c, err := scanService(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, storeErrorf("list services: %v", err)
+	}
+	return out, nil
+}
+
+func (s *PostgresStore) SetServiceDesired(ctx context.Context, name string, desired DesiredState) error {
+	if !desired.isValid() {
+		return errBadDesiredState(string(desired))
+	}
+	isTerminated := desired == DesiredTerminated
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE services SET desired = $1,
+		 terminated_at = CASE WHEN $2 THEN COALESCE(terminated_at, $3) ELSE NULL END
+		 WHERE name = $4`,
+		desired.AsStr(), isTerminated, int64(NowUnix()), name)
+	if err != nil {
+		return storeErrorf("set service desired: %v", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return errNoSuchService(name)
+	}
+	return nil
+}
+
+func (s *PostgresStore) RecordServiceObservation(ctx context.Context, name string, observed *core.ClusterState, url *string) error {
+	observedJSON, err := marshalOptionalState(observed)
+	if err != nil {
+		return err
+	}
+	if _, err := s.pool.Exec(ctx,
+		"UPDATE services SET observed_state = $1, observed_url = $2 WHERE name = $3",
+		observedJSON, url, name); err != nil {
+		return storeErrorf("record service observation: %v", err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) RemoveService(ctx context.Context, name string) (bool, error) {
+	tag, err := s.pool.Exec(ctx, "DELETE FROM services WHERE name = $1", name)
+	if err != nil {
+		return false, storeErrorf("remove service: %v", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// --- Ephemeral Ray jobs ---
+
+func (s *PostgresStore) UpsertRayJob(ctx context.Context, id core.ClusterId, spec core.RayJobSpec, owner *string) error {
+	specJSON, err := json.Marshal(spec)
+	if err != nil {
+		return jsonErr(err)
+	}
+	_, err = s.pool.Exec(ctx, `
+		INSERT INTO ray_jobs (id, spec_json, owner, desired, submitted_at)
+		VALUES ($1, $2, $3, 'running', $4)
+		ON CONFLICT (id) DO UPDATE SET
+			spec_json = excluded.spec_json,
+			owner = excluded.owner
+	`, string(id), string(specJSON), owner, int64(NowUnix()))
+	if err != nil {
+		return storeErrorf("upsert job: %v", err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) GetRayJob(ctx context.Context, id core.ClusterId) (*StoredRayJob, error) {
+	row := s.pool.QueryRow(ctx, "SELECT "+rayJobColumns+" FROM ray_jobs WHERE id = $1", string(id))
+	j, err := scanRayJob(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &j, nil
+}
+
+func (s *PostgresStore) ListRayJobs(ctx context.Context) ([]StoredRayJob, error) {
+	rows, err := s.pool.Query(ctx, "SELECT "+rayJobColumns+" FROM ray_jobs ORDER BY submitted_at DESC, id ASC")
+	if err != nil {
+		return nil, storeErrorf("list jobs: %v", err)
+	}
+	defer rows.Close()
+	out := make([]StoredRayJob, 0)
+	for rows.Next() {
+		j, err := scanRayJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, j)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, storeErrorf("list jobs: %v", err)
+	}
+	return out, nil
+}
+
+func (s *PostgresStore) SetRayJobDesired(ctx context.Context, id core.ClusterId, desired DesiredState) error {
+	if !desired.isValid() {
+		return errBadDesiredState(string(desired))
+	}
+	tag, err := s.pool.Exec(ctx, "UPDATE ray_jobs SET desired = $1 WHERE id = $2", desired.AsStr(), string(id))
+	if err != nil {
+		return storeErrorf("set job desired: %v", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return errNoSuchRayJob(string(id))
+	}
+	return nil
+}
+
+func (s *PostgresStore) RecordRayJobObservation(ctx context.Context, id core.ClusterId, obs RayJobObservation) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE ray_jobs SET status = $1, deployment_status = $2, cluster_name = $3, dashboard_url = $4,
+			message = $5, started_at = $6, finished_at = $7
+		WHERE id = $8
+	`, obs.Status, obs.DeploymentStatus, obs.ClusterName, obs.DashboardURL, obs.Message,
+		u64PtrToIntPtr(obs.StartedAt), u64PtrToIntPtr(obs.FinishedAt), string(id))
+	if err != nil {
+		return storeErrorf("record job observation: %v", err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) RecordRayJobAttempt(ctx context.Context, id core.ClusterId, failureCount uint32, nextAttemptAt uint64) error {
+	_, err := s.pool.Exec(ctx,
+		"UPDATE ray_jobs SET failure_count = $1, next_attempt_at = $2 WHERE id = $3",
+		int64(failureCount), int64(nextAttemptAt), string(id))
+	if err != nil {
+		return storeErrorf("record job attempt: %v", err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) RemoveRayJob(ctx context.Context, id core.ClusterId) (bool, error) {
+	tag, err := s.pool.Exec(ctx, "DELETE FROM ray_jobs WHERE id = $1", string(id))
+	if err != nil {
+		return false, storeErrorf("remove job: %v", err)
+	}
+	return tag.RowsAffected() > 0, nil
 }

@@ -258,3 +258,63 @@ func postgresSpecFixture(replicas uint32) core.ClusterSpec {
 		}},
 	}
 }
+
+// TestPostgresMigratesUsageSamplesOwnerColumn is the Postgres twin of
+// TestSqliteMigratesUsageSamplesOwnerColumn: a schema whose usage_samples
+// predates the owner column gains it on NewPostgresStoreFromPool and reads
+// its old rows back as unattributed.
+func TestPostgresMigratesUsageSamplesOwnerColumn(t *testing.T) {
+	url := postgresTestURL(t)
+	ctx := context.Background()
+	schema := fmt.Sprintf("conf_%d_%d", os.Getpid(), nextPgSchema.Add(1))
+
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		t.Fatalf("parse postgres url: %v", err)
+	}
+	cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		if _, err := conn.Exec(ctx, "CREATE SCHEMA IF NOT EXISTS "+schema); err != nil {
+			return err
+		}
+		_, err := conn.Exec(ctx, "SET search_path TO "+schema)
+		return err
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatalf("connect to postgres: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
+		pool.Close()
+	})
+	if _, err := pool.Exec(ctx, `CREATE TABLE usage_samples (
+	    ts BIGINT NOT NULL, project TEXT NOT NULL, pool TEXT NOT NULL,
+	    resource TEXT NOT NULL, quantity DOUBLE PRECISION NOT NULL, source TEXT NOT NULL)`); err != nil {
+		t.Fatalf("create legacy table: %v", err)
+	}
+	if _, err := pool.Exec(ctx, "INSERT INTO usage_samples VALUES (100, 'proj-a', 'gpu', 'cpu', 4.0, 'kueue_ledger')"); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := controller.NewPostgresStoreFromPool(ctx, pool)
+	if err != nil {
+		t.Fatalf("apply schema over legacy table: %v", err)
+	}
+	old, err := store.UsageSamples(ctx, nil, nil, nil, 0, ^uint64(0))
+	if err != nil || len(old) != 1 || old[0].Owner != "" {
+		t.Fatalf("legacy row after migration: %+v err=%v", old, err)
+	}
+	owner := "alice"
+	if err := store.RecordUsageSamples(ctx, []controller.UsageSample{
+		{Ts: 200, Project: "proj-a", Pool: "gpu", Resource: "cpu", Quantity: 1.0, Source: controller.UsageSourceKueueLedger, Owner: owner},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.UsageSamples(ctx, nil, nil, &owner, 0, ^uint64(0)); err != nil || len(got) != 1 || got[0].Ts != 200 {
+		t.Fatalf("owner filter after migration: %+v err=%v", got, err)
+	}
+	// Re-applying is idempotent.
+	if _, err := controller.NewPostgresStoreFromPool(ctx, pool); err != nil {
+		t.Fatalf("re-apply schema: %v", err)
+	}
+}
