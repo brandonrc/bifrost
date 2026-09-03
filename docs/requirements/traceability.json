@@ -95,20 +95,25 @@
       "n": 5,
       "title": "UI runs jobs via ephemeral RayJob",
       "priority": "CRITICAL",
-      "tests": 5,
+      "tests": 7,
       "passed": 5,
       "failed": 0,
-      "skipped": 0,
+      "skipped": 2,
       "not_yet_built": 0,
-      "status": "built",
+      "status": "partial",
       "test_names": [
         "TestFailedJobIsReportedAndCleanedUp",
+        "TestGatewayDomainRendersAsFlag",
         "TestJobAppearsInHistoryWithSubmitter",
         "TestJobCompletionRemovesItsCluster",
+        "TestRBACGrantsRayJobsAndSecretMetadataOnly",
         "TestRunningJobIsReachableThroughTheGateway",
         "TestSubmitCreatesAnEphemeralCluster"
       ],
-      "skip_reasons": null
+      "skip_reasons": [
+        "bifrost-pack chart not checked out (set PACK_CHART)",
+        "bifrost-pack chart not checked out (set PACK_CHART)"
+      ]
     },
     {
       "n": 6,
@@ -239,23 +244,18 @@
       "n": 12,
       "title": "Private storage (e.g. S3) from the cluster",
       "priority": "CRITICAL",
-      "tests": 6,
-      "passed": 4,
+      "tests": 2,
+      "passed": 0,
       "failed": 0,
-      "skipped": 2,
-      "not_yet_built": 0,
+      "skipped": 1,
+      "not_yet_built": 1,
       "status": "partial",
       "test_names": [
-        "TestFileModeMountsAtPath",
-        "TestJobStorageReferenceIsResolvedLikeAClusters",
-        "TestSecretValuesNeverAppearInResponses",
-        "TestStorageRefOutsideProjectIsRefused",
-        "TestStorageRefReachesPodsAsSecretRefNeverAsValue",
-        "TestUnknownStorageRefIsRefused"
+        "TestClusterSpecCanReferenceStorageCredentials",
+        "TestRBACGrantsRayJobsAndSecretMetadataOnly"
       ],
       "skip_reasons": [
-        "target inproc has no Kubernetes",
-        "target inproc has no Kubernetes"
+        "bifrost-pack chart not checked out (set PACK_CHART)"
       ]
     },
     {
