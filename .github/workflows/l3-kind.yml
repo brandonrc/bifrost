@@ -16,10 +16,33 @@ on:
       - "cmd/bifrost/**"
       - "Dockerfile"
       - ".github/workflows/l3-kind.yml"
+# A new push to the same ref cancels the previous run: the lane is long and
+# a superseded run tells nobody anything.
+concurrency:
+  group: l3-kind-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   kind-calico:
+    # The suite provisions dozens of real RayClusters, RayJobs and
+    # RayServices; on one 4-vCPU runner that no longer fits any timeout.
+    # Sharded: every shard is its own kind cluster running a slice of the
+    # requirement packages; `report` merges the shards' go test -json into
+    # one traceability matrix.
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - name: rbac-selfserve
+            pkgs: ./test/requirements/r03_rbac/... ./test/requirements/r06_self_serve/... ./test/requirements/r17_slurm/...
+          - name: jobs-cleanup
+            pkgs: ./test/requirements/r05_ephemeral_rayjob/... ./test/requirements/r08_cleanup/... ./test/requirements/r10_nebi_envs/...
+          - name: serving
+            pkgs: ./test/requirements/r01_serve_from_jupyter/... ./test/requirements/r02_group_serving/... ./test/requirements/r04_serving_pool/... ./test/requirements/r13_pools/...
+          - name: governance
+            pkgs: ./test/requirements/contract/... ./test/requirements/r07_admin_controls/... ./test/requirements/r12_private_storage/... ./test/requirements/r14_usage/... ./test/requirements/r15_health/... ./test/requirements/r16_dask/... ./test/requirements/r18_baseline/... ./test/requirements/pack/...
     env:
       KIND_CLUSTER: bifrost-l3
       BIFROST_URL: http://127.0.0.1:8484
@@ -98,10 +121,7 @@ jobs:
           # One run id for every package (-p 1 runs them one at a time), so
           # preflight's leaked-cluster check and postflight's sweep agree.
           export REQ_RUN_ID="t$(printf '%x' "$GITHUB_RUN_ID")"
-          CGO_ENABLED=1 go test -race -count=1 -p 1 -timeout 40m -json ./test/requirements/... > l3.json
-      - name: Traceability (L3 lane)
-        if: always() && steps.suite.conclusion != 'skipped'
-        run: go run ./test/requirements/cmd/reqreport -in l3.json -lane l3 -out l3-report -allow-untested
+          CGO_ENABLED=1 go test -race -count=1 -p 1 -timeout 80m -json ${{ matrix.shard.pkgs }} > l3.json
 
       - name: Cluster state on failure
         if: failure()
@@ -110,12 +130,37 @@ jobs:
           kubectl -n bifrost get rayclusters -o yaml || true
           kubectl -n bifrost logs deploy/bifrost --tail=400 || true
           kubectl -n kuberay logs deploy/kuberay-operator --tail=200 || true
-      - name: Upload results
+      - name: Upload shard results
         if: always() && steps.suite.conclusion != 'skipped'
         uses: actions/upload-artifact@v4
         with:
+          name: l3-kind-${{ matrix.shard.name }}
+          path: l3.json
+          if-no-files-found: error
+
+  report:
+    # One traceability matrix from every shard; runs even when a shard is red
+    # so the matrix shows what failed.
+    needs: kind-calico
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: l3-kind-*
+          path: shards
+      - name: Traceability (L3 lane, merged)
+        run: |
+          IN=$(ls shards/*/l3.json | paste -sd, -)
+          echo "merging: $IN"
+          go run ./test/requirements/cmd/reqreport -in "$IN" -lane l3 -out l3-report -allow-untested
+      - uses: actions/upload-artifact@v4
+        with:
           name: l3-kind
           path: |
-            l3.json
+            shards/
             l3-report/
           if-no-files-found: error
