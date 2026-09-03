@@ -173,6 +173,7 @@ spec:
             # <name>.ray.kind.invalid; tests reach them with a Host header
             # against the NodePort (REQ_GATEWAY_DOMAIN in l3-kind.yml).
             - --gateway-domain=ray.kind.invalid
+            - --gateway-external-base=http://
           env:
             - name: BIFROST_LOCAL_ADMIN_PASSWORD
               valueFrom:

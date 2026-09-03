@@ -60,6 +60,12 @@ type target struct {
 // real routing.
 const DefaultGatewayDomain = "inproc.invalid"
 
+// DefaultGatewayExternalBase is the --gateway-external-base equivalent:
+// the scheme views prefix a registered hostname with in gateway_url. Tests
+// parse the host back out of it and send it as a Host header — no
+// resolution of the .invalid name is ever attempted.
+const DefaultGatewayExternalBase = "http://"
+
 // seedBcryptCost is the bcrypt work factor inproc hashes seed passwords and
 // issued tokens at: bcrypt.MinCost, not auth's production bcryptCost (12).
 // Spec §3 caps the whole L2 requirement-test lane at under 3 minutes
@@ -112,13 +118,15 @@ func New(t testing.TB, opts ...Option) req.Target {
 		t.Fatal(err)
 	}
 	cfg := app.Config{
-		Store:              store,
-		Local:              local,
-		Provisioner:        newFakeProvisioner(),
-		ServiceProvisioner: newFakeServiceProvisioner(),
-		ReconcileInterval:  25 * time.Millisecond,
-		MeteringInterval:   100 * time.Millisecond,
-		GatewayDomain:      DefaultGatewayDomain,
+		Store:               store,
+		Local:               local,
+		Provisioner:         newFakeProvisioner(),
+		ServiceProvisioner:  newFakeServiceProvisioner(),
+		JobProvisioner:      newFakeJobProvisioner(),
+		ReconcileInterval:   25 * time.Millisecond,
+		MeteringInterval:    100 * time.Millisecond,
+		GatewayDomain:       DefaultGatewayDomain,
+		GatewayExternalBase: DefaultGatewayExternalBase,
 	}
 	for _, o := range opts {
 		o(&cfg)

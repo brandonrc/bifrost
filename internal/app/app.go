@@ -140,6 +140,15 @@ func (a *App) RunLoops(ctx context.Context) {
 			}
 		}()
 	}
+	if a.cfg.JobProvisioner != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := controller.RunJobReconciler(ctx, a.Store, a.cfg.JobProvisioner, opts); err != nil {
+				slog.Error("job reconcile loop exited", "error", err)
+			}
+		}()
+	}
 	if pp, ok := a.cfg.Provisioner.(provision.PoolProvisioner); ok {
 		wg.Add(1)
 		go func() {
