@@ -190,15 +190,16 @@ func (h *k8sHandle) postflight(ctx context.Context, prefix, probeNS string) erro
 	defer cancel()
 	var left []string
 	err := wait.PollUntilContextTimeout(sweepCtx, 3*time.Second, postflightBudget(), true, func(ctx context.Context) (bool, error) {
-		seen := left[:0:0]
-		left = seen
+		// Build this poll into cur and publish it only when the poll completes,
+		// so a deadline mid-poll still reports the previous snapshot instead of [].
+		var cur []string
 		var rcs rayv1.RayClusterList
 		if err := h.raw.List(ctx, &rcs, ctrlclient.InNamespace(h.ns)); err != nil {
 			return false, err
 		}
 		for _, rc := range rcs.Items {
 			if strings.HasPrefix(rc.Labels[clusterIDLabel], prefix) || strings.HasPrefix(rc.Name, prefix) {
-				left = append(left, "raycluster/"+rc.Name)
+				cur = append(cur, "raycluster/"+rc.Name)
 			}
 		}
 		// RayJobs (#5) and RayServices (#1/#2) are owned kinds too: a test
@@ -210,7 +211,7 @@ func (h *k8sHandle) postflight(ctx context.Context, prefix, probeNS string) erro
 		}
 		for _, rj := range rjs.Items {
 			if strings.HasPrefix(rj.Labels[clusterIDLabel], prefix) || strings.HasPrefix(rj.Name, prefix) {
-				left = append(left, "rayjob/"+rj.Name)
+				cur = append(cur, "rayjob/"+rj.Name)
 			}
 		}
 		var rss rayv1.RayServiceList
@@ -219,7 +220,7 @@ func (h *k8sHandle) postflight(ctx context.Context, prefix, probeNS string) erro
 		}
 		for _, rs := range rss.Items {
 			if strings.HasPrefix(rs.Labels[clusterIDLabel], prefix) || strings.HasPrefix(rs.Name, prefix) {
-				left = append(left, "rayservice/"+rs.Name)
+				cur = append(cur, "rayservice/"+rs.Name)
 			}
 		}
 		var pods corev1.PodList
@@ -228,7 +229,7 @@ func (h *k8sHandle) postflight(ctx context.Context, prefix, probeNS string) erro
 		}
 		for _, p := range pods.Items {
 			if strings.HasPrefix(p.Labels[clusterIDLabel], prefix) || strings.HasPrefix(p.Labels["ray.io/cluster"], prefix) {
-				left = append(left, "pod/"+p.Name)
+				cur = append(cur, "pod/"+p.Name)
 			}
 		}
 		var nps networkingv1.NetworkPolicyList
@@ -237,7 +238,7 @@ func (h *k8sHandle) postflight(ctx context.Context, prefix, probeNS string) erro
 		}
 		for _, np := range nps.Items {
 			if strings.HasPrefix(np.Labels[clusterIDLabel], prefix) || strings.HasPrefix(strings.TrimPrefix(np.Name, "bifrost-cluster-"), prefix) {
-				left = append(left, "networkpolicy/"+np.Name)
+				cur = append(cur, "networkpolicy/"+np.Name)
 			}
 		}
 		for _, ns := range uniq(h.ns, probeNS) {
@@ -246,16 +247,17 @@ func (h *k8sHandle) postflight(ctx context.Context, prefix, probeNS string) erro
 				return false, err
 			}
 			for _, p := range probes.Items {
-				left = append(left, "probe-pod/"+ns+"/"+p.Name)
+				cur = append(cur, "probe-pod/"+ns+"/"+p.Name)
 			}
 			var secrets corev1.SecretList
 			if err := h.raw.List(ctx, &secrets, ctrlclient.InNamespace(ns), runSel); err != nil {
 				return false, err
 			}
 			for _, s := range secrets.Items {
-				left = append(left, "secret/"+ns+"/"+s.Name)
+				cur = append(cur, "secret/"+ns+"/"+s.Name)
 			}
 		}
+		left = cur
 		return len(left) == 0, nil
 	})
 	if err != nil {
