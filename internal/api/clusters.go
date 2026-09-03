@@ -83,7 +83,26 @@ func clusterSpecFromWire(w *ClusterSpec) (core.ClusterSpec, error) {
 		WorkerGroups:    groups,
 		TtlSeconds:      ttl,
 		IdleTimeoutSecs: idle,
+		Profile:         w.Profile,
 	}, nil
+}
+
+// validateClusterShape is the shape check the contract cannot express:
+// every quantity parses as a Kubernetes quantity and every worker group's
+// replica bounds are coherent. Shared by create_cluster and the profile
+// catalog's PUT validation, so a profile can never define a shape a
+// create would refuse.
+func validateClusterShape(spec *core.ClusterSpec) error {
+	if _, _, derr := policy.ClusterDemand(spec); derr != nil {
+		return badRequest("invalid spec: " + derr.Error())
+	}
+	for _, g := range spec.WorkerGroups {
+		if g.MinReplicas > g.MaxReplicas || g.Replicas < g.MinReplicas || g.Replicas > g.MaxReplicas {
+			return badRequest(fmt.Sprintf("invalid spec: worker group %q replicas=%d must lie within min_replicas=%d..max_replicas=%d",
+				g.Name, g.Replicas, g.MinReplicas, g.MaxReplicas))
+		}
+	}
+	return nil
 }
 
 func workerGroupsFromWire(in []WorkerGroup) ([]core.WorkerGroup, error) {
@@ -345,26 +364,33 @@ func (s *Server) CreateCluster(ctx context.Context, req CreateClusterRequestObje
 	if err != nil {
 		return nil, err
 	}
+	// Profile expansion (requirement 7, plan ruling D4) runs before shape
+	// validation: a client picking a profile sends the shape fields empty
+	// and the catalog fills them.
+	if spec.Profile != nil {
+		if perr := s.resolveProfile(ctx, &spec); perr != nil {
+			s.denyCreate(ctx, identity, body.Id, "profile_rejected", http.StatusBadRequest)
+			return nil, perr
+		}
+	}
 	// Shape validation the contract cannot express: every quantity must
 	// parse as a Kubernetes quantity and every worker group's replica bounds
 	// must be coherent. Without this a spec such as head_cpu "lots" is
 	// accepted with 201 and then fails in the provisioner on every tick — a
 	// cluster the user can see but that can never be built (found by
 	// r06's TestInvalidSpecIsRefusedWith400, 2026-09-02).
-	if _, _, derr := policy.ClusterDemand(&spec); derr != nil {
+	if verr := validateClusterShape(&spec); verr != nil {
 		s.denyCreate(ctx, identity, body.Id, "invalid_spec", http.StatusBadRequest)
-		return nil, badRequest("invalid spec: " + derr.Error())
+		return nil, verr
 	}
-	for _, g := range spec.WorkerGroups {
-		if g.MinReplicas > g.MaxReplicas || g.Replicas < g.MinReplicas || g.Replicas > g.MaxReplicas {
-			s.denyCreate(ctx, identity, body.Id, "invalid_spec", http.StatusBadRequest)
-			return nil, badRequest(fmt.Sprintf("invalid spec: worker group %q replicas=%d must lie within min_replicas=%d..max_replicas=%d",
-				g.Name, g.Replicas, g.MinReplicas, g.MaxReplicas))
-		}
+	// Administrator's allowlist (requirement 7): image and worker cap, the
+	// platform-wide "*" rule overridden by the project's own. Checked
+	// before quota so a refused image never counts against anything.
+	admission, err := s.admissionFor(ctx, spec.Project)
+	if err != nil {
+		return nil, wrapStoreErr(err)
 	}
-	// Administrator's allowlist (requirement 7): image and worker cap.
-	// Checked before quota so a refused image never counts against anything.
-	if aerr := s.Admission.Check(&spec); aerr != nil {
+	if aerr := admission.Check(&spec); aerr != nil {
 		s.denyCreate(ctx, identity, body.Id, aerr.reason, http.StatusBadRequest)
 		return nil, badRequest(aerr.message)
 	}

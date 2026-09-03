@@ -3,9 +3,10 @@
 //
 // CPU/memory/GPU are governed by the quota and budget policy; this file is
 // about the two the policy could not express until now: which images a
-// cluster may run and how many workers it may ask for. Both are
-// administrator configuration on the control plane (`serve --allowed-images`,
-// `--max-workers`): the frozen contract has no operation to edit them.
+// cluster may run and how many workers it may ask for. The deployment-wide
+// rule is control-plane configuration (`serve --allowed-images`,
+// `--max-workers`, the policy's "*" admission rule); per-project rules are
+// set through PUT /settings/policy (profiles_test.go's helpers).
 //
 // On inproc the test builds its own restricted control plane; on a cluster
 // target it reads what the deployment was configured with from
@@ -14,6 +15,7 @@
 package r07_admin_controls
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"strconv"
@@ -100,4 +102,24 @@ func TestDeveloperCannotChangeAdmissionPolicy(t *testing.T) {
 	if err != nil || resp.StatusCode() != http.StatusForbidden {
 		t.Fatalf("project operator update_policy: err=%v status=%v, want 403", err, resp.StatusCode())
 	}
+}
+
+func TestPerProjectImageAllowlist(t *testing.T) {
+	tgt := target.Get(t)
+	req.Covers(t, 7, "an administrator's per-project image allowlist refuses that project's create with 400 while other projects are unaffected")
+	ctx := context.Background()
+	setPolicySections(t, tgt, `{"admission":{"team-b":{"allowed_images":["registry.example/"]}}}`)
+
+	id := req.Name("pimg")
+	resp, err := tgt.As("dev-b").API().CreateClusterWithResponse(ctx, fixture.ClusterBody(id, "team-b", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode() != http.StatusBadRequest {
+		t.Fatalf("team-b create outside its allowlist = %d %s, want 400", resp.StatusCode(), resp.Body)
+	}
+	if st, _ := fixture.Get(t, tgt, "admin", id); st != http.StatusNotFound {
+		t.Fatalf("a refused create must persist nothing; get = %d", st)
+	}
+	fixture.MustCreate(t, tgt, "dev-a", req.Name("pimga"), "team-a")
 }

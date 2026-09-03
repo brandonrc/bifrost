@@ -70,25 +70,6 @@ func TestJobStubsAuthorizeBeforeAnswering501(t *testing.T) {
 	}
 }
 
-func TestListProfilesStubRequiresReadOnCluster(t *testing.T) {
-	s := &Server{Store: newMemStore(t)}
-	for _, tc := range []struct {
-		id   *auth.Identity
-		want int
-	}{
-		{testIdentity("admin", auth.RoleAdmin), http.StatusNotImplemented},
-		{testIdentity("op", auth.RoleOperator), http.StatusNotImplemented},
-		{testIdentity("dev", auth.RoleDeveloper), http.StatusNotImplemented},
-		{testIdentity("viewer", auth.RoleViewer), http.StatusNotImplemented},
-		{testIdentity("auditor", auth.RoleAuditor), http.StatusForbidden},
-	} {
-		_, err := s.ListProfiles(ctxWithIdentity(tc.id), ListProfilesRequestObject{})
-		if got := statusOf(t, err); got != tc.want {
-			t.Errorf("list_profiles as %v = %d (%v), want %d", tc.id.Roles, got, err, tc.want)
-		}
-	}
-}
-
 func statusOf(t *testing.T, err error) int {
 	t.Helper()
 	var he HTTPError
