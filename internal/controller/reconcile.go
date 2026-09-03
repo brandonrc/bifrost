@@ -622,6 +622,16 @@ func (r *Reconciler) reconcileOne(ctx context.Context, c *StoredCluster, now uin
 			return 0, wrapStoreErr(err)
 		}
 	}
+	// Gateway routing (requirement 5's dynamic registry, applied to #6
+	// clusters too): a live cluster is registered under its gateway
+	// hostname, a dead or dying one deregistered. Derived from the same
+	// observation just persisted, so the table rebuilds itself from the
+	// first pass after a restart — nothing to persist.
+	var finalURL *string
+	if finalErr == nil {
+		finalURL = finalObs.ApiBaseUrl
+	}
+	r.syncGatewayRegistration(c, finalState, finalURL)
 
 	// 4. Backoff accounting (#43): after actuating a Running cluster, did
 	//    it make progress? A cluster observed back at None/Terminated/
@@ -654,6 +664,48 @@ func (r *Reconciler) reconcileOne(ctx context.Context, c *StoredCluster, now uin
 	}
 
 	return action, nil
+}
+
+// syncGatewayRegistration keeps the gateway registry in step with one
+// cluster's observed state: registered (Target jobs, project-scoped) while
+// desired running and observed in a routable state with a known API base
+// URL; deregistered otherwise. A registration refused by the registry (a
+// static hostname collision) is logged, never fatal — routing is a
+// convenience layered on the cluster, not a condition of it.
+func (r *Reconciler) syncGatewayRegistration(c *StoredCluster, state *core.ClusterState, apiBaseURL *string) {
+	if r.registrar == nil || r.gatewayHostname == nil {
+		return
+	}
+	if c.Desired == DesiredRunning && state != nil && apiBaseURL != nil && clusterIsRoutable(*state) {
+		err := r.registrar.Register(core.ClusterEndpoint{
+			Id:         c.ID,
+			Hostname:   r.gatewayHostname(c.ID),
+			ApiBaseUrl: *apiBaseURL,
+			Project:    c.Spec.Project,
+			Target:     core.RegistryTargetJobs,
+			Source:     core.RegistrySourceDynamic,
+		})
+		if err != nil {
+			slog.Warn("cluster could not be registered with the gateway",
+				"target", "bifrost::audit", "cluster", c.ID.String(), "error", err)
+		}
+		return
+	}
+	r.registrar.Deregister(c.ID)
+}
+
+// clusterIsRoutable reports whether a cluster in state s has (or is about
+// to have) a head worth routing to: coming up, running, degraded or
+// rolling. Suspended and terminating clusters have no head.
+func clusterIsRoutable(s core.ClusterState) bool {
+	switch s {
+	case core.ClusterStateProvisioning, core.ClusterStateRunning, core.ClusterStateDegraded, core.ClusterStateUpdating:
+		return true
+	case core.ClusterStatePending, core.ClusterStateSuspending, core.ClusterStateSuspended,
+		core.ClusterStateTerminating, core.ClusterStateTerminated:
+		return false
+	}
+	return false
 }
 
 // inSuspendedTerminalGroup reports whether s is one of the states that
