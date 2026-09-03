@@ -224,6 +224,31 @@ func (c *Client) ensureClusterAllow(ctx context.Context, id string, owner *strin
 	return c.applyNetworkPolicy(ctx, c.namespace, provision.ClusterAllowNetworkPolicy(id, owner))
 }
 
+// ensureSecretsExist fails fast when a Secret the spec's storage entries
+// (requirement 12) name is missing from the workload namespace, so the
+// cluster surfaces a condition the user can read instead of pods stuck in
+// CreateContainerConfigError. The check is METADATA ONLY: the Get asks for
+// a PartialObjectMetadata, so the Secret's data never reaches Bifrost's
+// process (RBAC grants `secrets: get`, and this is the only use of it).
+func (c *Client) ensureSecretsExist(ctx context.Context, storage []core.ResolvedStorage) error {
+	return ensureSecretsExist(ctx, c.c, c.namespace, storage)
+}
+
+func ensureSecretsExist(ctx context.Context, c client.Client, namespace string, storage []core.ResolvedStorage) error {
+	for _, st := range storage {
+		meta := &metav1.PartialObjectMetadata{}
+		meta.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Secret"))
+		if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: st.SecretName}, meta); err != nil {
+			if apierrors.IsNotFound(err) {
+				return provision.ProvisionError{Kind: provision.ProvisionErrBackend,
+					Message: fmt.Sprintf("secret %q not found in namespace %s (storage entry %q)", st.SecretName, namespace, st.Name)}
+			}
+			return wrapErr(err)
+		}
+	}
+	return nil
+}
+
 // deleteClusterAllow deletes the per-cluster allow policy for id.
 // Idempotent: already-gone is success. Ported from
 // kuberay_client.rs:239-256.
@@ -304,6 +329,9 @@ func (c *Client) Apply(ctx context.Context, id core.ClusterId, spec *core.Cluste
 	// pods are never up under the default-deny without their own allow
 	// (head<->worker traffic would stall the rollout).
 	if err := c.ensureClusterAllow(ctx, string(id), spec.Owner); err != nil {
+		return provision.ApplyResponse{}, err
+	}
+	if err := c.ensureSecretsExist(ctx, spec.StorageResolved); err != nil {
 		return provision.ApplyResponse{}, err
 	}
 	manifest, err := provision.RayClusterFor(id, spec, c.autoscaling, generation, queue)
@@ -515,6 +543,9 @@ func (s *ServiceClient) Deploy(ctx context.Context, name string, spec *core.Serv
 	// per-owner Ray-client pin: they are addressed through the Serve
 	// gateway, not a user's ray.init.
 	if err := s.ensureClusterAllow(ctx, name, nil); err != nil {
+		return err
+	}
+	if err := s.ensureSecretsExist(ctx, spec.StorageResolved); err != nil {
 		return err
 	}
 	// queue is the project's serving LocalQueue (requirement 4), resolved

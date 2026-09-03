@@ -1886,8 +1886,12 @@ func runRayJobConformance(t *testing.T, store controller.Store) {
 				t.Fatalf("list order violated at %d: %s(%d) before %s(%d)", i, a.ID, a.SubmittedAt, b.ID, b.SubmittedAt)
 			}
 		}
-		if all[len(all)-1].Owner != nil {
-			t.Fatalf("nil owner must round-trip as nil: %+v", all[len(all)-1])
+		// The upserts above may straddle a second boundary, so job-2 is
+		// not necessarily last; find it by id rather than by position.
+		for _, j := range all {
+			if j.ID == "job-2" && j.Owner != nil {
+				t.Fatalf("nil owner must round-trip as nil: %+v", j)
+			}
 		}
 	})
 

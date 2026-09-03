@@ -8,6 +8,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 
 	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
 
@@ -1128,5 +1129,140 @@ func TestIsDefaultDenyRecognizesForeignDenyAll(t *testing.T) {
 	}
 	if IsDefaultDeny(nil) {
 		t.Fatalf("nil is not a default-deny")
+	}
+}
+
+// --- Requirement 12: private storage reaches pods as Secret references ---
+
+func testStorage() []core.ResolvedStorage {
+	return []core.ResolvedStorage{
+		{Name: "s3-a", SecretName: "s3-a-creds", Mode: core.StorageModeEnv},
+		{Name: "gcs", SecretName: "gcs-key", Mode: core.StorageModeFile, MountPath: ptr.To("/opt/gcs")},
+	}
+}
+
+// assertStorageProjected checks one pod template carries the env entry as
+// envFrom.secretRef and the file entry as a read-only Secret volume mount,
+// and that nothing but Secret NAMES is on the template.
+func assertStorageProjected(t *testing.T, what string, tmpl *corev1.PodTemplateSpec) {
+	t.Helper()
+	c := tmpl.Spec.Containers[0]
+	if len(c.EnvFrom) != 1 || c.EnvFrom[0].SecretRef == nil || c.EnvFrom[0].SecretRef.Name != "s3-a-creds" {
+		t.Fatalf("%s: envFrom = %+v, want one secretRef s3-a-creds", what, c.EnvFrom)
+	}
+	if len(c.Env) != 0 {
+		t.Fatalf("%s: env = %+v, want none (values never appear on the manifest)", what, c.Env)
+	}
+	if len(tmpl.Spec.Volumes) != 1 || tmpl.Spec.Volumes[0].Secret == nil || tmpl.Spec.Volumes[0].Secret.SecretName != "gcs-key" ||
+		tmpl.Spec.Volumes[0].Name != StorageVolumeName("gcs") {
+		t.Fatalf("%s: volumes = %+v, want one Secret volume gcs-key named %s", what, tmpl.Spec.Volumes, StorageVolumeName("gcs"))
+	}
+	if len(c.VolumeMounts) != 1 || c.VolumeMounts[0].Name != StorageVolumeName("gcs") || c.VolumeMounts[0].MountPath != "/opt/gcs" || !c.VolumeMounts[0].ReadOnly {
+		t.Fatalf("%s: volumeMounts = %+v, want one read-only mount at /opt/gcs", what, c.VolumeMounts)
+	}
+}
+
+func TestStorageIsProjectedOntoEveryPodTemplate(t *testing.T) {
+	spec := testSpec(t, wg("cpu", 0, 4, 2))
+	spec.StorageResolved = testStorage()
+	rc, err := RayClusterFor("demo", spec, false, 1, nil)
+	if err != nil {
+		t.Fatalf("RayClusterFor: %v", err)
+	}
+	assertStorageProjected(t, "head", &rc.Spec.HeadGroupSpec.Template)
+	assertStorageProjected(t, "worker", &rc.Spec.WorkerGroupSpecs[0].Template)
+
+	svc := testServiceSpec(core.UpgradeStrategyCanary)
+	svc.StorageResolved = testStorage()
+	rs, err := RayServiceFor("svc", svc, 1, nil)
+	if err != nil {
+		t.Fatalf("RayServiceFor: %v", err)
+	}
+	assertStorageProjected(t, "service head", &rs.Spec.RayClusterSpec.HeadGroupSpec.Template)
+	assertStorageProjected(t, "service worker", &rs.Spec.RayClusterSpec.WorkerGroupSpecs[0].Template)
+}
+
+func TestNoStorageLeavesTheTemplatesUntouched(t *testing.T) {
+	rc, err := RayClusterFor("demo", testSpec(t, wg("cpu", 0, 4, 2)), false, 1, nil)
+	if err != nil {
+		t.Fatalf("RayClusterFor: %v", err)
+	}
+	head := rc.Spec.HeadGroupSpec.Template
+	if len(head.Spec.Volumes) != 0 || len(head.Spec.Containers[0].EnvFrom) != 0 || len(head.Spec.Containers[0].VolumeMounts) != 0 {
+		t.Fatalf("a spec without storage must add no volumes/envFrom/mounts: %+v", head.Spec)
+	}
+	m := marshal(t, rc)
+	if strings.Contains(string(mustJSON(t, m)), `"storage"`) {
+		t.Fatal("no storage key may appear on the manifest")
+	}
+}
+
+func mustJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// A file entry that lost its mount path (impossible past the catalog
+// validation, but the type allows it) is skipped rather than mounted at "".
+func TestFileEntryWithoutMountPathIsNotMounted(t *testing.T) {
+	spec := testSpec(t, wg("cpu", 0, 4, 2))
+	spec.StorageResolved = []core.ResolvedStorage{{Name: "x", SecretName: "x-key", Mode: core.StorageModeFile}}
+	rc, err := RayClusterFor("demo", spec, false, 1, nil)
+	if err != nil {
+		t.Fatalf("RayClusterFor: %v", err)
+	}
+	if len(rc.Spec.HeadGroupSpec.Template.Spec.Volumes) != 0 {
+		t.Fatalf("volumes = %+v, want none", rc.Spec.HeadGroupSpec.Template.Spec.Volumes)
+	}
+}
+
+// The owned fingerprint covers the storage projection: it round-trips
+// through the manifest, and a stripped mount or envFrom is drift (an
+// out-of-band edit that removes a tenant's credentials must be repaired,
+// as mobula's pod-shaping drift rule had it).
+func TestOwnedFingerprintCoversStorage(t *testing.T) {
+	spec := testSpec(t, wg("cpu", 0, 4, 2))
+	plain := OwnedSpecFingerprint(spec)
+	if strings.Contains(plain, "storage") {
+		t.Fatalf("a spec without storage must fingerprint as before: %s", plain)
+	}
+	// Reverse list order on the spec side: the projection is sorted, so
+	// the order a user lists entries in is not drift.
+	spec.StorageResolved = []core.ResolvedStorage{testStorage()[1], testStorage()[0]}
+	want := OwnedSpecFingerprint(spec)
+	if want == plain {
+		t.Fatal("adding storage must change the fingerprint")
+	}
+	rc, err := RayClusterFor("demo", spec, false, 1, nil)
+	if err != nil {
+		t.Fatalf("RayClusterFor: %v", err)
+	}
+	got, ok := FingerprintFromRayCluster(&rc.Spec)
+	if !ok || got != want {
+		t.Fatalf("fingerprint mismatch (ok=%v):\nwant %s\ngot  %s", ok, want, got)
+	}
+
+	// Strip the mount from the live manifest: drift.
+	stripped := rc.DeepCopy()
+	stripped.Spec.HeadGroupSpec.Template.Spec.Containers[0].VolumeMounts = nil
+	if fp, _ := FingerprintFromRayCluster(&stripped.Spec); fp == want {
+		t.Fatal("a removed volume mount must change the fingerprint")
+	}
+	// Strip the envFrom: drift.
+	stripped = rc.DeepCopy()
+	stripped.Spec.HeadGroupSpec.Template.Spec.Containers[0].EnvFrom = nil
+	if fp, _ := FingerprintFromRayCluster(&stripped.Spec); fp == want {
+		t.Fatal("a removed envFrom must change the fingerprint")
+	}
+	// A KubeRay-added non-Secret volume (e.g. shared memory) is not drift.
+	extra := rc.DeepCopy()
+	extra.Spec.HeadGroupSpec.Template.Spec.Volumes = append(extra.Spec.HeadGroupSpec.Template.Spec.Volumes,
+		corev1.Volume{Name: "shared-mem", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}})
+	if fp, _ := FingerprintFromRayCluster(&extra.Spec); fp != want {
+		t.Fatal("a non-Secret volume must not change the fingerprint")
 	}
 }

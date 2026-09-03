@@ -72,6 +72,12 @@ func clusterSpecFromWire(w *ClusterSpec) (core.ClusterSpec, error) {
 		v := uint64(*w.IdleTimeoutSecs)
 		idle = &v
 	}
+	// Storage names (requirement 12) are copied verbatim; CreateCluster
+	// resolves them against the catalog after admission.
+	var storage []string
+	if w.Storage != nil {
+		storage = append([]string(nil), (*w.Storage)...)
+	}
 	return core.ClusterSpec{
 		Name:            w.Name,
 		Project:         w.Project,
@@ -84,6 +90,7 @@ func clusterSpecFromWire(w *ClusterSpec) (core.ClusterSpec, error) {
 		TtlSeconds:      ttl,
 		IdleTimeoutSecs: idle,
 		Profile:         w.Profile,
+		Storage:         storage,
 	}, nil
 }
 
@@ -405,6 +412,18 @@ func (s *Server) CreateCluster(ctx context.Context, req CreateClusterRequestObje
 		s.denyCreate(ctx, identity, body.Id, aerr.reason, http.StatusBadRequest)
 		return nil, badRequest(aerr.message)
 	}
+	// Private storage (requirement 12): every catalog name the spec lists
+	// must exist and be open to the project; the resolution (Secret name,
+	// mode, mount path — never the Secret's data) is persisted on the spec
+	// so a later catalog edit does not reach into a running cluster.
+	resolved, err := s.resolveStorage(ctx, spec.Project, spec.Storage)
+	if err != nil {
+		if he, ok := err.(HTTPError); ok && he.Status == http.StatusBadRequest {
+			s.denyCreate(ctx, identity, body.Id, "storage_rejected", http.StatusBadRequest)
+		}
+		return nil, err
+	}
+	spec.StorageResolved = resolved
 	// Tier-2 owned session clusters: the authenticated caller is always
 	// the recorded owner, overriding any client-supplied value — the body
 	// is untrusted (ownership is who asked, not what they claim). nil

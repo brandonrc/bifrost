@@ -161,6 +161,7 @@ func specChanged(a, b *core.ClusterSpec) bool {
 		!uint64PtrEqual(a.IdleTimeoutSecs, b.IdleTimeoutSecs) ||
 		!stringPtrEqual(a.Profile, b.Profile) ||
 		!stringSliceEqual(a.Storage, b.Storage) ||
+		!resolvedStorageEqual(a.StorageResolved, b.StorageResolved) ||
 		len(a.WorkerGroups) != len(b.WorkerGroups) {
 		return true
 	}
@@ -254,7 +255,26 @@ func serviceSpecChanged(a, b *core.ServiceSpec) bool {
 		a.WorkerCpu != b.WorkerCpu ||
 		a.WorkerMemory != b.WorkerMemory ||
 		a.Upgrade != b.Upgrade ||
-		!stringSliceEqual(a.Storage, b.Storage)
+		!stringSliceEqual(a.Storage, b.Storage) ||
+		!resolvedStorageEqual(a.StorageResolved, b.StorageResolved)
+}
+
+// resolvedStorageEqual compares two storage resolutions (requirement 12)
+// field by field, nil and empty being equal like stringSliceEqual. A
+// re-submitted spec whose names resolve differently (the catalog was
+// edited in between) must bump the generation so the pods roll with the
+// new Secret references.
+func resolvedStorageEqual(a, b []core.ResolvedStorage) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Name != b[i].Name || a[i].SecretName != b[i].SecretName || a[i].Mode != b[i].Mode ||
+			!stringPtrEqual(a[i].MountPath, b[i].MountPath) {
+			return false
+		}
+	}
+	return true
 }
 
 // --- Stored ephemeral Ray job (requirement 5) ---

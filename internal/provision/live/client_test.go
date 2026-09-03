@@ -2,10 +2,18 @@ package live
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/brandonrc/bifrost/internal/provision"
 )
 
 // fakePatchClient is a minimal client.Client stub for applySSA's unit
@@ -52,5 +60,57 @@ func TestApplySSAZeroesStatusBeforePatching(t *testing.T) {
 	state := got.Status.State //nolint:staticcheck // SA1019: asserting the deprecated field was cleared
 	if state != "" {
 		t.Fatalf("Status.State = %q, want empty (ZeroStatus must run before Patch)", state)
+	}
+}
+
+// fakeGetClient answers Get for Secrets by name: names in present exist,
+// anything else is NotFound. It records the object type every Get asked
+// for, so the test can prove the existence check never requests a full
+// Secret (metadata only — the data must not reach Bifrost's process).
+type fakeGetClient struct {
+	client.Client
+	present map[string]bool
+	asked   []client.Object
+}
+
+func (f *fakeGetClient) Get(_ context.Context, key client.ObjectKey, obj client.Object, _ ...client.GetOption) error {
+	f.asked = append(f.asked, obj)
+	if f.present[key.Name] {
+		return nil
+	}
+	return apierrors.NewNotFound(schema.GroupResource{Resource: "secrets"}, key.Name)
+}
+
+func TestEnsureSecretsExistIsMetadataOnlyAndFailsFast(t *testing.T) {
+	fake := &fakeGetClient{present: map[string]bool{"s3-a-creds": true}}
+	storage := []core.ResolvedStorage{
+		{Name: "s3-a", SecretName: "s3-a-creds", Mode: core.StorageModeEnv},
+		{Name: "gcs", SecretName: "gcs-key", Mode: core.StorageModeFile},
+	}
+	err := ensureSecretsExist(context.Background(), fake, "tenants", storage)
+	if err == nil {
+		t.Fatal("a missing Secret must fail the apply")
+	}
+	var perr provision.ProvisionError
+	if !errors.As(err, &perr) || perr.Kind != provision.ProvisionErrBackend || !strings.Contains(perr.Message, `secret "gcs-key" not found`) {
+		t.Fatalf("err = %v, want a backend ProvisionError naming gcs-key", err)
+	}
+	if len(fake.asked) != 2 {
+		t.Fatalf("Get calls = %d, want 2", len(fake.asked))
+	}
+	for _, obj := range fake.asked {
+		meta, ok := obj.(*metav1.PartialObjectMetadata)
+		if !ok {
+			t.Fatalf("Get asked for %T; only PartialObjectMetadata may be requested for a Secret", obj)
+		}
+		if gvk := meta.GroupVersionKind(); gvk.Kind != "Secret" || gvk.Version != "v1" {
+			t.Fatalf("Get asked for %s, want core/v1 Secret metadata", gvk)
+		}
+	}
+	if err := ensureSecretsExist(context.Background(), fake, "tenants", storage[:1]); err != nil {
+		t.Fatalf("all present: %v", err)
+	}
+	if err := ensureSecretsExist(context.Background(), fake, "tenants", nil); err != nil {
+		t.Fatalf("no storage: %v", err)
 	}
 }

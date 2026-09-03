@@ -225,11 +225,14 @@ func (s *Server) DeployService(ctx context.Context, req DeployServiceRequestObje
 		return nil, ErrForbidden
 	}
 
-	// HOOK(private-storage, package G): resolve spec.Storage against the
-	// policy catalog here — `spec.StorageResolved, err = s.resolveStorage(ctx,
-	// spec.Project, spec.Storage)`; 400 for unknown names or entries the
-	// project may not use. Runs before admission so a refused reference
-	// never consumes quota.
+	// Private storage (requirement 12): resolve spec.Storage against the
+	// policy catalog — 400 for unknown names or entries the project may
+	// not use. Runs before admission so a refused reference never
+	// consumes quota; the resolution is persisted on the spec so a later
+	// catalog edit is never retroactive.
+	if spec.StorageResolved, err = s.resolveStorage(ctx, spec.Project, spec.Storage); err != nil {
+		return nil, err
+	}
 
 	// One service per project (requirement 2, plan ruling D8): a project
 	// shares a single RayService, so a second name in the same project is

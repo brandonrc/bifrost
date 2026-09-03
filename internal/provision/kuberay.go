@@ -111,7 +111,7 @@ func RayClusterFor(id core.ClusterId, spec *core.ClusterSpec, autoscaling bool, 
 	workerSpecs := make([]rayv1.WorkerGroupSpec, 0, len(spec.WorkerGroups))
 	for i := range spec.WorkerGroups {
 		g := spec.WorkerGroups[i]
-		ws, err := workerGroupSpec(string(id), &g, spec.Image, autoscaling, &generation, spec.Owner)
+		ws, err := workerGroupSpec(string(id), &g, spec.Image, autoscaling, &generation, spec.Owner, spec.StorageResolved)
 		if err != nil {
 			return nil, fmt.Errorf("provision: worker group %q: %w", g.Name, err)
 		}
@@ -182,6 +182,17 @@ type fingerprintWorker struct {
 	Max    uint32  `json:"max"`
 }
 
+// fingerprintStorage is the storage projection's drift-relevant shape
+// (requirement 12): which Secret reaches the pods, how, and where. A
+// stripped envFrom or mount is drift, exactly like a changed image. The
+// catalog name is not on the manifest for env entries, so it is not part
+// of the projection.
+type fingerprintStorage struct {
+	Secret    string  `json:"secret"`
+	Mode      string  `json:"mode"`
+	MountPath *string `json:"mount_path"`
+}
+
 // owned_spec_fingerprint / fingerprint_from_cr's shared projection shape.
 type fingerprintSpec struct {
 	RayVersion string              `json:"ray_version"`
@@ -189,6 +200,75 @@ type fingerprintSpec struct {
 	HeadCpu    string              `json:"head_cpu"`
 	HeadMemory string              `json:"head_memory"`
 	Workers    []fingerprintWorker `json:"workers"`
+	// Storage is omitted when empty so specs without storage fingerprint
+	// exactly as they did before requirement 12.
+	Storage []fingerprintStorage `json:"storage,omitempty"`
+}
+
+// sortStorageProjection orders a projection deterministically (secret,
+// mode, mount path): the desired side comes from the spec's list order,
+// the live side from envFrom-then-volumes traversal, and the two must
+// agree byte for byte.
+func sortStorageProjection(in []fingerprintStorage) []fingerprintStorage {
+	sort.Slice(in, func(i, j int) bool {
+		a, b := in[i], in[j]
+		if a.Secret != b.Secret {
+			return a.Secret < b.Secret
+		}
+		if a.Mode != b.Mode {
+			return a.Mode < b.Mode
+		}
+		return ptr.Deref(a.MountPath, "") < ptr.Deref(b.MountPath, "")
+	})
+	return in
+}
+
+// storageProjection is the fingerprint's view of a spec's resolved storage.
+func storageProjection(storage []core.ResolvedStorage) []fingerprintStorage {
+	out := make([]fingerprintStorage, 0, len(storage))
+	for _, st := range storage {
+		f := fingerprintStorage{Secret: st.SecretName, Mode: st.Mode.String()}
+		if st.Mode == core.StorageModeFile {
+			if st.MountPath == nil {
+				continue // not projected by podTemplate either
+			}
+			mp := *st.MountPath
+			f.MountPath = &mp
+		}
+		out = append(out, f)
+	}
+	return sortStorageProjection(out)
+}
+
+// storageFromTemplate reads the storage projection back off a live pod
+// template: every envFrom.secretRef on the first container, and every
+// Secret volume that container mounts (with its mount path).
+func storageFromTemplate(tmpl *corev1.PodTemplateSpec) []fingerprintStorage {
+	c, ok := firstContainer(tmpl)
+	if !ok {
+		return nil
+	}
+	out := make([]fingerprintStorage, 0, len(c.EnvFrom)+len(tmpl.Spec.Volumes))
+	for _, e := range c.EnvFrom {
+		if e.SecretRef != nil {
+			out = append(out, fingerprintStorage{Secret: e.SecretRef.Name, Mode: core.StorageModeEnv.String()})
+		}
+	}
+	mounts := make(map[string]string, len(c.VolumeMounts))
+	for _, m := range c.VolumeMounts {
+		mounts[m.Name] = m.MountPath
+	}
+	for _, v := range tmpl.Spec.Volumes {
+		if v.Secret == nil {
+			continue
+		}
+		mp, mounted := mounts[v.Name]
+		if !mounted {
+			continue
+		}
+		out = append(out, fingerprintStorage{Secret: v.Secret.SecretName, Mode: core.StorageModeFile.String(), MountPath: ptr.To(mp)})
+	}
+	return sortStorageProjection(out)
 }
 
 // OwnedSpecFingerprint is the fingerprint of the Bifrost-owned,
@@ -226,6 +306,7 @@ func OwnedSpecFingerprint(spec *core.ClusterSpec) string {
 		HeadCpu:    canonicalQuantity(spec.HeadCpu),
 		HeadMemory: canonicalQuantity(spec.HeadMemory),
 		Workers:    workers,
+		Storage:    storageProjection(spec.StorageResolved),
 	})
 	if err != nil {
 		// fingerprintSpec is built entirely from strings/uint32s: only a
@@ -305,6 +386,7 @@ func FingerprintFromRayCluster(spec *rayv1.RayClusterSpec) (fingerprint string, 
 		HeadCpu:    headCPU,
 		HeadMemory: headMemory,
 		Workers:    workers,
+		Storage:    storageFromTemplate(&spec.HeadGroupSpec.Template),
 	})
 	if err != nil {
 		panic(fmt.Sprintf("provision: marshaling fingerprint: %v", err))
@@ -356,7 +438,7 @@ func containerImage(tmpl *corev1.PodTemplateSpec) (string, bool) {
 }
 
 func headGroupSpec(id string, spec *core.ClusterSpec, generation *uint64) (rayv1.HeadGroupSpec, error) {
-	tmpl, err := podTemplate(id, HeadContainerName, spec.Image, spec.HeadCpu, spec.HeadMemory, nil, generation, spec.Owner)
+	tmpl, err := podTemplate(id, HeadContainerName, spec.Image, spec.HeadCpu, spec.HeadMemory, nil, generation, spec.Owner, spec.StorageResolved)
 	if err != nil {
 		return rayv1.HeadGroupSpec{}, err
 	}
@@ -366,11 +448,11 @@ func headGroupSpec(id string, spec *core.ClusterSpec, generation *uint64) (rayv1
 	}, nil
 }
 
-func workerGroupSpec(id string, g *core.WorkerGroup, image string, autoscaling bool, generation *uint64, owner *string) (rayv1.WorkerGroupSpec, error) {
+func workerGroupSpec(id string, g *core.WorkerGroup, image string, autoscaling bool, generation *uint64, owner *string, storage []core.ResolvedStorage) (rayv1.WorkerGroupSpec, error) {
 	// Workers run the cluster image (Kubernetes requires an image on
 	// every container; KubeRay does NOT copy the head image onto worker
 	// groups, so an empty image would be rejected).
-	tmpl, err := podTemplate(id, WorkerContainerName, image, g.Cpu, g.Memory, g.Gpu, generation, owner)
+	tmpl, err := podTemplate(id, WorkerContainerName, image, g.Cpu, g.Memory, g.Gpu, generation, owner, storage)
 	if err != nil {
 		return rayv1.WorkerGroupSpec{}, err
 	}
@@ -431,7 +513,12 @@ func rayProbe(head bool) *corev1.Probe {
 	}
 }
 
-func podTemplate(clusterID, containerName, image, cpu, memory string, gpu *string, generation *uint64, owner *string) (corev1.PodTemplateSpec, error) {
+// storage is the spec's resolved private-storage catalog entries
+// (requirement 12): env entries become `envFrom.secretRef`, file entries a
+// read-only Secret volume at their mount path. Only Secret NAMES are
+// written; the kubelet resolves them inside the pod, so the credentials
+// never pass through Bifrost.
+func podTemplate(clusterID, containerName, image, cpu, memory string, gpu *string, generation *uint64, owner *string, storage []core.ResolvedStorage) (corev1.PodTemplateSpec, error) {
 	cpuQ, err := resource.ParseQuantity(cpu)
 	if err != nil {
 		return corev1.PodTemplateSpec{}, fmt.Errorf("provision: invalid cpu quantity %q: %w", cpu, err)
@@ -463,6 +550,7 @@ func podTemplate(clusterID, containerName, image, cpu, memory string, gpu *strin
 	// endpoints through it: the raylet on every node, plus GCS on the head.
 	container.LivenessProbe = rayProbe(containerName == HeadContainerName)
 	container.ReadinessProbe = rayProbe(containerName == HeadContainerName)
+	volumes := projectStorage(&container, storage)
 	// Both head and workers carry the cluster image; only omitted if a
 	// caller passes empty (KubeRay then applies its default).
 	if image != "" {
@@ -483,7 +571,7 @@ func podTemplate(clusterID, containerName, image, cpu, memory string, gpu *strin
 	}
 	tmpl := corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{Labels: podLabels},
-		Spec:       corev1.PodSpec{Containers: []corev1.Container{container}},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{container}, Volumes: volumes},
 	}
 	// Stamp the generation into the pod template so a spec bump changes
 	// the template hash and KubeRay rolls the pods. Services pass nil —
@@ -492,6 +580,39 @@ func podTemplate(clusterID, containerName, image, cpu, memory string, gpu *strin
 		tmpl.Annotations = map[string]string{GenerationAnnotation: strconv.FormatUint(*generation, 10)}
 	}
 	return tmpl, nil
+}
+
+// StorageVolumeName is the pod volume a file-mode storage entry mounts
+// through: "storage-<catalog name>" (the API keeps catalog names RFC 1123
+// labels short enough for this to be a valid volume name).
+func StorageVolumeName(entry string) string { return "storage-" + entry }
+
+// projectStorage adds the storage entries to container (envFrom for env
+// mode, a read-only mount for file mode) and returns the Secret volumes
+// the pod needs for the mounts. Both sides carry only Secret names.
+func projectStorage(container *corev1.Container, storage []core.ResolvedStorage) []corev1.Volume {
+	var volumes []corev1.Volume
+	for _, st := range storage {
+		switch st.Mode {
+		case core.StorageModeEnv:
+			container.EnvFrom = append(container.EnvFrom, corev1.EnvFromSource{
+				SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: st.SecretName}},
+			})
+		case core.StorageModeFile:
+			if st.MountPath == nil {
+				continue // validated away at the catalog edit; never mount at ""
+			}
+			name := StorageVolumeName(st.Name)
+			volumes = append(volumes, corev1.Volume{
+				Name:         name,
+				VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: st.SecretName}},
+			})
+			container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+				Name: name, MountPath: *st.MountPath, ReadOnly: true,
+			})
+		}
+	}
+	return volumes
 }
 
 // SuspendPatch is the partial manifest a suspend/resume call actuates: a
@@ -530,10 +651,8 @@ func SuspendPatch(suspend bool) []byte {
 // this RayService (KubeRay copies RayService labels onto it); the
 // serving-pool package fills it, nil keeps the manifest label-free.
 //
-// TODO(private-storage, #12): a storage projection parameter
-// ([]core.ResolvedStorage → envFrom/secret volumes on both pod templates)
-// belongs here once podTemplate grows it; until then spec.StorageResolved
-// is persisted but not projected.
+// spec.StorageResolved (requirement 12) is projected onto both pod
+// templates as Secret references, exactly as RayClusterFor does.
 func RayServiceFor(name string, spec *core.ServiceSpec, generation uint64, queue *QueueAssignment) (*rayv1.RayService, error) {
 	var upgradeType rayv1.RayServiceUpgradeType
 	switch spec.Upgrade {
@@ -551,11 +670,11 @@ func RayServiceFor(name string, spec *core.ServiceSpec, generation uint64, queue
 	}
 	// Serve worker replicas are fixed here (autoscaling=false); Serve
 	// autoscaling is Ray Serve's own concern (deployment num_replicas).
-	workerSpec, err := workerGroupSpec(name, &worker, spec.Image, false, nil, nil)
+	workerSpec, err := workerGroupSpec(name, &worker, spec.Image, false, nil, nil, spec.StorageResolved)
 	if err != nil {
 		return nil, fmt.Errorf("provision: service worker group: %w", err)
 	}
-	headTmpl, err := podTemplate(name, "ray-head", spec.Image, spec.HeadCpu, spec.HeadMemory, nil, nil, nil)
+	headTmpl, err := podTemplate(name, HeadContainerName, spec.Image, spec.HeadCpu, spec.HeadMemory, nil, nil, nil, spec.StorageResolved)
 	if err != nil {
 		return nil, fmt.Errorf("provision: service head group: %w", err)
 	}
