@@ -457,11 +457,17 @@ func WaitJob(t req.T, tgt req.Target, principal, id, want string) map[string]any
 			view = v
 			return true, status
 		}
+		msg, _ := v["message"].(string)
 		if status != want && (status == "SUCCEEDED" || status == "FAILED" || status == "STOPPED") {
-			msg, _ := v["message"].(string)
 			t.Fatalf("job %s ended %s (%s) while waiting for %s: %s", id, status, dep, want, msg)
 		}
-		return false, fmt.Sprintf("status=%q deployment_status=%q", status, dep)
+		// KubeRay gave up before the job ran (cluster never ready, submitter
+		// failed, spec rejected): Failed with an empty job status is terminal,
+		// so say why now instead of polling out the budget.
+		if dep == "Failed" && status == "" {
+			t.Fatalf("job %s deployment failed before the job ran while waiting for %s: %s", id, want, msg)
+		}
+		return false, fmt.Sprintf("status=%q deployment_status=%q message=%q", status, dep, msg)
 	})
 	return view
 }

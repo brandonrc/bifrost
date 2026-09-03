@@ -134,9 +134,14 @@ jobs:
         if: failure()
         run: |
           kubectl get all,networkpolicy -A -o wide || true
-          kubectl -n bifrost get rayclusters -o yaml || true
-          kubectl -n bifrost logs deploy/bifrost --tail=400 || true
-          kubectl -n kuberay logs deploy/kuberay-operator --tail=200 || true
+          kubectl -n bifrost get rayclusters,rayjobs,rayservices -o yaml || true
+          kubectl -n bifrost describe pods || true
+          kubectl -n bifrost logs deploy/bifrost --tail=600 || true
+          # The tests delete their objects, so the operator log is the record
+          # of why a RayJob/RayService failed; keep the job/service lines.
+          kubectl -n kuberay logs deploy/kuberay-operator --tail=20000 \
+            | grep -E 'controllers\.(RayJob|RayService)' | grep -Ev '"msg":"Reconciling' | tail -600 || true
+          kubectl -n kuberay logs deploy/kuberay-operator --tail=300 || true
       - name: Upload shard results
         if: always() && steps.suite.conclusion != 'skipped'
         uses: actions/upload-artifact@v4
