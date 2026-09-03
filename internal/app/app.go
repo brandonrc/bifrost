@@ -102,8 +102,9 @@ func New(cfg Config) (*App, error) {
 	return &App{Handler: handler, Store: cfg.Store, cfg: cfg}, nil
 }
 
-// RunLoops runs the reconcile loop (and the pool loop when the provisioner
-// also provisions pools) until ctx is done. With no Provisioner it simply
+// RunLoops runs the reconcile loop (plus the pool loop when the provisioner
+// also provisions pools, and the service loop when a ServiceProvisioner is
+// configured) until ctx is done. With no Provisioner it simply
 // waits for ctx, so callers can always `go app.RunLoops(ctx)`.
 func (a *App) RunLoops(ctx context.Context) {
 	if a.cfg.Provisioner == nil {
@@ -111,23 +112,34 @@ func (a *App) RunLoops(ctx context.Context) {
 		return
 	}
 	var wg sync.WaitGroup
+	opts := controller.Options{
+		Interval:         a.cfg.ReconcileInterval,
+		MeteringInterval: a.cfg.MeteringInterval,
+		JobProvisioner:   a.cfg.JobProvisioner,
+	}
+	if a.cfg.GatewayDomain != "" {
+		domain := a.cfg.GatewayDomain
+		opts.Registrar = a.cfg.Registry
+		opts.GatewayHostname = func(id core.ClusterId) string { return string(id) + "." + domain }
+	}
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		opts := controller.Options{
-			Interval:         a.cfg.ReconcileInterval,
-			MeteringInterval: a.cfg.MeteringInterval,
-			JobProvisioner:   a.cfg.JobProvisioner,
-		}
-		if a.cfg.GatewayDomain != "" {
-			domain := a.cfg.GatewayDomain
-			opts.Registrar = a.cfg.Registry
-			opts.GatewayHostname = func(id core.ClusterId) string { return string(id) + "." + domain }
-		}
 		if err := controller.RunReconciler(ctx, a.Store, a.cfg.Provisioner, opts); err != nil {
 			slog.Error("reconcile loop exited", "error", err)
 		}
 	}()
+	if a.cfg.ServiceProvisioner != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := controller.RunServiceReconciler(ctx, a.Store, a.cfg.ServiceProvisioner, controller.ServiceOptions{
+				Interval: a.cfg.ReconcileInterval, Registrar: opts.Registrar, GatewayHostname: opts.GatewayHostname,
+			}); err != nil {
+				slog.Error("service reconcile loop exited", "error", err)
+			}
+		}()
+	}
 	if pp, ok := a.cfg.Provisioner.(provision.PoolProvisioner); ok {
 		wg.Add(1)
 		go func() {

@@ -101,6 +101,12 @@ type ObservedService struct {
 	// (requirement 2: project-scoped services); "" when the backend does
 	// not carry one.
 	Project string
+	// Generation is the Bifrost spec generation the backing resource was
+	// last applied at, read back from [GenerationAnnotation]; nil when the
+	// resource carries none (created before the annotation existed, or
+	// by another manager). The service reconciler redeploys when it is
+	// nil or behind the stored generation.
+	Generation *uint64
 }
 
 // ObservedJob is the observed state of an ephemeral Ray job as read back
@@ -291,8 +297,10 @@ type PoolProvisioner interface {
 type ServiceProvisioner interface {
 	// Deploy deploys or updates a service (server-side apply of a
 	// RayService). Idempotent; the upgrade strategy in the spec drives
-	// canary vs in-place rollout.
-	Deploy(ctx context.Context, name string, spec *core.ServiceSpec) error
+	// canary vs in-place rollout. generation is the Bifrost spec
+	// generation being applied; the backend stamps it on the resource so
+	// Get can report it back (ObservedService.Generation).
+	Deploy(ctx context.Context, name string, spec *core.ServiceSpec, generation uint64) error
 
 	Get(ctx context.Context, name string) (*ObservedService, error)
 

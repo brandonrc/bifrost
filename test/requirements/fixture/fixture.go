@@ -267,3 +267,87 @@ func EmptyPolicyUpdate() client.UpdatePolicyJSONRequestBody {
 	_ = json.Unmarshal([]byte(`{}`), &body)
 	return body
 }
+
+// --- Services (requirement 1) ---
+
+// ServeConfigV2 is the Serve application every service test deploys: one
+// app whose import path is inside the Ray wheel itself
+// (ray.serve._private.test_utils exports get_pid_entrypoint, a bound
+// GetPID deployment answering GET / with the replica's pid), so a head
+// with no egress (the tenant NetworkPolicy allows DNS and intra-cluster
+// only) can import it without a working_dir download. Verified present in
+// rayproject/ray:2.56.0. An empty `applications: []` never reaches Ready
+// on KubeRay 1.7 (zero serve endpoints), which is why this is not the
+// sample config the RBAC matrix uses.
+func ServeConfigV2() string {
+	return "applications:\n  - name: pid\n    import_path: ray.serve._private.test_utils:get_pid_entrypoint\n    route_prefix: /\n"
+}
+
+// ServiceBody builds a deploy_service body for name in project with the
+// lane's Ray image and worker count and ServeConfigV2 as the app.
+func ServiceBody(name, project string) client.DeployServiceJSONRequestBody {
+	var body client.DeployServiceJSONRequestBody
+	spec := map[string]any{
+		"name": name, "project": project, "ray_version": "2.56.0", "image": RayImage(),
+		"serve_config_v2": ServeConfigV2(), "head_cpu": "1", "head_memory": "2Gi",
+		"worker_replicas": WorkerReplicas(), "worker_cpu": "1", "worker_memory": "2Gi", "upgrade": "in_place",
+	}
+	raw, _ := json.Marshal(map[string]any{"name": name, "spec": spec})
+	_ = json.Unmarshal(raw, &body)
+	return body
+}
+
+// Deploy deploys as principal and returns (status, body).
+func Deploy(t req.T, tgt req.Target, principal string, body client.DeployServiceJSONRequestBody) (int, []byte) {
+	t.Helper()
+	resp, err := tgt.As(principal).API().DeployServiceWithResponse(context.Background(), body)
+	if err != nil {
+		t.Fatalf("deploy %s as %s: %v", body.Name, principal, err)
+	}
+	return resp.StatusCode(), resp.Body
+}
+
+// GetService fetches a service view as principal. view is nil unless
+// status is 200.
+func GetService(t req.T, tgt req.Target, principal, name string) (int, map[string]any) {
+	t.Helper()
+	resp, err := tgt.As(principal).API().GetServiceWithResponse(context.Background(), name)
+	if err != nil {
+		t.Fatalf("get service %s as %s: %v", name, principal, err)
+	}
+	if resp.StatusCode() != http.StatusOK {
+		return resp.StatusCode(), nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(resp.Body, &m); err != nil {
+		t.Fatalf("get service %s: unmarshal: %v", name, err)
+	}
+	return resp.StatusCode(), m
+}
+
+// WaitService polls until the service's state == want within the lane
+// budget and returns the matching view.
+func WaitService(t req.T, tgt req.Target, principal, name, want string) map[string]any {
+	t.Helper()
+	var view map[string]any
+	req.Eventually(t, tgt, func() (bool, string) {
+		st, v := GetService(t, tgt, principal, name)
+		if st != http.StatusOK {
+			return false, fmt.Sprintf("get=%d", st)
+		}
+		state, _ := v["state"].(string)
+		view = v
+		return state == want, "state=" + state
+	})
+	return view
+}
+
+// DeleteService deletes as principal and returns the status.
+func DeleteService(t req.T, tgt req.Target, principal, name string) int {
+	t.Helper()
+	resp, err := tgt.As(principal).API().DeleteServiceWithResponse(context.Background(), name)
+	if err != nil {
+		t.Fatalf("delete service %s as %s: %v", name, principal, err)
+	}
+	return resp.StatusCode()
+}
