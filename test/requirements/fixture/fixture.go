@@ -49,6 +49,18 @@ func WorkerReplicas() int {
 	return 1
 }
 
+// HeadMemory is the head's memory request/limit for every canonical body.
+// REQ_HEAD_MEMORY overrides the 2Gi default: on the head-only kind layout
+// (REQ_WORKER_REPLICAS=0) the head also runs the job supervisor and Ray's
+// memory monitor OOM-kills it at 95% of a 2Gi cgroup, so the kind lane
+// asks for more.
+func HeadMemory() string {
+	if v := os.Getenv("REQ_HEAD_MEMORY"); v != "" {
+		return v
+	}
+	return "2Gi"
+}
+
 // ClusterBody is the canonical minimal cluster: one 1-CPU head and
 // WorkerReplicas() 1-CPU workers. ttl nil = no max-age reaper.
 func ClusterBody(id, project string, ttl *int64) client.CreateClusterJSONRequestBody {
@@ -63,9 +75,9 @@ func ClusterBodyWithImage(id, project, image string, ttl *int64) client.CreateCl
 		ttlJSON = fmt.Sprint(*ttl)
 	}
 	raw := fmt.Sprintf(`{"id":%q,"spec":{"name":%q,"project":%q,"ray_version":"2.56.0","image":%q,
-		"head_cpu":"1","head_memory":"2Gi","ttl_seconds":%s,
-		"worker_groups":[{"name":"w","cpu":"1","memory":"2Gi","gpu":null,"min_replicas":%[6]d,"max_replicas":%[6]d,"replicas":%[6]d}]}}`,
-		id, id, project, image, ttlJSON, WorkerReplicas())
+		"head_cpu":"1","head_memory":%q,"ttl_seconds":%s,
+		"worker_groups":[{"name":"w","cpu":"1","memory":"2Gi","gpu":null,"min_replicas":%[7]d,"max_replicas":%[7]d,"replicas":%[7]d}]}}`,
+		id, id, project, image, HeadMemory(), ttlJSON, WorkerReplicas())
 	var body client.CreateClusterJSONRequestBody
 	if err := json.Unmarshal([]byte(raw), &body); err != nil {
 		panic("fixture: ClusterBody: " + err.Error())
@@ -290,7 +302,7 @@ func ServiceBody(name, project string) client.DeployServiceJSONRequestBody {
 	var body client.DeployServiceJSONRequestBody
 	spec := map[string]any{
 		"name": name, "project": project, "ray_version": "2.56.0", "image": RayImage(),
-		"serve_config_v2": ServeConfigV2(), "head_cpu": "1", "head_memory": "2Gi",
+		"serve_config_v2": ServeConfigV2(), "head_cpu": "1", "head_memory": HeadMemory(),
 		"worker_replicas": WorkerReplicas(), "worker_cpu": "1", "worker_memory": "2Gi", "upgrade": "in_place",
 	}
 	raw, _ := json.Marshal(map[string]any{"name": name, "spec": spec})
@@ -364,8 +376,8 @@ func SubmitJobBody(id, project, entrypoint string, ttl *int32) client.SubmitJobJ
 	if ttl != nil {
 		ttlJSON = fmt.Sprint(*ttl)
 	}
-	raw := fmt.Sprintf(`{"id":%q,"spec":{"project":%q,"entrypoint":%q,"image":%q,"ttl_seconds_after_finished":%s}}`,
-		id, project, entrypoint, RayImage(), ttlJSON)
+	raw := fmt.Sprintf(`{"id":%q,"spec":{"project":%q,"entrypoint":%q,"image":%q,"head_memory":%q,"ttl_seconds_after_finished":%s}}`,
+		id, project, entrypoint, RayImage(), HeadMemory(), ttlJSON)
 	var body client.SubmitJobJSONRequestBody
 	if err := json.Unmarshal([]byte(raw), &body); err != nil {
 		panic("fixture: SubmitJobBody: " + err.Error())

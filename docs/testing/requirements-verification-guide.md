@@ -591,7 +591,7 @@ make test-l3 TARGET=grace                 # writes .l3/out/*.out and l3-grace.js
 ```
 
 Lane-tuning knobs live in the workflow env and the grace script:
-`REQ_WORKER_REPLICAS`, `REQ_EVENTUALLY_TIMEOUT`, `REQ_POSTFLIGHT_TIMEOUT`,
+`REQ_WORKER_REPLICAS`, `REQ_HEAD_MEMORY`, `REQ_EVENTUALLY_TIMEOUT`, `REQ_POSTFLIGHT_TIMEOUT`,
 `REQ_GATEWAY_DOMAIN`, `REQ_ADMISSION_DISALLOWED_IMAGE`, `REQ_ADMISSION_MAX_WORKERS`,
 `REQ_NOWGET_RAY_IMAGE`, `BIFROST_URL` (`in-cluster` on grace), `BIFROST_INSECURE_TLS`.
 
