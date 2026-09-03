@@ -18,6 +18,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/brandonrc/bifrost/pkg/client"
 	"github.com/brandonrc/bifrost/test/requirements/req"
@@ -487,7 +488,8 @@ func WaitJob(t req.T, tgt req.Target, principal, id, want string) map[string]any
 		// failed, spec rejected): Failed with an empty job status is terminal,
 		// so say why now instead of polling out the budget.
 		if dep == "Failed" && status == "" {
-			t.Fatalf("job %s deployment failed before the job ran while waiting for %s: %s", id, want, msg)
+			cluster, _ := v["cluster"].(string)
+			t.Fatalf("job %s deployment failed before the job ran while waiting for %s: %s\n%s", id, want, msg, diagnoseJobDashboard(t, tgt, cluster))
 		}
 		return false, fmt.Sprintf("status=%q deployment_status=%q message=%q", status, dep, msg)
 	})
@@ -529,4 +531,40 @@ func GatewayRequest(t req.T, tgt req.Target, principal, host, path string) (int,
 	defer func() { _ = resp.Body.Close() }()
 	b, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, b
+}
+
+// diagnoseJobDashboard is the operator's view of a RayJob head whose status
+// checks KubeRay gave up on: from the kuberay namespace, with the
+// operator's pod label, GET the dashboard's version and job list and report
+// status and latency. On kind (runs 33802820554, 33808304909, 33813309158)
+// the operator timed out on every poll while an operator-labelled connect
+// probe succeeded, so the answer has to come from the HTTP layer itself.
+func diagnoseJobDashboard(t req.T, tgt req.Target, cluster string) string {
+	t.Helper()
+	pr, ok := tgt.(req.PodRunner)
+	if !ok || cluster == "" {
+		return ""
+	}
+	head := fmt.Sprintf("%s-head-svc.%s.svc:8265", cluster, tgt.Namespace())
+	script := fmt.Sprintf(`
+import time, urllib.request
+for path in ("/api/version", "/api/jobs/"):
+    t0 = time.time()
+    try:
+        with urllib.request.urlopen("http://%s" + path, timeout=20) as r:
+            print("GET", path, r.status, "%%.2fs" %% (time.time() - t0), r.read(300))
+    except Exception as e:
+        print("GET", path, "ERROR", "%%.2fs" %% (time.time() - t0), type(e).__name__, str(e)[:200])
+`, head)
+	res, err := pr.RunPod(context.Background(), req.PodSpec{
+		Namespace: "kuberay",
+		Labels:    map[string]string{"app.kubernetes.io/name": "kuberay-operator"},
+		Image:     pr.RayImage(),
+		Command:   []string{"python", "-c", script},
+		Timeout:   3 * time.Minute,
+	})
+	if err != nil {
+		return "operator-shaped diagnostic probe failed to run: " + err.Error()
+	}
+	return "operator-shaped probe from kuberay to " + head + ":\n" + res.Logs
 }

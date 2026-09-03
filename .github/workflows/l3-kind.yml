@@ -115,9 +115,6 @@ jobs:
           # Head-only layout: the head also runs the job supervisor; Ray's memory
           # monitor OOM-kills it at 95% of a 2Gi cgroup (rbac-selfserve shard, run 33793544341).
           REQ_HEAD_MEMORY: 4Gi
-          # 1.5 CPU keeps two-cluster tests schedulable on 4 vCPU while giving the
-          # dashboard enough headroom for KubeRay's short status-check timeouts.
-          REQ_HEAD_CPU: 1500m
           # A 4-vCPU runner starts a RayService or RayJob slowly; give convergence
           # and teardown room before calling it a failure.
           REQ_EVENTUALLY_TIMEOUT: 10m
