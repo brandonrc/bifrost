@@ -244,6 +244,14 @@ func NeedK8s(t T, tgt Target) {
 // EventuallyTimeout is the per-lane convergence budget (spec §8).
 func EventuallyTimeout(tgt Target) time.Duration {
 	if _, ok := tgt.K8s(); ok {
+		// REQ_EVENTUALLY_TIMEOUT (Go duration) lets a slow lane — a 4-vCPU
+		// CI runner pulling a 2.5 GB Ray image and starting a RayService —
+		// buy time without loosening the default a real cluster is held to.
+		if v := os.Getenv("REQ_EVENTUALLY_TIMEOUT"); v != "" {
+			if d, err := time.ParseDuration(v); err == nil {
+				return d
+			}
+		}
 		return 5 * time.Minute
 	}
 	return 5 * time.Second

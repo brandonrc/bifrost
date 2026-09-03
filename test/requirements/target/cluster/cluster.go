@@ -123,7 +123,7 @@ func New(t testing.TB, name string) req.Target {
 	}
 	tg := &target{s: sh, principal: "admin", t: t}
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), postflightBudget()+2*time.Minute)
 		defer cancel()
 		if err := tg.Cleanup(ctx); err != nil {
 			t.Errorf("postflight: %v", err)
