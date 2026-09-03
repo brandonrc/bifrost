@@ -153,8 +153,8 @@ func (g *guarded) DeleteAllOf(context.Context, ctrlclient.Object, ...ctrlclient.
 }
 
 // postflight reaps the run's probe objects and waits until no RayCluster,
-// pod or NetworkPolicy still carries the run's labels. Leftovers are the
-// error — the run leaked, and a human looks before the next run.
+// pod, NetworkPolicy or Secret still carries the run's labels. Leftovers
+// are the error — the run leaked, and a human looks before the next run.
 func (h *k8sHandle) postflight(ctx context.Context, prefix, probeNS string) error {
 	runSel := ctrlclient.MatchingLabels{req.RunLabel: req.RunID()}
 	for _, ns := range uniq(h.ns, probeNS) {
@@ -168,6 +168,15 @@ func (h *k8sHandle) postflight(ctx context.Context, prefix, probeNS string) erro
 		if err := h.raw.List(ctx, &nps, ctrlclient.InNamespace(ns), runSel); err == nil {
 			for i := range nps.Items {
 				_ = h.raw.Delete(ctx, &nps.Items[i])
+			}
+		}
+		// Requirement 12 tests create run-labelled Secrets for the storage
+		// catalog to reference; reap them like probe objects. Listing
+		// Secrets is a metadata-only concern here — nothing reads .data.
+		var secrets corev1.SecretList
+		if err := h.raw.List(ctx, &secrets, ctrlclient.InNamespace(ns), runSel); err == nil {
+			for i := range secrets.Items {
+				_ = h.raw.Delete(ctx, &secrets.Items[i])
 			}
 		}
 	}
@@ -230,6 +239,13 @@ func (h *k8sHandle) postflight(ctx context.Context, prefix, probeNS string) erro
 			}
 			for _, p := range probes.Items {
 				left = append(left, "probe-pod/"+ns+"/"+p.Name)
+			}
+			var secrets corev1.SecretList
+			if err := h.raw.List(ctx, &secrets, ctrlclient.InNamespace(ns), runSel); err != nil {
+				return false, err
+			}
+			for _, s := range secrets.Items {
+				left = append(left, "secret/"+ns+"/"+s.Name)
 			}
 		}
 		return len(left) == 0, nil

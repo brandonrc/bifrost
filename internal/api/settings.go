@@ -1,6 +1,7 @@
 // Settings API (api-v1.md §5.16): the store-backed, API-editable governance
-// policy — price sheet (cost estimates), per-project quota limits, and
-// per-project time-windowed budgets. Ported from mobula-api's settings.rs.
+// policy — price sheet (cost estimates), per-project quota limits,
+// per-project time-windowed budgets, and (plan ruling D7) the profile,
+// admission and private-storage catalogs. Ported from mobula-api's settings.rs.
 //
 // Precedence: the `--policy` boot-time seed is the DEFAULT; the store wins
 // once a row exists (seeded lazily on first read, or written by PUT).
@@ -187,12 +188,14 @@ func policyView(p *controller.StoredPolicy, source string) PolicyView {
 	}
 	profiles := profilesToWire(p.Profiles)
 	admission := admissionToWire(p.Admission)
+	storage := storageToWire(p.Storage)
 	return PolicyView{
 		Prices:    prices,
 		Quotas:    quotas,
 		Budgets:   budgets,
 		Profiles:  &profiles,
 		Admission: &admission,
+		Storage:   &storage,
 		Source:    source,
 		Editable:  true,
 	}
@@ -490,6 +493,13 @@ func (s *Server) UpdatePolicy(ctx context.Context, req UpdatePolicyRequestObject
 			return nil, err
 		}
 	}
+	var storage []core.StorageEntry
+	if body.Storage != nil {
+		var err error
+		if storage, err = storageFromWire(*body.Storage); err != nil {
+			return nil, err
+		}
+	}
 
 	next, err := effectivePolicy(ctx, s.Store, &s.PolicySeed)
 	if err != nil {
@@ -511,14 +521,19 @@ func (s *Server) UpdatePolicy(ctx context.Context, req UpdatePolicyRequestObject
 		}
 		next.Budgets = budgets
 	}
-	// Profiles and admission follow the same section-replace rule as the
-	// maps above: a present key replaces the whole section (`[]`/`{}`
-	// clears it), an absent key leaves it untouched.
+	// Profiles, admission and storage follow the same section-replace rule
+	// as the maps above: a present key replaces the whole section
+	// (`[]`/`{}` clears it), an absent key leaves it untouched. A storage
+	// edit is never retroactive: specs already admitted keep the
+	// resolution they were admitted with (core.ResolvedStorage).
 	if body.Profiles != nil {
 		next.Profiles = profiles
 	}
 	if body.Admission != nil {
 		next.Admission = admission
+	}
+	if body.Storage != nil {
+		next.Storage = storage
 	}
 	next.FromFileSeed = false
 

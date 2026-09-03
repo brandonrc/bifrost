@@ -239,16 +239,23 @@
       "n": 12,
       "title": "Private storage (e.g. S3) from the cluster",
       "priority": "CRITICAL",
-      "tests": 1,
-      "passed": 0,
+      "tests": 5,
+      "passed": 3,
       "failed": 0,
-      "skipped": 0,
-      "not_yet_built": 1,
-      "status": "not-yet-built",
+      "skipped": 2,
+      "not_yet_built": 0,
+      "status": "partial",
       "test_names": [
-        "TestClusterSpecCanReferenceStorageCredentials"
+        "TestFileModeMountsAtPath",
+        "TestSecretValuesNeverAppearInResponses",
+        "TestStorageRefOutsideProjectIsRefused",
+        "TestStorageRefReachesPodsAsSecretRefNeverAsValue",
+        "TestUnknownStorageRefIsRefused"
       ],
-      "skip_reasons": null
+      "skip_reasons": [
+        "target inproc has no Kubernetes",
+        "target inproc has no Kubernetes"
+      ]
     },
     {
       "n": 13,
