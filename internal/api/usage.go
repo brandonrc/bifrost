@@ -39,7 +39,9 @@ func promEscape(v string) string {
 
 // UsageReport reports resource-hours (and cost when priced) by project and
 // pool over a window, plus configured projects' time-windowed budget
-// status. Read on Target::Cluster.
+// status. Read on Target::Cluster. The `owner` query parameter the 0.2.0
+// contract adds is accepted but not yet applied: package H (usage-owner)
+// attributes samples per owner and filters on it here.
 func (s *Server) UsageReport(ctx context.Context, req UsageReportRequestObject) (UsageReportResponseObject, error) {
 	identity, _ := IdentityFromContext(ctx)
 	if err := Authorize(ctx, s.Store, identity, auth.Read, auth.TargetCluster); err != nil {
