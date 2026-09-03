@@ -1,7 +1,7 @@
 // Gateway registry read API: exposes the effective routing table the job
 // gateway uses (ADR-0002). This is the credential-routing table, so it is
 // Admin-only even for reads — and the static Ray tokens are never
-// serialized, only their presence (token_set). Ported from mobula-api's
+// serialized, only their presence (token_set). Ported from the Rust predecessor's
 // registry.rs.
 package api
 

@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// Ported from mobula-core/src/service.rs #[cfg(test)] mod tests.
+// Ported from the predecessor's core crate, src/service.rs #[cfg(test)] mod tests.
 
 func TestUpgradeDefaultsToCanaryWhenOmitted(t *testing.T) {
 	// serve_config_v2 passes through verbatim; upgrade has a serde

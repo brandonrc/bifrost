@@ -2,7 +2,7 @@
 // credentials that reach pods through a secret reference and never through
 // the spec or an API response.
 //
-// The shape (plan ruling D7, mobula's pod-shaping rule): an administrator
+// The shape (plan ruling D7, the Rust predecessor's pod-shaping rule): an administrator
 // catalogs Kubernetes Secrets as named `storage` entries in the policy
 // (`PUT /settings/policy`, section-replace), a spec lists names, and the
 // provisioner projects them as `envFrom.secretRef` (env) or a read-only

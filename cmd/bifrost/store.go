@@ -43,7 +43,7 @@ func parseStoreKind(s string) (storeKind, error) {
 // anything else is a SQLite path") is deliberately NOT ported: T15 makes
 // the backend an explicit --store flag instead, matching this task's own
 // brief ("a flag (e.g. --store memory|sqlite|postgres + a DSN/path)")
-// rather than mobula-cli's implicit one.
+// rather than the predecessor CLI's implicit one.
 func openStore(ctx context.Context, kind storeKind, db string) (controller.Store, func() error, error) {
 	switch kind {
 	case storeMemory:

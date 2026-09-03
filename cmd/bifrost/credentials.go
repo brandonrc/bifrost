@@ -8,12 +8,12 @@ import (
 )
 
 // credentialsEnvDir overrides the credentials directory, ported from
-// mobula-cli's MOBULA_CONFIG_DIR (renamed for product identity).
+// the predecessor CLI's config-dir variable (renamed for product identity).
 const credentialsEnvDir = "BIFROST_CONFIG_DIR"
 
 // Credentials is the CLI's on-disk login state
 // (~/.config/bifrost/credentials.json, mode 0600), ported field-for-field
-// from mobula-cli's Credentials struct.
+// from the predecessor CLI's Credentials struct.
 type Credentials struct {
 	AccessToken string `json:"access_token"`
 	// RefreshToken is set for a device-code login when the IdP issued

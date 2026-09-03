@@ -8,7 +8,7 @@ import (
 )
 
 // ErrorResponse is the canonical JSON error body for the Bifrost control
-// plane. mobula-api never formalized one struct for this — every handler
+// plane. The Rust predecessor never formalized one struct for this — every handler
 // built its own `serde_json::json!({"error": "<code>", ...})` literal
 // (e.g. clusters.rs's "illegal_state_transition", local_auth.rs's
 // "invalid_credentials") — but they all agree on the same core shape: a

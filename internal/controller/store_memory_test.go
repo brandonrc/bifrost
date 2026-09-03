@@ -9,9 +9,9 @@ import (
 )
 
 // Chain and UsageSource tests below are ported from
-// mobula-controller/src/store.rs's #[cfg(test)] mod tests (store.rs:769-943).
+// the predecessor's controller crate, src/store.rs's #[cfg(test)] mod tests (store.rs:769-943).
 // queue_assignment_resolves_first_matching_allocation is NOT ported here:
-// it exercises mobula_provision::QueueAssignment, a type that belongs to
+// it exercises the predecessor's provision::QueueAssignment, a type that belongs to
 // internal/provision (Task 5) — a Go equivalent of that helper is Task
 // 9/11's concern, once Provisioner exists. The full InMemoryStore CRUD
 // scenario suite lives in Task 2's storetest.RunConformance, not here;
@@ -175,7 +175,7 @@ func TestVerifyAMidTrailWindowAgainstItsHead(t *testing.T) {
 // --- MemoryStore sanity smoke tests ---
 //
 // The exhaustive scenario suite is Task 2's storetest.RunConformance
-// (plan Task 2, ported from mobula-controller/tests/store.rs). These
+// (plan Task 2, ported from the predecessor's controller crate, tests/store.rs). These
 // exist to validate the port compiles and behaves on the paths most
 // likely to have a translation bug: generation bumping, the
 // terminated_at tombstone anchor, intent fencing, and the audit chain

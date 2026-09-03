@@ -5,7 +5,7 @@
 // seam the reconcile engine (internal/controller, Task 9) drives.
 //
 // This file is pure (no Kubernetes client, no I/O) — it mirrors
-// mobula-provision/src/lib.rs. The live client that actually talks to a
+// the predecessor's provision crate, src/lib.rs. The live client that actually talks to a
 // cluster (server-side apply, watches, pod/event reads) lives in
 // internal/provision/live (Task 6), kept thin per the wave's coverage-gate
 // exclusion.
@@ -13,7 +13,7 @@
 // Engine shape: [ClusterSpec] already carries an Engine discriminator
 // (internal/core/cluster.go); [Provisioner] takes the whole spec rather
 // than engine-specific parameters, so a future multi-engine EngineRouter
-// (Wave 3, mirrors mobula's router.rs) can implement this same interface
+// (Wave 3, mirrors the Rust predecessor's router.rs) can implement this same interface
 // and dispatch on spec.Engine without changing the seam.
 package provision
 
@@ -26,7 +26,7 @@ import (
 )
 
 // ProvisionErrorKind discriminates [ProvisionError] variants — the Go
-// analogue of mobula-provision's `ProvisionError` thiserror enum
+// analogue of the predecessor provision crate's `ProvisionError` thiserror enum
 // (lib.rs:35-41).
 type ProvisionErrorKind int
 
@@ -38,7 +38,7 @@ const (
 	ProvisionErrBackend
 )
 
-// ProvisionError is a value-typed error mirroring mobula's
+// ProvisionError is a value-typed error mirroring the Rust predecessor's
 // `ProvisionError` (lib.rs:35-41), matching this codebase's established
 // error pattern (value types with a Kind discriminant, e.g.
 // core.TransitionError, core.PoolSpecError).
@@ -175,7 +175,7 @@ func (p PoolObservation) MarshalJSON() ([]byte, error) {
 }
 
 // Provisioner manages the backing resources for managed Ray clusters — the
-// Go analogue of mobula's `Provisioner` trait (lib.rs:79-230). Every
+// Go analogue of the Rust predecessor's `Provisioner` trait (lib.rs:79-230). Every
 // mutating call carries an idempotency key so an HA failover mid-provision
 // cannot double-provision.
 //
@@ -270,7 +270,7 @@ func (BaseProvisioner) ClusterLogs(context.Context, core.ClusterId, *string, uin
 }
 
 // PoolProvisioner manages a pool's Kueue objects (Cohort / ResourceFlavors
-// / ClusterQueue / LocalQueues) — the Go analogue of mobula's
+// / ClusterQueue / LocalQueues) — the Go analogue of the Rust predecessor's
 // `PoolProvisioner` trait (lib.rs:272-294).
 type PoolProvisioner interface {
 	// ApplyPool creates or updates all of a pool's Kueue objects
@@ -291,7 +291,7 @@ type PoolProvisioner interface {
 }
 
 // ServiceProvisioner manages Ray Serve services (RayService CRs) — the Go
-// analogue of mobula's `ServiceProvisioner` trait (lib.rs:301-311).
+// analogue of the Rust predecessor's `ServiceProvisioner` trait (lib.rs:301-311).
 // Distinct from [Provisioner] because KubeRay's RayService controller owns
 // convergence and zero-downtime upgrades.
 type ServiceProvisioner interface {

@@ -41,7 +41,7 @@ func newTokenCmd() *cobra.Command {
 	return cmd
 }
 
-// runToken mirrors mobula-cli's Token dispatch: a full service-account
+// runToken mirrors the predecessor CLI's Token dispatch: a full service-account
 // triple (issuer/client-id/client-secret) runs a client-credentials grant;
 // otherwise it prints (refreshing if needed) the stored login token.
 func runToken(ctx context.Context, issuer, clientID, clientSecret string, scope *string) error {
@@ -82,7 +82,7 @@ func serviceToken(ctx context.Context, issuer, clientID, clientSecret string, sc
 }
 
 // tokenAction is what `bifrost token` should do with the stored access
-// token (#18), ported from mobula-cli's StoredTokenAction.
+// token (#18), ported from the predecessor CLI's StoredTokenAction.
 type tokenAction int
 
 const (
@@ -100,7 +100,7 @@ const (
 // token. Opaque local-auth tokens (`bfr_…`) carry no exp — the server
 // enforces their lifetime, so they pass through valid, as do undecodable
 // tokens (the server validates for real; this is display-only hygiene).
-// Ported from mobula-cli's stored_token_action.
+// Ported from the predecessor CLI's stored_token_action.
 func storedTokenAction(creds Credentials, now uint64) tokenAction {
 	exp, ok := jwtExp(creds.AccessToken)
 	if !ok || exp > now {
@@ -115,7 +115,7 @@ func storedTokenAction(creds Credentials, now uint64) tokenAction {
 // jwtExp decodes the `exp` claim from a JWT payload WITHOUT verifying the
 // signature — client-side display only; the server is the validator.
 // false for opaque tokens, non-JWT strings, and payloads without `exp`.
-// Ported from mobula-cli's jwt_exp (using encoding/base64.RawURLEncoding
+// Ported from the predecessor CLI's jwt_exp (using encoding/base64.RawURLEncoding
 // in place of its hand-rolled base64url decoder — the standard library
 // already has RFC 4648 §5 covered).
 func jwtExp(token string) (uint64, bool) {
@@ -139,7 +139,7 @@ func jwtExp(token string) (uint64, bool) {
 // refreshStoredToken performs a refresh grant (RFC 6749 §6) against the
 // stored issuer, persisting the new tokens (0600) and printing the fresh
 // access token. Any failure — discovery, transport, grant rejected —
-// means re-login (#18), ported from mobula-cli's refresh_stored_token.
+// means re-login (#18), ported from the predecessor CLI's refresh_stored_token.
 func refreshStoredToken(ctx context.Context, creds Credentials) error {
 	reLogin := errors.New("token expired, run bifrost login")
 	if creds.RefreshToken == nil {

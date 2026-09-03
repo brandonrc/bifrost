@@ -11,7 +11,7 @@ import (
 	"github.com/brandonrc/bifrost/internal/provision"
 )
 
-// Tests below are ported from mobula-controller/src/reconcile.rs's
+// Tests below are ported from the predecessor's controller crate, src/reconcile.rs's
 // #[cfg(test)] mod tests (reconcile.rs:744-1339), plus
 // queue_assignment_resolves_first_matching_allocation, ported from
 // store.rs (deferred to this task per T1's store_memory_test.go doc

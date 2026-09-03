@@ -2,12 +2,12 @@
 // composition over internal/{core,policy,controller,provision,auth,api} —
 // no domain logic lives here (COVERAGE_EXCLUDE, scripts/coverage-gate.sh).
 //
-// Subcommands mirror mobula-cli's crates/mobula-cli/src/main.rs 1:1 in
+// Subcommands mirror the predecessor CLI's main.rs 1:1 in
 // shape (serve/login/logout/token/exchange), scoped to what Wave 1 landed:
 // store selection (memory/sqlite/postgres), the reconcile + pool-reconcile
 // loops, the live KubeRay/Kueue provisioner, the API server + federating
 // gateway, JSON registry loading (see registry.go for why JSON, not
-// mobula's TOML), and the OIDC device-code/client-credentials/token-
+// the Rust predecessor's TOML), and the OIDC device-code/client-credentials/token-
 // exchange flows. Deliberately NOT ported this wave (see the task
 // report): --demo (mock provisioner), --policy (governance/pricing file),
 // --metering-interval — all Wave 3 per the plan's scope-outs.
@@ -35,7 +35,7 @@ func main() {
 
 // newRootCmd builds the bifrost command tree. Product identity: the
 // binary and every user-visible string here say "bifrost" (Global
-// Constraints), never mobula.
+// Constraints), never the predecessor's name.
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "bifrost",
@@ -53,7 +53,7 @@ func newRootCmd() *cobra.Command {
 }
 
 // envOr returns the environment variable's value, or def when it is unset
-// or empty. Used for NON-SECRET flag defaults that mirror mobula-cli's
+// or empty. Used for NON-SECRET flag defaults that mirror the predecessor CLI's
 // clap `env =` attributes (e.g. --server / BIFROST_SERVER). Never use
 // this for --client-secret: see resolveClientSecret.
 func envOr(key, def string) string {

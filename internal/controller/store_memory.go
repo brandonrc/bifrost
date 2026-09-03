@@ -10,7 +10,7 @@ import (
 )
 
 // MemoryStore is an in-memory Store for tests and single-node dev, ported
-// from mobula-controller's `memory::InMemoryStore` (store.rs:946-1554):
+// from the predecessor controller crate's `memory::InMemoryStore` (store.rs:946-1554):
 // mutex-guarded maps per collection, mirroring the Rust reference's
 // field-level `Mutex`/`AtomicBool`/`AtomicU64` granularity rather than one
 // coarse lock, so port fidelity extends to locking shape as well as

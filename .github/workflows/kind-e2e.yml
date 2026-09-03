@@ -4,7 +4,7 @@ name: kind-e2e
 # (internal/provision/live) on a kind cluster with the KubeRay operator
 # installed. Heavy (image pulls) and needs a real cluster, so it is
 # disabled by default: workflow_dispatch only, plus a weekly schedule —
-# mirrors mobula's kuberay-e2e.yml weekly job. Deliberately does NOT
+# mirrors the Rust predecessor's kuberay-e2e.yml weekly job. Deliberately does NOT
 # trigger on push or pull_request (Wave 1 Task 6: no live-cluster CI in
 # this wave).
 on:

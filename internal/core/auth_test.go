@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// Ported from mobula-core/src/auth.rs #[cfg(test)] mod tests.
+// Ported from the predecessor's core crate, src/auth.rs #[cfg(test)] mod tests.
 
 func TestLocalRoleRoundTrips(t *testing.T) {
 	for _, r := range []LocalRole{LocalRoleViewer, LocalRoleDeveloper, LocalRoleOperator, LocalRoleAdmin} {

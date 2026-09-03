@@ -7,7 +7,7 @@ package controller_test
 // conformance suite because they exercise Postgres's own
 // advisory-lock-based transaction-serialization strategy, not
 // Store-interface-level behavior — the ported oracle is
-// mobula-controller/tests/store.rs's
+// the predecessor's controller crate, tests/store.rs's
 // `postgres_concurrent_distinct_upserts_do_not_collapse_generation` and
 // `postgres_concurrent_audit_appends_keep_one_chain` (retired Rust
 // reference; cited here only for traceability).
@@ -96,7 +96,7 @@ func newTestPostgresStore(t *testing.T, url string) *controller.PostgresStore {
 }
 
 // TestPostgresStoreConformance is the acceptance gate for Task 4: the full
-// store-conformance suite (ported from mobula-controller/tests/store.rs,
+// store-conformance suite (ported from the predecessor's controller crate, tests/store.rs,
 // see storetest's package doc comment) must pass against PostgresStore
 // exactly as it does against MemoryStore and SqliteStore. Each subtest
 // section gets its own fresh per-test schema (see newTestPostgresStore),

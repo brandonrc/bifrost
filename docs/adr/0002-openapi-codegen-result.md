@@ -9,7 +9,7 @@ findings below still stand; the "47 operations" figure is a point-in-time count.
 ## Outcome
 
 **Direct 3.1 generation works.** No fallback needed. oapi-codegen v2.8.0's "initial"
-OpenAPI 3.1 support handles the frozen mobula spec (`openapi.json`, OpenAPI 3.1.0,
+OpenAPI 3.1 support handles the frozen predecessor spec (`openapi.json`, OpenAPI 3.1.0,
 emitted by utoipa v5; 47 operations across 36 paths) cleanly, including its
 JSON-Schema-style `oneOf: [{type: "null"}, {$ref}]` nullability idiom — the one
 3.1 construct most likely to trip an "initial" 3.1 implementation.
@@ -45,7 +45,7 @@ Generated stub code needs the runtime dependency `github.com/oapi-codegen/runtim
 
 ## Spike procedure
 
-1. `cp mobula/openapi.json /tmp/bifrost-spec-candidate.json`
+1. `cp <predecessor checkout>/openapi.json /tmp/bifrost-spec-candidate.json`
 2. Ran the command above against it — **exit 0**, 6203 lines generated, no errors.
 3. Scratch module: `go mod init spike` in `/tmp/bifrost-codegen-spike`, copied the
    generated file in, `go mod tidy`, `go vet ./...`, `go build ./...` — **all clean,

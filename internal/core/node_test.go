@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// mobula-core/src/node.rs has no #[cfg(test)] module. This is an added
+// The predecessor's core crate, src/node.rs has no #[cfg(test)] module. This is an added
 // smoke test (not ported) characterizing the JSON shape against the Rust
 // serde attributes and the frozen OpenAPI schema, since there is no Rust
 // test to drive this from.

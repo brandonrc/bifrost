@@ -1,5 +1,5 @@
 // Package auth is Bifrost's OIDC/JWT identity and RBAC layer (ADR-0003 Phase
-// 2 port of mobula-auth). Bifrost owns bearer-token validation: browser auth
+// 2 port of the predecessor's auth crate). Bifrost owns bearer-token validation: browser auth
 // (NebariApp/SecurityPolicy style) and `ray job submit`-style Bearer clients
 // both terminate here. Any compliant IdP works — the contract is OIDC
 // discovery + JWKS + RS256.
@@ -17,7 +17,7 @@ import (
 // PermissionType (Read/Write/Delete/Admin) so Bifrost's RBAC vocabulary
 // matches the rest of the ecosystem. Admin always wins.
 //
-// Reference: mobula-auth/src/lib.rs:16-25 (PermissionType).
+// Reference: the predecessor's auth crate, src/lib.rs:16-25 (PermissionType).
 type PermissionType int
 
 const (
@@ -56,7 +56,7 @@ func (p PermissionType) MarshalJSON() ([]byte, error) {
 // This is what lets Operator (cluster lifecycle) differ from Developer (job
 // code) with the same verbs.
 //
-// Reference: mobula-auth/src/lib.rs:27-48 (Target).
+// Reference: the predecessor's auth crate, src/lib.rs:27-48 (Target).
 type Target int
 
 const (
@@ -105,7 +105,7 @@ func (t Target) MarshalJSON() ([]byte, error) {
 // code) overlaps RoleDeveloper without containing it, which a total order
 // can't express.
 //
-// Reference: mobula-auth/src/lib.rs:50-126 (Role).
+// Reference: the predecessor's auth crate, src/lib.rs:50-126 (Role).
 type Role int
 
 const (
@@ -122,7 +122,7 @@ const (
 
 // Grants reports whether this role grants action on target. A state-guard
 // switch: every (Role, Target) pair is enumerated explicitly (no default),
-// mirroring the exhaustive match in mobula-auth/src/lib.rs:70-101.
+// mirroring the exhaustive match in the predecessor's auth crate, src/lib.rs:70-101.
 func (r Role) Grants(action PermissionType, target Target) bool {
 	switch r {
 	case RoleAdmin:
@@ -292,7 +292,7 @@ type RoleScope struct {
 // validation. A caller may hold several roles (their union of permissions
 // applies).
 //
-// Reference: mobula-auth/src/lib.rs:157-221 (Identity).
+// Reference: the predecessor's auth crate, src/lib.rs:157-221 (Identity).
 type Identity struct {
 	Subject string
 	// Username is the human username (preferred_username claim), when the
@@ -378,7 +378,7 @@ func (id *Identity) IsAuthorized() bool {
 // RoleMappings is the mapping from IdP group names to Bifrost roles. "*"
 // matches any authenticated caller (e.g. viewer = ["*"]).
 //
-// Reference: mobula-auth/src/lib.rs:225-239 (RoleMappings).
+// Reference: the predecessor's auth crate, src/lib.rs:225-239 (RoleMappings).
 type RoleMappings struct {
 	Admin     []string `json:"admin"`
 	Operator  []string `json:"operator"`
@@ -493,7 +493,7 @@ func (m *RoleMappings) Resolve(groups []string) []Role {
 // job code on your own project); the rest exist for uniformity with
 // RoleMappings.
 //
-// Reference: mobula-auth/src/lib.rs:261-353 (ProjectRoleMappings).
+// Reference: the predecessor's auth crate, src/lib.rs:261-353 (ProjectRoleMappings).
 type ProjectRoleMappings struct {
 	Admin     []string `json:"admin"`
 	Operator  []string `json:"operator"`
@@ -613,7 +613,7 @@ const defaultGroupsClaim = "groups"
 
 // AuthConfig is the OIDC validator's static configuration.
 //
-// Reference: mobula-auth/src/lib.rs:241-259 (AuthConfig).
+// Reference: the predecessor's auth crate, src/lib.rs:241-259 (AuthConfig).
 type AuthConfig struct {
 	// Issuer is the OIDC issuer URL; {issuer}/.well-known/openid-configuration
 	// must resolve. Trailing slash insignificant.

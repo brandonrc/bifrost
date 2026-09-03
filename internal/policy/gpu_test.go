@@ -7,7 +7,7 @@ import (
 	"github.com/brandonrc/bifrost/internal/core"
 )
 
-// Ported from mobula-policy/src/gpu.rs #[cfg(test)] mod tests.
+// Ported from the predecessor's policy crate, src/gpu.rs #[cfg(test)] mod tests.
 
 func gpuTestPool(mode *core.GpuSharing) core.PoolSpec {
 	return core.PoolSpec{

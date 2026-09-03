@@ -13,7 +13,7 @@ import (
 	"github.com/brandonrc/bifrost/internal/provision"
 )
 
-// SpecPath is where the vendored OpenAPI contract is served. mobula-api's
+// SpecPath is where the vendored OpenAPI contract is served. The Rust predecessor's
 // lib.rs mounts its live-generated spec at exactly this path
 // (`SwaggerUi::new("/docs").url("/api/v1/openapi.json", ...)`), and the
 // frozen bifrost-api contract doesn't document a path for itself (a
@@ -27,7 +27,7 @@ var specJSON []byte
 
 // version is the control-plane semver reported by GET /api/v1/version.
 // It tracks the vendored contract's info.version for now; Wave 1 T15
-// (the bifrost CLI/binary) may override it at link time the way mobula
+// (the bifrost CLI/binary) may override it at link time the way the Rust predecessor
 // used env!("CARGO_PKG_VERSION").
 var version = "0.0.1"
 
@@ -54,13 +54,13 @@ type Server struct {
 	// settings/access. Every operation this wave ports requires it.
 	Store controller.Store
 	// Registry is the gateway's static routing table (ListRegistry only;
-	// mirrors mobula-api's RegistryApiState.registry).
+	// mirrors the Rust predecessor's RegistryApiState.registry).
 	Registry *core.ClusterRegistry
 	// Validator is the configured OIDC validator, when one exists — carries
 	// the RoleMappings ListRoles reports. nil in local-auth/dev deployments
-	// (mirrors mobula-api's AccessApiState.validator).
+	// (mirrors the Rust predecessor's AccessApiState.validator).
 	Validator *auth.Validator
-	// PolicySeed is the boot-time `--policy` default (mobula-api's
+	// PolicySeed is the boot-time `--policy` default (the Rust predecessor's
 	// ClusterApiState.policy / SettingsApiState.policy_seed): consulted
 	// only until the store holds a policy row — see effectivePolicy in
 	// settings.go.
@@ -74,7 +74,7 @@ type Server struct {
 	// management operations need it. nil when the deployment uses OIDC
 	// only (or neither): every local_auth.go operation then answers 404
 	// "local auth is not enabled" — see requireLocal — mirroring the Rust
-	// reference's router-level absence (mobula-api mounts local_auth's
+	// reference's router-level absence (the Rust predecessor mounts local_auth's
 	// router only when `--local-auth` is set; Go's single generated
 	// strict-server has no such conditional mount, so the handler enforces
 	// it instead).
@@ -82,7 +82,7 @@ type Server struct {
 	// Provisioner backs the cluster observability reads (cluster_obs.go:
 	// nodes/events/logs) and the jobs/metrics southbound proxy's dashboard
 	// base-URL resolution. nil means "no cluster backend" — those routes
-	// answer 404/503 exactly as an unconfigured mobula-api deployment does.
+	// answer 404/503 exactly as an unconfigured predecessor deployment does.
 	Provisioner provision.Provisioner
 	// ServiceProvisioner backs services.go (the Ray Serve CRUD proxy). nil
 	// means no service backend is configured.
@@ -133,7 +133,7 @@ func NewServer() *Server { return &Server{} }
 var _ StrictServerInterface = (*Server)(nil)
 
 // Healthz is the liveness/readiness probe. Always 200 "ok", ported
-// verbatim from mobula-api's lib.rs healthz().
+// verbatim from the Rust predecessor's lib.rs healthz().
 func (s *Server) Healthz(_ context.Context, _ HealthzRequestObject) (HealthzResponseObject, error) {
 	return Healthz200TextResponse("ok"), nil
 }
@@ -155,9 +155,9 @@ func specHandler() http.HandlerFunc {
 }
 
 // HandlerOptions configures NewHandler's auth wiring. Both Validator and
-// Local may be nil (dev mode, matching mobula-api's `validator = None`
+// Local may be nil (dev mode, matching the Rust predecessor's `validator = None`
 // build_router() path) or either/both may be set — mirroring
-// mobula-api's `resolve_identity` dispatch (OIDC for JWT-shaped bearers,
+// the Rust predecessor's `resolve_identity` dispatch (OIDC for JWT-shaped bearers,
 // local for opaque `bfr_*` PATs).
 type HandlerOptions struct {
 	Validator *auth.Validator
@@ -171,14 +171,14 @@ type HandlerOptions struct {
 	Registry *core.ClusterRegistry
 	// Store persists the gateway's per-request audit trail and the
 	// host-is-cluster authorization denials RequireAuth emits; nil keeps
-	// both trace-only (mirrors mobula-api's gateway-only mode, where no
+	// both trace-only (mirrors the Rust predecessor's gateway-only mode, where no
 	// store is configured at all).
 	Store controller.Store
 	// GatewayLimits overrides the federating gateway's hardening knobs
 	// (body cap, inflight cap, timeouts). nil uses DefaultGatewayLimits().
 	GatewayLimits *GatewayLimits
 	// AllowUnauthenticated permits binding a non-loopback address with
-	// no authentication configured (mobula-api's --dev-allow-unauthenticated,
+	// no authentication configured (the Rust predecessor's --dev-allow-unauthenticated,
 	// ServeOptions.allow_unauthenticated). It does NOT disable
 	// deny-by-default when a validator or local authenticator IS
 	// configured — it only lifts the fail-closed non-loopback guard
@@ -195,7 +195,7 @@ type HandlerOptions struct {
 // deny-by-default auth middleware and — when neither a validator nor
 // local auth is configured and AllowUnauthenticated is false — the
 // outermost fail-closed non-loopback guard. Layer order (outermost
-// first) mirrors mobula-api lib.rs build_app_full_svc_inner's: the
+// first) mirrors the predecessor's lib.rs build_app_full_svc_inner's: the
 // loopback guard, when installed, wraps everything; then auth
 // (RequireAuth, which also runs the host-is-cluster gate — see
 // middleware.go); then the gateway (HostGateway); then the routes.
@@ -232,7 +232,7 @@ func NewHandler(server StrictServerInterface, opts HandlerOptions) http.Handler 
 
 	h = RequireAuth(AuthState{Validator: opts.Validator, Local: opts.Local, Registry: opts.Registry, Store: opts.Store})(h)
 
-	// Fail-closed (mobula-api #45): when no authentication is
+	// Fail-closed (predecessor issue #45): when no authentication is
 	// configured at all and it hasn't been explicitly overridden,
 	// install the outermost per-request loopback guard so a caller who
 	// hands this Handler straight to http.Serve on a non-loopback

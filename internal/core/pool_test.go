@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// Ported from mobula-core/src/pool.rs #[cfg(test)] mod tests.
+// Ported from the predecessor's core crate, src/pool.rs #[cfg(test)] mod tests.
 
 func testFlavor(name string) FlavorSpec {
 	return FlavorSpec{
@@ -151,7 +151,7 @@ func TestFlavorErrorsCarryFlavorContext(t *testing.T) {
 
 // C7: PoolSpecError.Unwrap() must expose the wrapped FlavorSpecError so
 // errors.As reaches it, mirroring Rust's thiserror #[source] chain
-// (mobula-core/src/pool.rs).
+// (the predecessor's core crate, src/pool.rs).
 func TestPoolSpecErrorUnwrapReachesFlavorSpecError(t *testing.T) {
 	p := testPool()
 	p.Flavors[0].Name = "BAD_NAME"

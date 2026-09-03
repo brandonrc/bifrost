@@ -7,7 +7,7 @@
 // backends (Tasks 3-4) need to call RunConformance from their own
 // *_test.go files in internal/controller.
 //
-// Oracle: /Users/khan/openteams/mobula/crates/mobula-controller/tests/store.rs
+// Oracle: the predecessor's controller crate, tests/store.rs
 // (retired reference project; cited here only for the file:line
 // citations that make porting traceable — never in user-facing
 // strings). That file structures its scenarios as a handful of long

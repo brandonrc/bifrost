@@ -7,7 +7,7 @@
 // observation back onto the pool row (a later task's metering loop reads
 // those observations).
 //
-// Ported from mobula-controller/src/pool_reconcile.rs (Rust reference,
+// Ported from the predecessor's controller crate, src/pool_reconcile.rs (Rust reference,
 // retired project).
 //
 // Differences from the cluster engine, by design:

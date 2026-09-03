@@ -1,6 +1,6 @@
 // Shared authorization + audit-emission helpers used by every handler this
 // wave and the next port behind the strict-server interface. Ported from
-// mobula-api's auth_layer.rs (authorize, authorize_scoped,
+// the Rust predecessor's auth_layer.rs (authorize, authorize_scoped,
 // effective_assignments, StoreAssignments) and audit.rs (emit, permission_str,
 // target_str, role_str).
 //
@@ -36,7 +36,7 @@ func TargetStr(target auth.Target) string { return target.AsStr() }
 // AuditEvent.GrantedRoles), mirroring audit.rs's role_str.
 func RoleStr(role auth.Role) string { return role.AsStr() }
 
-// EmitAudit appends one audit event: traced at Info (the mobula::audit
+// EmitAudit appends one audit event: traced at Info (the predecessor's `audit` tracing
 // target's Go equivalent — every field mirrored so the JSONL log-export
 // story T15 wires up later has everything it needs) and, when store is
 // non-nil, persisted. A persistence failure is logged and NEVER propagated —
@@ -119,7 +119,7 @@ func emitAuthzDenial(ctx context.Context, store controller.Store, id *auth.Ident
 // Rust reference's `None => None` arm. Otherwise it's deny-by-default
 // against (action, target); a denial is also an audit event (persisted when
 // store is non-nil — a nil store keeps the denial trace-only, matching
-// mobula-api's store-less registry/services routers).
+// the Rust predecessor's store-less registry/services routers).
 func Authorize(ctx context.Context, store controller.Store, identity *auth.Identity, action auth.PermissionType, target auth.Target) error {
 	if identity == nil {
 		return nil

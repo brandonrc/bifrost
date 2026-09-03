@@ -15,9 +15,9 @@ linters:
           files: ["**/internal/core/**", "**/internal/policy/**"]
           deny:
             - pkg: "k8s.io"
-              desc: "core/policy are k8s-free (mobula ADR-0002)"
+              desc: "core/policy are k8s-free (predecessor ADR-0002)"
             - pkg: "sigs.k8s.io"
-              desc: "core/policy are k8s-free (mobula ADR-0002)"
+              desc: "core/policy are k8s-free (predecessor ADR-0002)"
             - pkg: "github.com/jackc/pgx"
               desc: "core/policy are I/O-free"
             - pkg: "database/sql"
@@ -33,4 +33,4 @@ linters:
           files: ["!$test"]
           deny:
             - pkg: "github.com/brandonrc/bifrost/internal/api/apitest"
-              desc: "apitest is a dev-mode auth bypass (mobula-api #45); import it only from _test.go files"
+              desc: "apitest is a dev-mode auth bypass (predecessor issue #45); import it only from _test.go files"

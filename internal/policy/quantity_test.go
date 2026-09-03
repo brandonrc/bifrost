@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// Ported from mobula-policy/src/quantity.rs #[cfg(test)] mod tests.
+// Ported from the predecessor's policy crate, src/quantity.rs #[cfg(test)] mod tests.
 
 func approxEqual(a, b, tol float64) bool {
 	return math.Abs(a-b) < tol

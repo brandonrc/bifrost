@@ -3,7 +3,7 @@
 // Postgres follow in Tasks 3-4), the Store interface those backends
 // implement, and the audit tamper-evidence hash chain.
 //
-// Ported from mobula-controller/src/store.rs (Rust reference, retired
+// Ported from the predecessor's controller crate, src/store.rs (Rust reference, retired
 // project — cited here only where a file:line reference is genuinely
 // useful; never in user-facing strings). The observed *state* of a cluster
 // is reconstructed from the provisioner every reconcile (ADR-0006 in the
@@ -56,7 +56,7 @@ func storeErrorf(format string, args ...any) StoreError {
 // reading a row written by a newer one errors rather than guessing (see
 // ParseDesiredState). The Rust DesiredState type itself carries no serde
 // derive — it round-trips through the SQL layer's own string mapping and
-// the API layer's explicit match arms (mobula-api/src/clusters.rs:120-123)
+// the API layer's explicit match arms (the predecessor's api crate, src/clusters.rs:120-123)
 // — so these wire strings, not a #[derive(Serialize)], are the contract
 // this type must honor.
 type DesiredState string
@@ -776,7 +776,7 @@ type AuditRow struct {
 }
 
 // Store is the desired-state store (ported field-for-field and
-// method-for-method from mobula-controller's `Store` trait, store.rs).
+// method-for-method from the predecessor controller crate's `Store` trait, store.rs).
 // Postgres is truth in production; SQLite serves dev; the in-memory
 // implementation in this file exists so the reconcile engine and API
 // handlers are testable without a database.

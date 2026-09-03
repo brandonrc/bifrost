@@ -65,7 +65,7 @@ func newLogoutCmd() *cobra.Command {
 }
 
 // runLogin runs the OIDC device-code flow (RFC 8628) against issuer and
-// stores the resulting credentials. Ported from mobula-cli's login.
+// stores the resulting credentials. Ported from the predecessor CLI's login.
 func runLogin(ctx context.Context, issuer, clientID, scope string) error {
 	client := auth.IdpClient()
 	meta, err := auth.DiscoverMetadata(ctx, client, issuer)
@@ -138,7 +138,7 @@ func runLogin(ctx context.Context, issuer, clientID, scope string) error {
 
 // runLoginLocal signs in against the control plane's local (IdP-free)
 // auth (ADR-0011): POST /api/v1/auth/login, store the opaque `bfr_…`
-// token like a device-flow token (0600). Ported from mobula-cli's
+// token like a device-flow token (0600). Ported from the predecessor CLI's
 // login_local; reuses internal/api's LoginRequest/LoginResponse DTOs
 // rather than re-declaring the wire shape.
 func runLoginLocal(ctx context.Context, server, username string, passwordStdin bool) error {

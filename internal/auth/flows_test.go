@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// --- Redaction tests (ported from mobula-auth/src/flows.rs:326-365) ---
+// --- Redaction tests (ported from the predecessor's auth crate, src/flows.rs:326-365) ---
 
 func TestTokenExchangeParamsStringRedactsSecrets(t *testing.T) {
 	aud := "bifrost"

@@ -23,7 +23,7 @@ load rig is the acceptance evidence for the gateway path.
 
 ALL rows ship. Priority governs **sequence**, never scope-cut.
 
-| # | User need | Priority | Mobula reference status |
+| # | User need | Priority | Predecessor reference status |
 |---|---|---|---|
 | 1 | Deploy models from within Jupyter | CRITICAL | **Built** (2026-09-03, `serve-converge`): `deploy_service` is store-backed (owner-stamped, project-scoped, 202 per D11) and the service reconciler converges the RayService — generation-annotated redeploys roll in place, readiness read from KubeRay 1.7 `Ready`/`UpgradeInProgress` conditions, running services registered with the gateway as `serve` endpoints (`gateway_url`). `r01_serve_from_jupyter` asserts deploy → running → delete on L2 and, on kind, a real in-wheel Serve app (`ray.serve._private.test_utils:get_pid_entrypoint`, no egress needed). **Caveat:** the HTTP round trip through the gateway (`TestServeEndpointAnswersThroughTheGateway`) is gated on a `serve-fixture` capability no target declares yet — it needs package B's gateway `serve` authorization and the D6 ConfigMap-mounted app fixture (package G). |
 | 2 | Groups share models privately (one shared RayService per group, every request authenticated, caller must belong to owning group) | HIGH | **Built** (2026-09-03, `group-serving`) for the API half: services are project-scoped end to end — a non-member's `get_service` is 404 (never learns the name), `list_services` is narrowed, and `deploy_service` refuses a caller whose scoped bindings exclude the project even when their global role could write services. One shared RayService per group (plan ruling D8): a second name in a project is `409` naming the holder until it is deleted (the slot frees the moment the row is headed for termination); a same-name redeploy is an update; `serve --services-per-project N` is the escape hatch. `r02_group_serving` proves all of it on L2. **Caveat:** the serve-path half — anonymous `401` / non-member `403` on the service's gateway host — is written (`TestAnonymousServeRequestIs401AndNonMemberIs403`) but gated on a `gateway-serve` capability no target declares: the gateway's `serve` authorization branch is package B's and is not on main yet. |
@@ -44,25 +44,25 @@ ALL rows ship. Priority governs **sequence**, never scope-cut.
 | 17 | Same UX across Kubernetes and Slurm | LOW | Not built (design must not foreclose) |
 | 18 | NIST security baseline operation + audit evidence | LOW | Partial — audit hash chain **built**; UBI9-micro container image **built** (`Dockerfile`, non-root, static, digest-pinned). FIPS variant **not built** (no `GOFIPS140`/`crypto/fips140` anywhere — see the Testing section, which already says "later"). STIG hardening **not built**. |
 
-## Architecture (inherited from mobula, translated to Go idiom)
+## Architecture (inherited from the Rust predecessor, translated to Go idiom)
 
 Single Go module `github.com/brandonrc/bifrost`. Crate boundaries become
 package boundaries with an enforced import graph (depguard):
 
-| mobula crate | bifrost package | Responsibility |
+| predecessor crate | bifrost package | Responsibility |
 |---|---|---|
-| mobula-core | `internal/core` | Domain model: ClusterSpec/State machine, pools, registry, RBAC records, audit model. **Must not import k8s or DB packages** (mobula ADR-0002). |
-| mobula-policy | `internal/policy` | Pure functions: resource accounting, cost estimation, quota admission, K8s quantity parsing. No I/O. |
-| mobula-provision | `internal/provision` | The ONLY k8s-aware package. Provisioner interface; spec→manifest translators for KubeRay/Kueue/Dask (typed upstream APIs); EngineRouter. |
-| mobula-controller | `internal/controller` | Store interface (memory/SQLite/Postgres) + level-triggered observation-first reconcile engine, pool reconciler, metering loop. |
-| mobula-auth | `internal/auth` | OIDC discovery/JWKS/RS256 validation, RBAC permission sets, device-code/client-credentials/token-exchange flows, local users + `bfr_*` PATs (bcrypt). |
-| mobula-api | `internal/api` | REST surface (every contract operation), auth middleware, **federating Ray Jobs gateway** (Host-based routing, credential strip-and-swap, WS bridge). |
-| mobula-proxy | `internal/proxy` | Standalone-mode single-upstream identity proxy. |
-| mobula-cli | `cmd/bifrost` | Single binary: serve, login, token, exchange. |
+| `core` | `internal/core` | Domain model: ClusterSpec/State machine, pools, registry, RBAC records, audit model. **Must not import k8s or DB packages** (predecessor ADR-0002). |
+| `policy` | `internal/policy` | Pure functions: resource accounting, cost estimation, quota admission, K8s quantity parsing. No I/O. |
+| `provision` | `internal/provision` | The ONLY k8s-aware package. Provisioner interface; spec→manifest translators for KubeRay/Kueue/Dask (typed upstream APIs); EngineRouter. |
+| `controller` | `internal/controller` | Store interface (memory/SQLite/Postgres) + level-triggered observation-first reconcile engine, pool reconciler, metering loop. |
+| `auth` | `internal/auth` | OIDC discovery/JWKS/RS256 validation, RBAC permission sets, device-code/client-credentials/token-exchange flows, local users + `bfr_*` PATs (bcrypt). |
+| `api` | `internal/api` | REST surface (every contract operation), auth middleware, **federating Ray Jobs gateway** (Host-based routing, credential strip-and-swap, WS bridge). |
+| `proxy` | `internal/proxy` | Standalone-mode single-upstream identity proxy. |
+| `cli` | `cmd/bifrost` | Single binary: serve, login, token, exchange. |
 
 Key invariants carried over verbatim:
 - Caller credentials terminate at the control plane; only the cluster's static
-  Ray token travels southbound (mobula ADR-0003).
+  Ray token travels southbound (predecessor ADR-0003).
 - Level-triggered reconcile: observed state reconstructed every pass, never
   trusted from the store; SSA field manager `bifrost`; `replicas` omitted so
   the Ray autoscaler keeps ownership (ADR-0007).
@@ -72,9 +72,9 @@ Key invariants carried over verbatim:
 
 ## The contract
 
-`openapi.json` was exported from mobula (verified complete: **47 operations across
+`openapi.json` was exported from the Rust predecessor (verified complete: **47 operations across
 36 paths**, registry-completeness now enforced by the guard test
-`openapi_document_registers_every_annotated_operation` on mobula branch
+`openapi_document_registers_every_annotated_operation` on the predecessor's branch
 `fix/openapi-complete-registry`), normalized once for stable key ordering, is
 the founding commit of `bifrost-api` and the port's Wave 1 parity target. It is
 **no longer frozen**: since 2026-09-02 (ADR-0006) `internal/api/openapi.json`
@@ -89,12 +89,12 @@ regenerates both `zz_generated_*` files and fails on any difference. Per
 ADR-0001 the Go server is **spec-first**: oapi-codegen strict-server stubs
 are generated from the contract and the file itself is served via
 `go:embed` — parity is by construction and handler/spec drift is a compile
-error. The TS/Python/Rust SDK pipeline in `bifrost-api` is inherited from `mobula-api`
+error. The TS/Python/Rust SDK pipeline in `bifrost-api` is inherited from the predecessor's API repo
 unchanged except: push token actually configured; secret-gated steps fail red
 instead of skipping silently; SBOM generation added. `bifrost-api`'s contract
 identity (`info.title`/`info.description`, `VersionInfo.name`) has been
-rebranded from mobula to Bifrost; the Wave 1 shape was otherwise byte-for-byte the
-mobula export, so parity checks against the Rust reference normalize
+rebranded from the Rust predecessor to Bifrost; the Wave 1 shape was otherwise byte-for-byte the
+predecessor's export, so parity checks against the Rust reference normalize
 out the info block and identity strings before diffing, and Wave 2 additions
 (operations the Rust reference never had) are expected to show up in that
 diff as bifrost-only.
@@ -102,11 +102,11 @@ diff as bifrost-only.
 ## Language-independent acceptance assets
 
 1. **Frozen OpenAPI contract** — API shape (above).
-2. **`contract/jobs_client_replay.py`** — copied verbatim from mobula. Replays
+2. **`contract/jobs_client_replay.py`** — copied verbatim from the Rust predecessor. Replays
    the real Ray `JobSubmissionClient` (version negotiation, package upload,
    submit, status, logs, WS log tail) through the gateway. The Go gateway
    ships when this passes, plus a load rig measuring gateway p99.
-3. **Store conformance scenarios** — mobula's `tests/store.rs` scenario suite
+3. **Store conformance scenarios** — the predecessor's `tests/store.rs` scenario suite
    (1408 lines) re-expressed in Go against the same Store semantics; Postgres
    service container in CI, per-test schema.
 
@@ -117,10 +117,10 @@ diff as bifrost-only.
   switches), `depguard` (import boundaries: core/policy ban k8s+DB imports),
   `govet`, `staticcheck`. nilaway if integration is practical.
 - Coverage gate: a ratcheting `scripts/coverage-gate.sh` floor (`COVERAGE_THRESHOLD`,
-  currently 80%, raised as coverage grows) targeting 90% (mobula's bar) as
+  currently 80%, raised as coverage grows) targeting 90% (the Rust predecessor's bar) as
   the eventual steady state. `COVERAGE_EXCLUDE` drops `cmd/` main wiring and
   `internal/provision/live` (the future k8s client wrappers) from the total
-  before the gate is computed — same exclusions as mobula's llvm-cov config,
+  before the gate is computed — same exclusions as the Rust predecessor's llvm-cov config,
   applied here as a coverprofile filter rather than an instrumentation-time
   exclude. `internal/controller/storetest` (test-support code whose coverage
   worsens as the conformance suite gets more thorough — a T2 review finding)
@@ -142,16 +142,16 @@ diff as bifrost-only.
   explicit CI step). Race-enabled test runs (`go test -race`) use cgo — the
   race runtime is a test-only tool and ships nothing. Pure-Go SQLite
   (`modernc.org/sqlite`), static binary, UBI9-micro image posture inherited
-  from mobula ADR-0008. FIPS variant later via `GOFIPS140` (req 18) — native,
+  from predecessor ADR-0008. FIPS variant later via `GOFIPS140` (req 18) — native,
   still no cgo; fail-closed startup check via `crypto/fips140`.
 - Test-only auth-bypass constructors live in `internal/api/apitest` (a
   separate package importable only from `_test.go` files — enforced by
-  depguard rule), replacing mobula's `test-util` cargo feature.
+  depguard rule), replacing the Rust predecessor's `test-util` cargo feature.
 - Commit hygiene: no AI-attribution footers (project convention).
 
 ## Audit hash chain (decision point, Wave 3)
 
-Mobula's chain is `sha256(prev_hash ‖ canonical serde_json(event))`. Decision
+The Rust predecessor's chain is `sha256(prev_hash ‖ canonical serde_json(event))`. Decision
 deferred to the Wave 3 plan with two admissible outcomes: (a) byte-exact
 canonical JSON reproduction in Go (field order + explicit nulls verified by a
 cross-language fixture test), or (b) a deliberate, documented chain-break
@@ -161,11 +161,11 @@ Silent incompatibility is not admissible.
 ## Waves
 
 **Wave 0 — Foundations (this plan cycle)**
-0.1 Fix mobula ApiDoc registry → export complete spec (in mobula, Rust).
+0.1 Fix the predecessor's ApiDoc registry → export complete spec (in the Rust predecessor).
 0.2 Stack decisions locked from community research (recorded as ADR-0001).
 0.3 Repos: `bifrost` scaffold (module, CI gates, lint config, layout),
     `bifrost-api` (frozen contract + inherited SDK pipeline + SBOM),
-    `bifrost-ui` (fork of mobula-ui, client package swap) — created under
+    `bifrost-ui` (fork of the predecessor's UI, client package swap) — created under
     github.com/brandonrc.
 0.4 `internal/core` + `internal/policy` ported (pure logic, no I/O — proves
     the toolchain and the coverage/lint gates on real code).
@@ -251,9 +251,9 @@ endpoints — T12). The LOW rows that need a new engine or loop — req 13
 adapter), req 18 (FIPS variant) — remain Wave 3 scope, unchanged from the
 original plan.
 
-Per the Wave 1 charter, the Rust reference (`mobula`) is retired from
+Per the Wave 1 charter, the Rust reference implementation (the predecessor) is retired from
 primary duty as of this exit: `bifrost` is the artifact of record for the
-ported surface going forward; `mobula` remains available for parity
+ported surface going forward; the predecessor remains available for parity
 cross-checks only.
 
 ### Deferred follow-ups carried into Wave 2/3
@@ -294,6 +294,6 @@ cross-checks only.
 ## Out of scope for the port (tracked, not built)
 
 Slurm backend (req 17 — design keeps Provisioner interface engine-agnostic,
-nothing more), cloud VM provisioners, at-rest encryption (mobula issue #60
+nothing more), cloud VM provisioners, at-rest encryption (predecessor issue #60
 equivalent), streaming gateway bodies (inherit buffered design + limits;
-streaming is a tracked follow-up exactly as in mobula).
+streaming is a tracked follow-up exactly as in the Rust predecessor).

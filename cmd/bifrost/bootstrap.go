@@ -13,13 +13,13 @@ import (
 )
 
 // localAdminPasswordEnv overrides the bootstrapped admin password
-// (demos/tests only). Ported from mobula-cli's MOBULA_LOCAL_ADMIN_PASSWORD,
+// (demos/tests only). Ported from the predecessor CLI's admin-password variable,
 // renamed for product identity (Global Constraints).
 const localAdminPasswordEnv = "BIFROST_LOCAL_ADMIN_PASSWORD"
 
 // bootstrapLocalAdmin creates the first local "admin" user (ADR-0011) the
 // first time --local-auth boots against an empty local_users table —
-// idempotent: a no-op once any local user exists, mirroring mobula-cli's
+// idempotent: a no-op once any local user exists, mirroring the predecessor CLI's
 // bootstrap_local_admin exactly. dbPath is the --db value ONLY when it
 // names a SQLite file path; the generated password is written 0600 next
 // to it so an operator can retrieve it without scraping logs.

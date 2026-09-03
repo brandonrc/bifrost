@@ -3,7 +3,7 @@
 // server. It wires internal/provision's pure translators
 // (RayClusterFor/RayServiceFor/CohortFor/... and the interfaces they
 // implement — Provisioner/PoolProvisioner/ServiceProvisioner) onto
-// controller-runtime, mirroring mobula-provision's `kuberay_client`/
+// controller-runtime, mirroring the predecessor provision crate's `kuberay_client`/
 // `kueue_client` (feature `kuberay`).
 //
 // Client mechanics (ADR-0001 #5, task-6-brief.md): controller-runtime as a

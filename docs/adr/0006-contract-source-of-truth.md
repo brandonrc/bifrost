@@ -51,7 +51,7 @@ against the code that implements it.
   step in `ci.yml`'s `test` job (regenerate, `git diff --exit-code` on both
   `zz_generated_*` files), plus `sync-api.yml` for publication.
 - **A missing `BIFROST_API_PUSH_TOKEN` on a main push is a hard failure**, not
-  a notice-and-skip as in the mobula workflow this was modelled on. A main
+  a notice-and-skip as in the Rust predecessor workflow this was modelled on. A main
   push is expected to publish; a skip would leave the SDKs silently behind
   the server. `concurrency: sync-api` serialises the pushes so two merges
   cannot race.

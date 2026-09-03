@@ -1,5 +1,5 @@
 // Federating job gateway (Wave 1 T13/T14, ADR-0002/ADR-0003). Ported from
-// mobula-api's gateway.rs — the HTTP proxy lives here; the websocket
+// the Rust predecessor's gateway.rs — the HTTP proxy lives here; the websocket
 // bridge (gateway.rs:399-597) is gateway_ws.go's proxyUpgrade.
 //
 // Requests whose Host header matches a registered cluster are proxied to
@@ -15,7 +15,7 @@
 // traffic do NOT live in this file: they run one layer out, in
 // RequireAuth (middleware.go), which wraps HostGateway (see server.go's
 // NewHandler and middleware.go's package doc comment) — mirroring
-// mobula-api lib.rs's layer order (auth outermost, gateway inner) and
+// the predecessor's lib.rs's layer order (auth outermost, gateway inner) and
 // auth_layer.rs's require_auth, which performs the host_is_cluster check
 // itself rather than delegating to gateway.rs. By the time a request
 // reaches HostGateway it is already either authorized or arrived through

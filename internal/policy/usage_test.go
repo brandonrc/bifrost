@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// Ported from mobula-policy/src/usage.rs #[cfg(test)] mod tests.
+// Ported from the predecessor's policy crate, src/usage.rs #[cfg(test)] mod tests.
 
 func samples(pairs ...[2]float64) []UsageSampleView {
 	out := make([]UsageSampleView, len(pairs))

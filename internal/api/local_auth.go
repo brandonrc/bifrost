@@ -1,7 +1,7 @@
 // Local-auth routes (ADR-0011): login, provider metadata, personal access
 // tokens, logout, and Admin-only local user management.
 //
-// mobula-api mounts this router only when local auth is enabled
+// The Rust predecessor mounts this router only when local auth is enabled
 // (`serve --local-auth`), except GET /api/v1/auth/providers, which is
 // always mounted and public (it's in the unauthenticated allowlist,
 // middleware.go's isPublic) so the login page can render the right form.
@@ -11,7 +11,7 @@
 // enabled" when s.Local is nil, the same outcome a caller gets from the
 // Rust reference's absent route. PAT management requires an authenticated
 // identity and is owner-scoped: a caller only ever sees/revokes their own
-// tokens. Ported from mobula-api's local_auth.rs.
+// tokens. Ported from the Rust predecessor's local_auth.rs.
 //
 // Wire-contract notes:
 //   - every login failure — unknown user, wrong password, locked, disabled,

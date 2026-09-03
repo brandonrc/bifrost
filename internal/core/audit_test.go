@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// Ported from mobula-core/src/audit.rs #[cfg(test)] mod tests.
+// Ported from the predecessor's core crate, src/audit.rs #[cfg(test)] mod tests.
 
 func strPtr(s string) *string { return &s }
 
