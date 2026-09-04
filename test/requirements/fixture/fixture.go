@@ -469,6 +469,11 @@ func GetJob(t req.T, tgt req.Target, principal, id string) (int, map[string]any)
 func WaitJob(t req.T, tgt req.Target, principal, id, want string) map[string]any {
 	t.Helper()
 	var view map[string]any
+	// One early look at the head while KubeRay is still polling it: on a
+	// lane where the operator's status checks fail from the first poll, the
+	// cluster is gone by the time the RayJob is marked Failed.
+	var emptySince time.Time
+	diagnosed := false
 	req.Eventually(t, tgt, func() (bool, string) {
 		st, v := GetJob(t, tgt, principal, id)
 		if st != http.StatusOK {
@@ -480,6 +485,16 @@ func WaitJob(t req.T, tgt req.Target, principal, id, want string) map[string]any
 			view = v
 			return true, status
 		}
+		if status == "" && (dep == "Initializing" || dep == "Running") {
+			if emptySince.IsZero() {
+				emptySince = time.Now()
+			}
+			if !diagnosed && time.Since(emptySince) > 90*time.Second {
+				diagnosed = true
+				cluster, _ := v["cluster"].(string)
+				t.Logf("job %s has had no job status for 90s (deployment_status=%s); head diagnostics:\n%s", id, dep, DiagnoseJobHead(t, tgt, cluster))
+			}
+		}
 		msg, _ := v["message"].(string)
 		if status != want && (status == "SUCCEEDED" || status == "FAILED" || status == "STOPPED") {
 			t.Fatalf("job %s ended %s (%s) while waiting for %s: %s", id, status, dep, want, msg)
@@ -489,7 +504,7 @@ func WaitJob(t req.T, tgt req.Target, principal, id, want string) map[string]any
 		// so say why now instead of polling out the budget.
 		if dep == "Failed" && status == "" {
 			cluster, _ := v["cluster"].(string)
-			t.Fatalf("job %s deployment failed before the job ran while waiting for %s: %s\n%s", id, want, msg, diagnoseJobDashboard(t, tgt, cluster))
+			t.Fatalf("job %s deployment failed before the job ran while waiting for %s: %s\n%s", id, want, msg, DiagnoseJobHead(t, tgt, cluster))
 		}
 		return false, fmt.Sprintf("status=%q deployment_status=%q message=%q", status, dep, msg)
 	})
@@ -531,40 +546,4 @@ func GatewayRequest(t req.T, tgt req.Target, principal, host, path string) (int,
 	defer func() { _ = resp.Body.Close() }()
 	b, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, b
-}
-
-// diagnoseJobDashboard is the operator's view of a RayJob head whose status
-// checks KubeRay gave up on: from the kuberay namespace, with the
-// operator's pod label, GET the dashboard's version and job list and report
-// status and latency. On kind (runs 33802820554, 33808304909, 33813309158)
-// the operator timed out on every poll while an operator-labelled connect
-// probe succeeded, so the answer has to come from the HTTP layer itself.
-func diagnoseJobDashboard(t req.T, tgt req.Target, cluster string) string {
-	t.Helper()
-	pr, ok := tgt.(req.PodRunner)
-	if !ok || cluster == "" {
-		return ""
-	}
-	head := fmt.Sprintf("%s-head-svc.%s.svc:8265", cluster, tgt.Namespace())
-	script := fmt.Sprintf(`
-import time, urllib.request
-for path in ("/api/version", "/api/jobs/"):
-    t0 = time.time()
-    try:
-        with urllib.request.urlopen("http://%s" + path, timeout=20) as r:
-            print("GET", path, r.status, "%%.2fs" %% (time.time() - t0), r.read(300))
-    except Exception as e:
-        print("GET", path, "ERROR", "%%.2fs" %% (time.time() - t0), type(e).__name__, str(e)[:200])
-`, head)
-	res, err := pr.RunPod(context.Background(), req.PodSpec{
-		Namespace: "kuberay",
-		Labels:    map[string]string{"app.kubernetes.io/name": "kuberay-operator"},
-		Image:     pr.RayImage(),
-		Command:   []string{"python", "-c", script},
-		Timeout:   3 * time.Minute,
-	})
-	if err != nil {
-		return "operator-shaped diagnostic probe failed to run: " + err.Error()
-	}
-	return "operator-shaped probe from kuberay to " + head + ":\n" + res.Logs
 }
