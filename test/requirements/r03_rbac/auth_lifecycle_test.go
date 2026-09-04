@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/brandonrc/bifrost/pkg/client"
@@ -131,4 +132,66 @@ func TestDisabledUserCannotLogInAndWrongPasswordIs401(t *testing.T) {
 	if _, st := fixture.Login(t, tgt, user, pw); st != http.StatusUnauthorized && st != http.StatusForbidden {
 		t.Fatalf("disabled user login = %d, want 401/403", st)
 	}
+}
+
+// A caller's identity names the projects they hold grants in. Requirement 3 is
+// about knowing who may do what; this is the half a *client* needs, because a
+// client that has to name a project and cannot ask will guess one — which is
+// exactly how the JupyterLab extension shipped a hardcoded default and
+// answered its users' first Start click with a 403 (bifrost-jupyter#3).
+func TestIdentityNamesTheCallersProjects(t *testing.T) {
+	tgt := target.Get(t)
+	req.Covers(t, 3, "the caller's identity names the projects they hold scoped grants in, so a client never has to guess one")
+
+	st, body := fixture.Do(t, tgt, bearerFor(t, tgt, "dev-a"), http.MethodGet, "/api/v1/identity", "")
+	if st != http.StatusOK {
+		t.Fatalf("identity = %d %s", st, body)
+	}
+	var view struct {
+		Subject  string   `json:"subject"`
+		Roles    []string `json:"roles"`
+		Projects []struct {
+			Name  string   `json:"name"`
+			Roles []string `json:"roles"`
+		} `json:"projects"`
+	}
+	if err := json.Unmarshal(body, &view); err != nil {
+		t.Fatalf("identity body: %v (%s)", err, body)
+	}
+	// dev-a is seeded with operator on team-a, which is what lets it create
+	// clusters there; identity has to say so.
+	var found bool
+	for _, p := range view.Projects {
+		if p.Name != "team-a" {
+			continue
+		}
+		found = true
+		if !fixture.Contains(strings.Join(p.Roles, ","), "operator") {
+			t.Errorf("team-a roles = %v, want operator among them", p.Roles)
+		}
+	}
+	if !found {
+		t.Fatalf("identity names %+v, want team-a among them (roles=%v)", view.Projects, view.Roles)
+	}
+
+	// And it is the caller's own scopes, not everyone's: dev-b's project is
+	// not dev-a's to see.
+	for _, p := range view.Projects {
+		if p.Name == "team-b" {
+			t.Errorf("dev-a's identity names team-b: %+v", view.Projects)
+		}
+	}
+
+}
+
+// bearerFor is the raw token for principal, for the routes the generated
+// client does not model.
+func bearerFor(t *testing.T, tgt req.Target, principal string) string {
+	t.Helper()
+	r, err := http.NewRequestWithContext(context.Background(), http.MethodGet, tgt.BaseURL(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tgt.As(principal).Authorize(r)
+	return strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 }

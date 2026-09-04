@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"testing"
 
 	"github.com/brandonrc/bifrost/internal/auth"
@@ -34,6 +35,97 @@ func TestIdentity_AuthenticatedCaller(t *testing.T) {
 	}
 	if len(id.Roles) != 2 || id.Roles[0] != "viewer" || id.Roles[1] != "operator" {
 		t.Errorf("roles = %v", id.Roles)
+	}
+}
+
+// The projects a caller may name are part of their identity, because a client
+// that has to name one otherwise guesses — which is how the JupyterLab
+// extension came to ship a hardcoded default project and answer its users'
+// first Start click with a 403 (bifrost-jupyter#3).
+func TestIdentity_NamesTheProjectsTheCallerHoldsGrantsIn(t *testing.T) {
+	store := newMemStore(t)
+	s := &Server{Store: store}
+	who := testIdentity("alice", auth.RoleDeveloper)
+	// One grant from the token's groups, one written by an administrator, and
+	// a second role in a project already named — the response merges them.
+	who.ProjectRoles = []auth.RoleScope{{Role: auth.RoleViewer, Scope: "project:team-b"}}
+	for _, a := range []struct{ role, scope string }{
+		{"operator", "project:team-a"},
+		{"operator", "project:team-b"},
+		{"admin", "*"},
+	} {
+		if err := store.UpsertRoleAssignment(context.Background(), "alice", a.role, a.scope); err != nil {
+			t.Fatalf("seeding %s@%s: %v", a.role, a.scope, err)
+		}
+	}
+	resp, err := s.Identity(ctxWithIdentity(who), IdentityRequestObject{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	id := mustResponse[Identity200JSONResponse](t, resp)
+
+	// Sorted by name, one entry per project, roles merged and sorted, and the
+	// global grant absent: no list can enumerate where a global admin may act.
+	want := []ProjectGrant{
+		{Name: "team-a", Roles: []string{"operator"}},
+		{Name: "team-b", Roles: []string{"operator", "viewer"}},
+	}
+	if len(id.Projects) != len(want) {
+		t.Fatalf("projects = %+v, want %+v", id.Projects, want)
+	}
+	for i, w := range want {
+		got := id.Projects[i]
+		if got.Name != w.Name || len(got.Roles) != len(w.Roles) {
+			t.Fatalf("projects[%d] = %+v, want %+v", i, got, w)
+		}
+		for j, role := range w.Roles {
+			if got.Roles[j] != role {
+				t.Errorf("projects[%d].roles = %v, want %v", i, got.Roles, w.Roles)
+			}
+		}
+	}
+}
+
+// A caller whose only grant is global sees no projects and a global role. The
+// empty list is the truth — they may act in every project, so none is named —
+// and a client reads `roles` before concluding the caller may do nothing.
+func TestIdentity_AGlobalGrantNamesNoProject(t *testing.T) {
+	s := &Server{Store: newMemStore(t)}
+	resp, err := s.Identity(ctxWithIdentity(testIdentity("root", auth.RoleAdmin)), IdentityRequestObject{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	id := mustResponse[Identity200JSONResponse](t, resp)
+	if len(id.Projects) != 0 {
+		t.Errorf("projects = %+v, want none", id.Projects)
+	}
+	if len(id.Roles) != 1 || id.Roles[0] != "admin" {
+		t.Errorf("roles = %v, want [admin]", id.Roles)
+	}
+}
+
+// The field is required by the contract, so it is a list on every path —
+// including the store-less dev identity, where a nil would serialise as null
+// and break a client that iterates it without a guard.
+func TestIdentity_ProjectsIsAlwaysAList(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		s    *Server
+		id   *auth.Identity
+	}{
+		{"dev mode", &Server{}, nil},
+		{"no store", &Server{}, testIdentity("alice", auth.RoleDeveloper)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := tc.s.Identity(ctxWithIdentity(tc.id), IdentityRequestObject{})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			id := mustResponse[Identity200JSONResponse](t, resp)
+			if id.Projects == nil {
+				t.Error("projects is nil; the contract requires a list")
+			}
+		})
 	}
 }
 

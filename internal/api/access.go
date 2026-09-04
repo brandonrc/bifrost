@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/brandonrc/bifrost/internal/auth"
@@ -32,9 +33,10 @@ func (s *Server) Identity(ctx context.Context, _ IdentityRequestObject) (Identit
 	identity, ok := IdentityFromContext(ctx)
 	if !ok || identity == nil {
 		return Identity200JSONResponse(IdentityResponse{
-			Subject: "dev",
-			Groups:  []string{},
-			Roles:   []string{"admin"},
+			Subject:  "dev",
+			Groups:   []string{},
+			Roles:    []string{"admin"},
+			Projects: []ProjectGrant{},
 		}), nil
 	}
 	roles := make([]string, len(identity.Roles))
@@ -46,11 +48,47 @@ func (s *Server) Identity(ctx context.Context, _ IdentityRequestObject) (Identit
 		groups = []string{}
 	}
 	return Identity200JSONResponse(IdentityResponse{
-		Subject: identity.Subject,
-		Email:   identity.Email,
-		Groups:  groups,
-		Roles:   roles,
+		Subject:  identity.Subject,
+		Email:    identity.Email,
+		Groups:   groups,
+		Roles:    roles,
+		Projects: projectGrants(EffectiveAssignments(ctx, s.Store, identity)),
 	}), nil
+}
+
+// projectGrants collapses scoped assignments into one entry per project.
+//
+// This exists because a client that must name a project had no way to learn
+// which projects it may name: identity carried the caller's global roles and
+// nothing else, and the assignment list is an administrator's endpoint. So the
+// JupyterLab extension shipped a hardcoded default project, and every
+// deployment that named its projects differently answered its users' first
+// Start click with a 403 that read as "you may not create clusters" rather
+// than "that project is not yours" (bifrost-jupyter#3).
+//
+// Global grants are deliberately absent: a global operator may act in every
+// project, and no list can enumerate that. Such a caller sees an empty
+// `projects` and a global role in `roles`, which is the honest shape.
+func projectGrants(assignments []auth.RoleScope) []ProjectGrant {
+	roles := map[string][]string{}
+	for _, a := range assignments {
+		project, ok := strings.CutPrefix(a.Scope, "project:")
+		if !ok || project == "" {
+			continue // global ("*"), or a scope shape this does not name
+		}
+		role := RoleStr(a.Role)
+		if !slices.Contains(roles[project], role) {
+			roles[project] = append(roles[project], role)
+		}
+	}
+	out := make([]ProjectGrant, 0, len(roles))
+	for project, held := range roles {
+		slices.Sort(held)
+		out = append(out, ProjectGrant{Name: project, Roles: held})
+	}
+	// Sorted so two calls answer identically and a client may cache it.
+	slices.SortFunc(out, func(a, b ProjectGrant) int { return strings.Compare(a.Name, b.Name) })
+	return out
 }
 
 func nonNilStrings(ss []string) []string {

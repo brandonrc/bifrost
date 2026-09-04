@@ -663,6 +663,15 @@ type IdentityResponse struct {
 	Email  *string  `json:"email,omitempty"`
 	Groups []string `json:"groups"`
 
+	// Projects The projects the caller holds scoped grants in, from group-derived
+	// project roles and stored assignments alike, sorted by name.
+	//
+	// Distinct from `roles`, which lists the caller's *global* roles: a global
+	// operator may act in every project and this list can name none, so a
+	// client that finds it empty should read `roles` before concluding the
+	// caller may do nothing.
+	Projects []ProjectGrant `json:"projects"`
+
 	// Roles Snake_case role names ("viewer", "developer", "operator", "admin").
 	Roles   []string `json:"roles"`
 	Subject string   `json:"subject"`
@@ -895,6 +904,19 @@ type ProfileSpec struct {
 	// TtlSeconds Default absolute max-age cap applied to clusters using this profile; `null` = none.
 	TtlSeconds   *int64        `json:"ttl_seconds,omitempty"`
 	WorkerGroups []WorkerGroup `json:"worker_groups"`
+}
+
+// ProjectGrant One project the caller holds a scoped grant in, and the roles held
+// there. A client that has to name a project — the JupyterLab extension
+// starting a cluster, say — reads this rather than guessing a default.
+type ProjectGrant struct {
+	// Name The project's name, as `ClusterSpec.project` takes it.
+	Name string `json:"name"`
+
+	// Roles Snake_case role names held *in this project*: "viewer", "developer",
+	// "operator", "admin". A caller needs "operator" (or "admin") to create
+	// or stop a cluster there.
+	Roles []string `json:"roles"`
 }
 
 // ProvidersResponse Which auth providers this deployment offers (login-page metadata; not
