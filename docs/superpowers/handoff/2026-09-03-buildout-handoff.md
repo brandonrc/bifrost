@@ -106,3 +106,8 @@ namespaced Roles and a CronJob that doubles as the on-demand template. The clust
 `kubectl`. First run found that `-test.v=test2json` output is not JSON — the grace lane leans on `go tool test2json`,
 which no runtime image can carry — so the conversion lives in `reqrun`, tested against a real stream and differentially
 against Go's own converter.
+
+**Verified 2026-09-04:** the in-cluster lane's first clean run on grace (job `req-1788545469`, image `sha-5a602cc`)
+reported 69 pass / 0 fail and the same matrix as the laptop-driven grace lane. Two traps found on the way, both now
+written down: `-test.v=test2json` output is not JSON (the converter lives in `reqrun`), and a hand-created Job
+bypasses the CronJob's Forbid concurrency, so two suites collided over `team-a`.

@@ -47,6 +47,21 @@ kubectl -n bifrost create job --from=cronjob/bifrost-requirements req-r05 --dry-
   | kubectl apply -f -
 ```
 
+## One run at a time
+
+The CronJob's `concurrencyPolicy: Forbid` covers the schedule, not a Job you
+create by hand. Two suites in the same namespace collide: both create clusters
+in `team-a`, and the quota test in one refuses the other's cluster. Check
+before starting:
+
+```sh
+kubectl -n bifrost get jobs -l app.kubernetes.io/name=bifrost-requirements \
+  -o custom-columns=NAME:.metadata.name,ACTIVE:.status.active
+```
+
+And if you do stop a run early, sweep what it left: its postflight never ran,
+so a running service will trip the per-project service limit on the next run.
+
 ## What it does to the cluster
 
 Every object a run creates carries `req.bifrost.dev/run=<run id>`, and the

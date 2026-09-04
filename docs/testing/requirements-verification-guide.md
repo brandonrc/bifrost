@@ -4,8 +4,9 @@ A tester's guide to the eighteen Ray Software Pack requirements: what the
 automated lanes already prove, how to prove each row by hand against a live
 deployment (grace), and the caveats that remain with a concrete fix for each.
 
-Status as of 2026-09-04, `main` at `37eaf6a` (contract 0.2.0, 51 operations). Grace lane `t6a99c1de`: 68 pass / 0 fail.
-Kind lane run 33831466919: 74 pass / 0 fail / 7 skip.
+Status as of 2026-09-04, `main` at `5a602cc` (contract 0.2.0, 51 operations).
+Grace lane: 69 pass / 0 fail. In-cluster lane (job `req-1788545469`): 69 pass / 0 fail.
+Kind lane run 33891270587: 74 pass / 0 fail / 7 skip, green twice running.
 
 ## 1. How proof works
 
@@ -615,6 +616,14 @@ make test-l3 TARGET=grace                 # writes .l3/out/*.out and l3-grace.js
 
 The in-cluster lane is the one a tester with only `kubectl` can run, and the
 one that answers "is the deployment still good" without anyone present. Its
+first green run on grace (job `req-1788545469`, image `sha-5a602cc`) reported
+**69 pass / 0 fail** and the same matrix as the laptop-driven grace lane, which
+is the point: same packages, same environment, different driver.
+
+One caution: a manually created Job bypasses the CronJob's `Forbid`
+concurrency, so two suites can run at once. They collide — both create
+clusters in `team-a` and one's quota test refuses the other's cluster — so
+check for an active run before starting one. Its
 image carries the compiled suite, its ServiceAccount holds two namespaced roles
 and nothing cluster-scoped, and its log is the report: a line per package, then
 the matrix. `deploy/in-cluster/README.md` covers installing it, running one
