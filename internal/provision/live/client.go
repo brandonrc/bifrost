@@ -536,6 +536,12 @@ func (c *Client) ClusterLogs(ctx context.Context, id core.ClusterId, pod *string
 // Deploy server-side-applies the RayService for name. Ported from
 // kuberay_client.rs:640-664.
 func (s *ServiceClient) Deploy(ctx context.Context, name string, spec *core.ServiceSpec, generation uint64, queue *provision.QueueAssignment) error {
+	// Same posture rule as clusters and jobs: KubeRay's serve-status polls
+	// reach the head only through the tenant-allow policy, so a namespace
+	// whose first workload is a RayService must get it here.
+	if err := s.EnsureNamespacePosture(ctx); err != nil {
+		return err
+	}
 	// Service pods carry the same cluster-id label (RayServiceFor's pod
 	// templates stamp it), so they get the same per-cluster allow —
 	// including across a RayService zero-downtime upgrade, where old and
