@@ -574,12 +574,29 @@ non-root read-only UBI9-micro image are built. FIPS build is not.
    shows `runAsNonRoot: true`, `readOnlyRootFilesystem: true`, no capabilities.
 4. Image is digest-pinned in the chart values; `k describe pod` shows the digest.
 
-**Caveat and fix:** no FIPS variant (`GOFIPS140`), no image vulnerability scan
+**Caveat and fix:** gateway-proxied requests are audited without an `action` or
+`granted_roles`, so an auditor filtering by action misses exactly the requests
+that run work (`docs/defects/2026-09-04-gateway-audit-rows-have-no-action-or-roles.md`).
+Beyond that: no FIPS variant (`GOFIPS140`), no image vulnerability scan
 gate in CI, and no written control mapping. Add a FIPS build target and a
 Trivy/Grype job, then a short controls document mapping each test to the
 NIST 800-53 control it evidences.
 
-## 4. Running the lanes yourself
+## 4. Consumers: who actually goes through Bifrost
+
+A controlled path only counts if the tools people use take it. On grace:
+
+| Consumer | State | What a tester checks |
+|----------|-------|----------------------|
+| checkmaite | **Wired 2026-09-04.** Its API submits over Ray's Job Submission REST API to `checkmaite-jobs.ray.100-89-230-107.sslip.io`, a Bifrost cluster in project `checkmaite`, with a Bifrost access token minted for `checkmaite-svc`. Bifrost authorizes each request in that project, audits it under that subject, and meters the cluster to it. | Submit a batch run; then as admin confirm `GET /api/v1/audit` shows rows with `subject: checkmaite-svc` and `cluster: checkmaite-jobs`, and `GET /api/v1/usage` attributes `project: checkmaite` to `owner: checkmaite-svc`. |
+| JupyterLab / JupyterHub | **Not wired.** The singleuser image ships no Bifrost extension, the singleuser NetworkPolicy has no egress to the Bifrost namespace, and KubeSpawner stamps no `bifrost.dev/owner` label, so a notebook can neither call the API nor reach its own cluster. | Nothing to check yet; rows 9 and 11 stay untested until the data-science-pack ships those three changes. |
+| Gateway hostnames | **Reachable.** One wildcard HTTPRoute covers `*.ray.<domain>` on nebari-gateway, and the gateway certificate carries the matching wildcards (`grace-deploy/bifrost-gateway/`). | `curl -k https://<cluster>.ray.100-89-230-107.sslip.io/api/version` is 401 without a token and 200 with one. |
+
+The token checkmaite holds expires after 90 days, the server maximum, so it
+needs re-minting quarterly: rerun `grace-deploy/bifrost-gateway/checkmaite-tenant.sh`
+and restart the checkmaite API so the pod picks the new value up.
+
+## 5. Running the lanes yourself
 
 ```sh
 # L2: fast, no cluster
@@ -600,7 +617,7 @@ Lane-tuning knobs live in the workflow env and the grace script:
 `REQ_GATEWAY_DOMAIN`, `REQ_ADMISSION_DISALLOWED_IMAGE`, `REQ_ADMISSION_MAX_WORKERS`,
 `REQ_NOWGET_RAY_IMAGE`, `BIFROST_URL` (`in-cluster` on grace), `BIFROST_INSECURE_TLS`.
 
-## 5. Caveats at a glance
+## 6. Caveats at a glance
 
 | Row | Caveat | Fix |
 |-----|--------|-----|
@@ -612,7 +629,7 @@ Lane-tuning knobs live in the workflow env and the grace script:
 | 4, 13 | Kueue fairness shown structurally, not under contention | contention test on grace; Kueue RayCluster integration for serving |
 | 7 | no delegated group admin; GPU cap unscheduled | project-scoped policy write; GPU node for a lane |
 | 8 | failure drill is a pod restart only | node-loss / DB-loss drill on grace |
-| 9, 11 | extension-only, no requirement test | `r11_env_vars` now (no product code); Playwright spec for 9 after the image ships the extension |
+| 9, 11 | extension-only, no requirement test; on grace the notebook path is not wired at all (no extension in the image, no egress to the API, no owner label) | `r11_env_vars` now (no product code); Playwright spec for 9 after the image ships the extension |
 | 10 | nebi images do not exist yet | external; wire `REQ_NOWGET_RAY_IMAGE` when they do |
 | 12 | tenant egress is DNS-only, storage endpoints unreachable without a hand policy; secrets created by hand | `egress` allowance on the storage entry (defect doc 2026-09-03); grace-only read test against aks3 |
 | 14 | no prices on grace, `cost_usd` reads null | set prices in values; assert `cost_usd > 0` |

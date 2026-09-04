@@ -83,3 +83,17 @@ through r08 at time of writing.
 - nebari-operator: SPA client mappers (from the SSO handoff).
 - bifrost-ui: a minimal "Submit job" affordance and project column on services (out of scope for the build-out).
 - Replace `BIFROST_API_PUSH_TOKEN` with a fine-grained PAT.
+
+## Consumers wired 2026-09-04 (grace)
+
+`grace-deploy/bifrost-gateway/` holds the three pieces: a wildcard HTTPRoute for `*.ray.<domain>` on nebari-gateway,
+a patch adding those wildcards to `nebari-gateway-cert` (a TLS wildcard matches one label only), and
+`checkmaite-tenant.sh`, which creates `checkmaite-svc` with `operator@project:checkmaite`, mints a 90-day Bifrost
+access token into Secret `checkmaite-bifrost-token`, and creates the long-lived `checkmaite-jobs` cluster owned by
+that identity. checkmaite's api now submits over Ray's Job Submission REST API to that cluster's gateway host with
+that token: verified end to end from its own pod (job SUCCEEDED), audited under `checkmaite-svc`, metered to
+`project: checkmaite`. The env vars are a live `kubectl set env` patch because grace runs chart 0.4.0 and no copy of
+it is on the host — `grace-deploy/checkmaite/checkmaite-values.yaml` carries them for the next `helm upgrade`.
+
+JupyterHub is still not wired: no extension in the singleuser image, no egress from `jupyter` to `bifrost`, no
+`bifrost.dev/owner` label from KubeSpawner. All three are data-science-pack changes.
