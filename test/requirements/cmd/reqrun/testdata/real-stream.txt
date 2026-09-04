@@ -1,0 +1,19 @@
+=== RUN   TestDeployServiceConvergesToServing
+    serve_test.go:21: REQ: kind=covers req=1 reason="deploying a RayService through the API converges to a serving endpoint"
+--- PASS: TestDeployServiceConvergesToServing (132.44s)
+=== NAME  
+=== RUN   TestRedeploySameNameBumpsGeneration
+    serve_test.go:48: REQ: kind=covers req=1 reason="redeploying a service under the same name updates it in place"
+--- PASS: TestRedeploySameNameBumpsGeneration (120.92s)
+=== NAME  
+=== RUN   TestDeleteServiceConvergesToTerminated
+    serve_test.go:90: REQ: kind=covers req=1 reason="deleting a service tears its RayService down"
+--- PASS: TestDeleteServiceConvergesToTerminated (142.79s)
+=== NAME  
+=== RUN   TestServeEndpointAnswersThroughTheGateway
+    serve_test.go:123: REQ: kind=covers req=1 reason="the Serve endpoint is reachable through the authenticated gateway"
+    serve_test.go:125: REQ: kind=skip req=0 reason="target grace lacks capability serve-fixture"
+    serve_test.go:125: target grace lacks capability serve-fixture
+--- SKIP: TestServeEndpointAnswersThroughTheGateway (0.43s)
+=== NAME  
+PASS

@@ -131,8 +131,12 @@ func TestConvertAgreesWithGoToolTest2json(t *testing.T) {
 // requirement binary produced is another, and it is the one that caught the
 // framing byte. This file is the r01 package's output from an in-cluster run,
 // captured verbatim.
+//
+// Named .txt rather than .out because the repository ignores *.out as lane
+// artifacts — which is how the first version of this fixture was left
+// untracked, passing here and failing in CI on a file that did not exist.
 func TestConvertHandlesARealStream(t *testing.T) {
-	raw, err := os.ReadFile("testdata/real-stream.out")
+	raw, err := os.ReadFile("testdata/real-stream.txt")
 	if err != nil {
 		t.Fatalf("fixture: %v", err)
 	}
