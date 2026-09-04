@@ -34,6 +34,16 @@ func NewJobClient(c *Client) *JobClient { return &JobClient{c} }
 // same allow that isolates a managed cluster isolates the job's cluster
 // and its submitter pod.
 func (j *JobClient) ApplyJob(ctx context.Context, id core.ClusterId, spec *core.RayJobSpec, generation uint64, queue *provision.QueueAssignment) error {
+	// The namespace posture (default-deny + tenant-allow) is what admits
+	// KubeRay's operator and the control plane to the job's head. The
+	// cluster path ensures it on every actuating apply; a namespace whose
+	// first workload is a RayJob used to get only the per-cluster allow,
+	// which selects the head and admits nobody else — the operator's job
+	// status checks then time out and KubeRay marks the job Failed
+	// (kind runs 33802820554…33825288414). Fail-closed like clusters.
+	if err := j.EnsureNamespacePosture(ctx); err != nil {
+		return err
+	}
 	if err := j.ensureClusterAllow(ctx, string(id), spec.Owner); err != nil {
 		return err
 	}
