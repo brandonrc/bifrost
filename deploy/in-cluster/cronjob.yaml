@@ -1,0 +1,109 @@
+# The requirement suite, run by the cluster against itself.
+#
+# This CronJob is the source of truth for how a run is configured, and an
+# on-demand run is derived from it rather than written twice:
+#
+#   kubectl -n bifrost create job --from=cronjob/bifrost-requirements req-$(date +%s)
+#   kubectl -n bifrost logs -f job/req-<id>
+#
+# The log is the report: reqrun prints a line per package and then the
+# traceability matrix, so `kubectl logs` answers both "was it green" and "which
+# requirements was it green about".
+#
+# Concurrency is Forbid because two runs would create clusters in the same
+# project at the same time and trip each other's quota checks. A run that
+# overruns its window is skipped, not queued.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: bifrost-requirements
+  namespace: bifrost
+  labels:
+    app.kubernetes.io/name: bifrost-requirements
+spec:
+  # 07:00 UTC, which is the quiet hour on the deployment this was written for.
+  schedule: "0 7 * * *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # No retry. A failed suite is a result to read, not a flake to paper
+      # over, and a second run would report the first one's leftovers.
+      backoffLimit: 0
+      # Longer than the sum of the per-package timeouts is pointless; this is
+      # the outer bound that stops a wedged run holding the schedule.
+      activeDeadlineSeconds: 5400
+      ttlSecondsAfterFinished: 172800
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: bifrost-requirements
+        spec:
+          serviceAccountName: bifrost-requirements
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: reqrun
+              # Pin the tag that matches the deployed control plane: a suite
+              # from a later commit can assert behaviour the running image does
+              # not have yet, and the failure then reads as a regression.
+              image: ghcr.io/brandonrc/bifrost-test:latest
+              imagePullPolicy: IfNotPresent
+              env:
+                # The targets.yaml target: its capabilities decide which tests
+                # run (calico, probes, restart, consumers, gateway) and which
+                # namespace probe pods land in.
+                - name: REQ_TARGET
+                  value: grace
+                # Reached by Service DNS, so the suite needs no ingress and no
+                # TLS trust of its own. Host-routed gateway tests work because
+                # the control plane answers on this Service by Host header.
+                - name: BIFROST_URL
+                  value: http://bifrost.bifrost.svc:8484
+                - name: BIFROST_ADMIN_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: bifrost-local-admin
+                      key: BIFROST_LOCAL_ADMIN_PASSWORD
+                # The label that finds the control plane's pods for the restart
+                # tests. This is the pack's label, not Bifrost's own.
+                - name: REQ_CONTROL_PLANE_SELECTOR
+                  value: app.kubernetes.io/name=bifrost-pack
+                # Must match --gateway-domain on the deployment, or the
+                # gateway tests address hosts the registry never registered.
+                - name: REQ_GATEWAY_DOMAIN
+                  value: ray.100-89-230-107.sslip.io
+                # A Ray image without wget, for the probe-independence test
+                # (requirement 10, defect 2026-09-02).
+                - name: REQ_NOWGET_RAY_IMAGE
+                  value: localhost:32000/checkmaite-api:2.56.0-r1
+                # Real hardware converges faster than a CI runner; these are
+                # the grace-lane budgets.
+                - name: REQ_EVENTUALLY_TIMEOUT
+                  value: 5m
+                - name: REQ_POSTFLIGHT_TIMEOUT
+                  value: 4m
+              resources:
+                requests: {cpu: 200m, memory: 256Mi}
+                limits: {cpu: "2", memory: 1Gi}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: [ALL]}
+              volumeMounts:
+                - name: out
+                  mountPath: /tmp
+          volumes:
+            # The image writes each package's stream and the report under /tmp,
+            # which a read-only root filesystem otherwise forbids. An emptyDir
+            # keeps them for the life of the pod, which is as long as anyone
+            # reads them; a PVC here would keep them across runs.
+            - name: out
+              emptyDir: {}

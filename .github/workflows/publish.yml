@@ -114,3 +114,54 @@ jobs:
 
             echo "ok: uid=$uid, statically linked"
           '
+
+  # The requirement suite as an image (Dockerfile.test), so the cluster can run
+  # the same lane the grace script runs from a laptop. Separate job, same
+  # commit: the two images are versioned together, and a deployment pins the
+  # tag matching the control plane it is testing.
+  publish-test-image:
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push the test image (amd64)
+        env:
+          TEST_IMAGE: ghcr.io/${{ github.repository_owner }}/bifrost-test
+        run: |
+          SHORT=${GITHUB_SHA::7}
+          docker build -f Dockerfile.test \
+            -t "$TEST_IMAGE:sha-${SHORT}" \
+            -t "$TEST_IMAGE:latest" .
+          docker push "$TEST_IMAGE:sha-${SHORT}"
+          docker push "$TEST_IMAGE:latest"
+
+      # The suite's own entrypoint says what it needs, so running it with
+      # nothing configured is a cheap check that the image is complete: it must
+      # reach the REQ_TARGET error, which means the binary loaded, its embedded
+      # data parsed and the runtime base carries everything it links against. A
+      # missing binary or a broken base fails differently, and loudly.
+      - name: The published test image runs
+        env:
+          TEST_IMAGE: ghcr.io/${{ github.repository_owner }}/bifrost-test
+        run: |
+          SHORT=${GITHUB_SHA::7}
+          out=$(docker run --rm "$TEST_IMAGE:sha-${SHORT}" 2>&1 || true)
+          echo "$out"
+          case "$out" in
+            *"REQ_TARGET is required"*) echo "ok: reqrun starts and validates its input" ;;
+            *) echo "FAIL: unexpected output from reqrun"; exit 1 ;;
+          esac
+          # And the packages are actually in the image, not silently zero.
+          count=$(docker run --rm --entrypoint=/bin/sh "$TEST_IMAGE:sha-${SHORT}" -c \
+            'set -- /usr/local/lib/bifrost-requirements/*.test; echo $#')
+          echo "packages: $count"
+          [ "$count" -ge 12 ] || { echo "FAIL: expected at least 12 test binaries"; exit 1; }

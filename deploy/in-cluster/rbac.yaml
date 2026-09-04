@@ -1,0 +1,110 @@
+# The identity the in-cluster requirement suite runs as.
+#
+# Scope: two namespaced Roles and nothing cluster-scoped. The suite reads and
+# reaps only the objects a run creates (everything it makes carries
+# `req.bifrost.dev/run=<run id>`, and its guarded client refuses to mutate
+# anything without that label), so the grants below are the smallest set that
+# lets it do that and read back what the control plane provisioned.
+#
+# Namespaces: `bifrost` is the workload namespace, `jupyter` the consumer
+# namespace probe pods run in (targets.yaml calls it probeNamespace). Change
+# both to match the deployment.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: bifrost-requirements
+  namespace: bifrost
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: bifrost-requirements
+  namespace: bifrost
+rules:
+  # Pods: probe pods, the head pods a cluster provisioned, and — for the
+  # `restart` capability — deleting the control plane's own pod to watch the
+  # store bring its records back.
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, create, delete]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+  # Services: two clusters must have distinct head Services (requirement 6).
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [get, list]
+  # Events: the pending-reasons test reads scheduling failures (requirement 15).
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [list]
+  # Secrets: requirement 12 catalogues real Secrets and asserts they reach pods
+  # by reference, never by value. Created and reaped by the run.
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, list, create, delete]
+  # NetworkPolicies: the per-owner isolation the provisioner writes, and the
+  # deny-all a CNI check installs and removes.
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, list, create, delete]
+  # KubeRay objects: read what the control plane provisioned, and delete one
+  # out of band to prove the reconciler puts it back (requirement 8).
+  - apiGroups: [ray.io]
+    resources: [rayclusters, rayjobs, rayservices]
+    verbs: [get, list, delete]
+  # Kueue: a serving allocation becomes a LocalQueue (requirement 4).
+  - apiGroups: [kueue.x-k8s.io]
+    resources: [localqueues]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: bifrost-requirements
+  namespace: bifrost
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: bifrost-requirements
+subjects:
+  - kind: ServiceAccount
+    name: bifrost-requirements
+    namespace: bifrost
+---
+# The consumer namespace: probe pods stand in for a user's notebook, so the
+# suite creates them here and sweeps them afterwards. No Ray objects, no
+# services, no events — a probe pod and its own leftovers are all this needs.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: bifrost-requirements-probes
+  namespace: jupyter
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, create, delete]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [list, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [list, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: bifrost-requirements-probes
+  namespace: jupyter
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: bifrost-requirements-probes
+subjects:
+  - kind: ServiceAccount
+    name: bifrost-requirements
+    namespace: bifrost
