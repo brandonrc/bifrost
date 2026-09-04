@@ -35,7 +35,7 @@ func DiagnoseJobHead(t req.T, tgt req.Target, cluster string) string {
 		if err := k.Get(ctx, ctrlclient.ObjectKey{Namespace: tgt.Namespace(), Name: cluster}, &rc); err != nil {
 			fmt.Fprintf(&b, "raycluster %s: %v\n", cluster, err)
 		} else {
-			fmt.Fprintf(&b, "raycluster %s: state=%s ready=%d desired=%d", cluster, rc.Status.State, rc.Status.ReadyWorkerReplicas, rc.Status.DesiredWorkerReplicas)
+			fmt.Fprintf(&b, "raycluster %s: ready=%d desired=%d", cluster, rc.Status.ReadyWorkerReplicas, rc.Status.DesiredWorkerReplicas)
 			for _, c := range rc.Status.Conditions {
 				fmt.Fprintf(&b, " %s=%s(%s)", c.Type, c.Status, c.Reason)
 			}
