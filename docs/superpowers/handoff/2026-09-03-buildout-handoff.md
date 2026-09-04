@@ -97,3 +97,12 @@ it is on the host — `grace-deploy/checkmaite/checkmaite-values.yaml` carries t
 
 JupyterHub is still not wired: no extension in the singleuser image, no egress from `jupyter` to `bifrost`, no
 `bifrost.dev/owner` label from KubeSpawner. All three are data-science-pack changes.
+
+## In-cluster lane 2026-09-04
+
+`Dockerfile.test` → `ghcr.io/brandonrc/bifrost-test` (published by publish.yml alongside the server image) carries the
+compiled requirement packages, `reqreport` and `reqrun`; `deploy/in-cluster/` carries a ServiceAccount with two
+namespaced Roles and a CronJob that doubles as the on-demand template. The cluster can now validate itself with only
+`kubectl`. First run found that `-test.v=test2json` output is not JSON — the grace lane leans on `go tool test2json`,
+which no runtime image can carry — so the conversion lives in `reqrun`, tested against a real stream and differentially
+against Go's own converter.

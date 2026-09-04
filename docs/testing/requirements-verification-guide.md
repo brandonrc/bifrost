@@ -25,6 +25,7 @@ per-lane JSON. The lanes:
 | L2 inproc | every PR and push, `make report` | API semantics, RBAC, validation, audit, policy, store behaviour. No Kubernetes. | `make report` (Go 1.25) |
 | L3 kind | GitHub workflow `l3-kind.yml`, 4 shards + report job | everything L2 proves, plus provisioning, Calico NetworkPolicy, probes, restart recovery, gateway routing, RayJob and RayService convergence | `gh workflow run l3-kind.yml --ref main`, then download the `l3-report` artifact |
 | L3 grace | your laptop drives it over ssh, tests run on grace | same as kind on the real microk8s stack with Keycloak SSO and the shared Ray cluster | `make test-l3 TARGET=grace` (needs Tailscale up and `ssh geraci@grace`) |
+| L3 in-cluster | a Job in the cluster, nightly or on demand | the same packages as the grace lane, with no laptop, no Go toolchain and no tunnel | `kubectl -n bifrost create job --from=cronjob/bifrost-requirements req-$(date +%s)`, then `kubectl logs` |
 
 Tests that need a cluster call `req.NeedK8s` or `req.NeedsCapability(t, tgt,
 "calico" | "probes" | "restart" | "gateway" | "serve-fixture")`; they skip on
@@ -611,6 +612,13 @@ gh run download <run-id> -n l3-report   # traceability.md + merged l3.json
 export BIFROST_ADMIN_PASSWORD=...        # from the secret above
 make test-l3 TARGET=grace                 # writes .l3/out/*.out and l3-grace.json
 ```
+
+The in-cluster lane is the one a tester with only `kubectl` can run, and the
+one that answers "is the deployment still good" without anyone present. Its
+image carries the compiled suite, its ServiceAccount holds two namespaced roles
+and nothing cluster-scoped, and its log is the report: a line per package, then
+the matrix. `deploy/in-cluster/README.md` covers installing it, running one
+package, and what a run does to the cluster — it is not read-only.
 
 Lane-tuning knobs live in the workflow env and the grace script:
 `REQ_WORKER_REPLICAS`, `REQ_HEAD_CPU`, `REQ_HEAD_MEMORY`, `REQ_EVENTUALLY_TIMEOUT`, `REQ_POSTFLIGHT_TIMEOUT`,
