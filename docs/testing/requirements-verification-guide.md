@@ -4,8 +4,8 @@ A tester's guide to the eighteen Ray Software Pack requirements: what the
 automated lanes already prove, how to prove each row by hand against a live
 deployment (grace), and the caveats that remain with a concrete fix for each.
 
-Status as of 2026-09-03, `main` at `2aa728d` (contract 0.2.0, 51 operations). Grace lane `t6a99c1de` on the deployed
-`sha-ae5ae86`: 68 pass / 0 fail.
+Status as of 2026-09-04, `main` at `37eaf6a` (contract 0.2.0, 51 operations). Grace lane `t6a99c1de`: 68 pass / 0 fail.
+Kind lane run 33831466919: 74 pass / 0 fail / 7 skip.
 
 ## 1. How proof works
 
@@ -618,5 +618,5 @@ Lane-tuning knobs live in the workflow env and the grace script:
 | 14 | no prices on grace, `cost_usd` reads null | set prices in values; assert `cost_usd > 0` |
 | 16 | Dask deferred | scope decision |
 | 18 | no FIPS build, no scan gate, no control mapping | `GOFIPS140` target, Trivy job, controls doc |
-| lanes | kind jobs/serving shards were red until 2026-09-04: namespace posture was ensured only on the cluster path (defect doc 2026-09-04), fixed in #30; grace is the environment of record | read the first kind run after #30; redeploy grace with the fixed image |
+| lanes | kind was red until 2026-09-04 (namespace posture ensured only on the cluster path, defect doc 2026-09-04, fixed in #30); now 74 pass / 0 fail on run 33831466919 | make the kind lane merge-blocking on PRs |
 | ops | bifrost-pack has no git remote; sync token is a personal token | create the pack repo; fine-grained PAT for `BIFROST_API_PUSH_TOKEN` |

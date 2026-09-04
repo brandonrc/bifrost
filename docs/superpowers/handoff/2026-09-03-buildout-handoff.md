@@ -68,6 +68,10 @@ the posture first). Along the way: #22 4Gi heads on kind (a real OOM of the job 
 and head diagnostics for RayJobs, #25 quota limit follows head CPU, #26 operator-peer probe test. Grace never showed
 the bug because clusters existed before the first job; redeploy grace once the fix publishes.
 
+**Kind lane GREEN 2026-09-04** — run 33831466919 on main `37eaf6a`: **74 pass / 0 fail / 7 skip** across all four
+shards (first fully green kind run). Grace redeployed to `sha-6d63ebc` (helm rev 17); lane rerun in progress, clean
+through r08 at time of writing.
+
 ## Follow-ups (not done)
 
 - **J rename sweep** of the ~369 "mobula" mentions in bifrost (mechanical; last so it does not conflict).
