@@ -71,7 +71,7 @@
         "type": "object"
       },
       "ApiTokenView": {
-        "description": "The public projection of an API token — no hash, no plaintext.",
+        "description": "The public projection of an API token \u2014 no hash, no plaintext.",
         "properties": {
           "created_at": {
             "format": "int64",
@@ -124,7 +124,7 @@
             "type": "integer"
           },
           "principal": {
-            "description": "The principal the assignment applies to: a token `sub` (opaque\nKeycloak UUID) or a `preferred_username` — evaluation matches BOTH, so\nhuman-friendly username grants take effect (#88).",
+            "description": "The principal the assignment applies to: a token `sub` (opaque\nKeycloak UUID) or a `preferred_username` \u2014 evaluation matches BOTH, so\nhuman-friendly username grants take effect (#88).",
             "type": "string"
           },
           "role": {
@@ -153,10 +153,10 @@
         "type": "string"
       },
       "AuditEvent": {
-        "description": "One audit-trail row (api-v1.md §5.9). Fields not applicable to the\nemitting site are `None` (serialized `null`); `granted_roles` is empty.\n\nDecision policy (the audit subsystem): `deny` rows are emitted at\nthe point of refusal (authn failures, authz denials, quota denials);\ngateway per-request rows are always `allow` — a request Bifrost refuses\nnever reaches the gateway, so its `deny` row comes from the refuser.",
+        "description": "One audit-trail row (api-v1.md \u00a75.9). Fields not applicable to the\nemitting site are `None` (serialized `null`); `granted_roles` is empty.\n\nDecision policy (the audit subsystem): `deny` rows are emitted at\nthe point of refusal (authn failures, authz denials, quota denials);\ngateway per-request rows are always `allow` \u2014 a request Bifrost refuses\nnever reaches the gateway, so its `deny` row comes from the refuser.",
         "properties": {
           "action": {
-            "description": "Control-plane mutation (`create_cluster`, `delete_pool`, …);\n`null` on gateway rows.",
+            "description": "Control-plane mutation (`create_cluster`, `delete_pool`, \u2026);\n`null` on gateway rows.",
             "type": [
               "string",
               "null"
@@ -250,7 +250,7 @@
         "type": "object"
       },
       "AuditListResponse": {
-        "description": "Response of `GET /api/v1/audit`. This endpoint is the ONE list route\nthat wraps its items in an envelope — the cursor has to live somewhere\n(api-v1.md §5.9).",
+        "description": "Response of `GET /api/v1/audit`. This endpoint is the ONE list route\nthat wraps its items in an envelope \u2014 the cursor has to live somewhere\n(api-v1.md \u00a75.9).",
         "properties": {
           "items": {
             "items": {
@@ -274,7 +274,7 @@
         "type": "object"
       },
       "AuditRequired": {
-        "description": "The (verb, target) permission an authorization decision was checked\nagainst — mirrors the auth subsystem's permission/target vocabulary as lowercase\nstrings (`\"write\"`, `\"cluster\"`) so core stays free of auth types.\nPresent only on authz denials.",
+        "description": "The (verb, target) permission an authorization decision was checked\nagainst \u2014 mirrors the auth subsystem's permission/target vocabulary as lowercase\nstrings (`\"write\"`, `\"cluster\"`) so core stays free of auth types.\nPresent only on authz denials.",
         "properties": {
           "action": {
             "description": "e.g. \"read\" | \"write\" | \"delete\" | \"admin\".",
@@ -321,21 +321,21 @@
         "type": "object"
       },
       "BudgetStatus": {
-        "description": "A configured project's time-windowed budget status (#77): the cap, what\nhas been consumed over the trailing window (ending at the report's `to`),\nand what remains. Distinct from `UsageGroup` — this reflects the\n`[budgets]` policy, not the raw sample roll-up.",
+        "description": "A configured project's time-windowed budget status (#77): the cap, what\nhas been consumed over the trailing window (ending at the report's `to`),\nand what remains. Distinct from `UsageGroup` \u2014 this reflects the\n`[budgets]` policy, not the raw sample roll-up.",
         "properties": {
           "consumed": {
             "additionalProperties": {
               "format": "double",
               "type": "number"
             },
-            "description": "resource → resource-hours consumed over the trailing window.",
+            "description": "resource \u2192 resource-hours consumed over the trailing window.",
             "propertyNames": {
               "type": "string"
             },
             "type": "object"
           },
           "exhausted": {
-            "description": "True once consumption has reached or passed the cap on any capped\nresource — a create for this project would be 409'd.",
+            "description": "True once consumption has reached or passed the cap on any capped\nresource \u2014 a create for this project would be 409'd.",
             "type": "boolean"
           },
           "limit": {
@@ -343,7 +343,7 @@
               "format": "double",
               "type": "number"
             },
-            "description": "resource → resource-hours allowed over the window.",
+            "description": "resource \u2192 resource-hours allowed over the window.",
             "propertyNames": {
               "type": "string"
             },
@@ -357,7 +357,7 @@
               "format": "double",
               "type": "number"
             },
-            "description": "resource → resource-hours remaining (`limit − consumed`, floored at 0)\nfor each capped resource.",
+            "description": "resource \u2192 resource-hours remaining (`limit \u2212 consumed`, floored at 0)\nfor each capped resource.",
             "propertyNames": {
               "type": "string"
             },
@@ -382,7 +382,7 @@
       },
       "BudgetView": {
         "additionalProperties": {
-          "description": "resource → resource-hours allowed over the window (`cpu` = core-hours,\n`memory` = GiB-hours, `nvidia.com/gpu` = GPU-hours).",
+          "description": "resource \u2192 resource-hours allowed over the window (`cpu` = core-hours,\n`memory` = GiB-hours, `nvidia.com/gpu` = GPU-hours).",
           "format": "double",
           "type": "number"
         },
@@ -401,7 +401,7 @@
         "type": "object"
       },
       "ClusterEvent": {
-        "description": "One normalized Kubernetes Event about a cluster object (api-v1.md §5.8).\nFields are `Option` because the two Event schemas (core/v1 and\nevents.k8s.io/v1) name them differently and any of them may be absent.",
+        "description": "One normalized Kubernetes Event about a cluster object (api-v1.md \u00a75.8).\nFields are `Option` because the two Event schemas (core/v1 and\nevents.k8s.io/v1) name them differently and any of them may be absent.",
         "properties": {
           "count": {
             "description": "How many times this event has fired (K8s collapses repeats). Defaults\nto 1 when the source records no count.",
@@ -438,7 +438,7 @@
             ]
           },
           "reason": {
-            "description": "Short machine reason (`FailedScheduling`, `Pulled`, `BackOff`, …).",
+            "description": "Short machine reason (`FailedScheduling`, `Pulled`, `BackOff`, \u2026).",
             "type": [
               "string",
               "null"
@@ -456,7 +456,7 @@
         "type": "object"
       },
       "ClusterEvents": {
-        "description": "Kubernetes Events for one cluster's objects (api-v1.md §5.8), newest first\nand capped — the body of `GET /api/v1/clusters/{id}/events`.",
+        "description": "Kubernetes Events for one cluster's objects (api-v1.md \u00a75.8), newest first\nand capped \u2014 the body of `GET /api/v1/clusters/{id}/events`.",
         "properties": {
           "cluster_id": {
             "description": "The cluster id (RayCluster name).",
@@ -477,7 +477,7 @@
         "type": "object"
       },
       "ClusterLogs": {
-        "description": "A tail-capped pod log view for one cluster (api-v1.md §5.6, non-streaming\nfirst cut) — the body of `GET /api/v1/clusters/{id}/logs`. WS streaming is\nthe eventual design (Milestone C); this GET-tail form removes the\npending-backend stub now.",
+        "description": "A tail-capped pod log view for one cluster (api-v1.md \u00a75.6, non-streaming\nfirst cut) \u2014 the body of `GET /api/v1/clusters/{id}/logs`. WS streaming is\nthe eventual design (Milestone C); this GET-tail form removes the\npending-backend stub now.",
         "properties": {
           "cluster_id": {
             "description": "The cluster id (RayCluster name).",
@@ -523,7 +523,7 @@
         "type": "object"
       },
       "ClusterMetrics": {
-        "description": "Normalized cluster resource-usage summary (the body of\n`GET /api/v1/clusters/{id}/metrics`), distilled from the Ray dashboard's\nautoscaler / load-metrics report. Every stat is `Option` because a cluster\nmay not report GPUs, and an older/mismatched Ray may omit a field — the UI\nrenders a tile only for the stats present.",
+        "description": "Normalized cluster resource-usage summary (the body of\n`GET /api/v1/clusters/{id}/metrics`), distilled from the Ray dashboard's\nautoscaler / load-metrics report. Every stat is `Option` because a cluster\nmay not report GPUs, and an older/mismatched Ray may omit a field \u2014 the UI\nrenders a tile only for the stats present.",
         "properties": {
           "active_nodes": {
             "description": "Active Ray nodes the autoscaler reports; `None` when unavailable.",
@@ -607,7 +607,7 @@
         "type": "object"
       },
       "ClusterNodes": {
-        "description": "Head + per-worker-group node breakdown for one cluster (api-v1.md §5.3),\nthe body of `GET /api/v1/clusters/{id}/nodes`.",
+        "description": "Head + per-worker-group node breakdown for one cluster (api-v1.md \u00a75.3),\nthe body of `GET /api/v1/clusters/{id}/nodes`.",
         "properties": {
           "cluster_id": {
             "description": "The cluster id (RayCluster name).",
@@ -652,7 +652,7 @@
             "type": "string"
           },
           "idle_timeout_secs": {
-            "description": "**Inactivity reap window** in seconds (#100): the cluster is reaped once\nit has been *idle* — no job activity — for this long, so a busy cluster\nsurvives past it while a genuinely unused one is released. Distinct from\n[`Self::ttl_seconds`], which still caps absolute age independently:\nwhichever fires first reaps the cluster.\n\nActivity is derived from the persisted job history (a running/recent\ngateway job keeps the cluster alive). **Limitation:** interactive Ray\nClient / Dask sessions submit no gateway jobs, so their activity is\ninvisible to this signal — an interactive-only cluster looks idle from\ncreation. For such sessions rely on [`Self::ttl_seconds`] or leave this\nunset. See `reconcile.rs` module docs.\n\n`#[serde(default)]` so specs persisted before this field — and any\nclient that omits it — keep the prior max-age-only behavior.",
+            "description": "**Inactivity reap window** in seconds (#100): the cluster is reaped once\nit has been *idle* \u2014 no job activity \u2014 for this long, so a busy cluster\nsurvives past it while a genuinely unused one is released. Distinct from\n[`Self::ttl_seconds`], which still caps absolute age independently:\nwhichever fires first reaps the cluster.\n\nActivity is derived from the persisted job history (a running/recent\ngateway job keeps the cluster alive). **Limitation:** interactive Ray\nClient / Dask sessions submit no gateway jobs, so their activity is\ninvisible to this signal \u2014 an interactive-only cluster looks idle from\ncreation. For such sessions rely on [`Self::ttl_seconds`] or leave this\nunset. See `reconcile.rs` module docs.\n\n`#[serde(default)]` so specs persisted before this field \u2014 and any\nclient that omits it \u2014 keep the prior max-age-only behavior.",
             "format": "int64",
             "minimum": 0,
             "type": [
@@ -667,7 +667,7 @@
             "type": "string"
           },
           "owner": {
-            "description": "The authenticated owner of this cluster (tier-2 owned session\nclusters): the human identity that requested it — a\n`preferred_username` when the OIDC token carries one, else the `sub`.\nSet control-plane-side from the request identity (never trusted from\nthe client body); `None` for clusters created without an owner (e.g.\nadmin/service paths). When set it is stamped as the\n`bifrost.dev/owner` label on the RayCluster and its pods, and drives\nthe per-owner Ray-client (`:10001`) ingress NetworkPolicy so only the\nowner's notebook pod can reach the cluster. `#[serde(default)]` keeps\nspecs persisted before this field deserializable (they parse as\n`None`).",
+            "description": "The authenticated owner of this cluster (tier-2 owned session\nclusters): the human identity that requested it \u2014 a\n`preferred_username` when the OIDC token carries one, else the `sub`.\nSet control-plane-side from the request identity (never trusted from\nthe client body); `None` for clusters created without an owner (e.g.\nadmin/service paths). When set it is stamped as the\n`bifrost.dev/owner` label on the RayCluster and its pods, and drives\nthe per-owner Ray-client (`:10001`) ingress NetworkPolicy so only the\nowner's notebook pod can reach the cluster. `#[serde(default)]` keeps\nspecs persisted before this field deserializable (they parse as\n`None`).",
             "type": [
               "string",
               "null"
@@ -694,7 +694,7 @@
             "type": "array"
           },
           "ttl_seconds": {
-            "description": "**Absolute max-age cap** in seconds: the cluster is reaped this long\nafter creation regardless of activity. `None` disables the max-age\nreaper. (Despite the historical name, this is a wall-clock age cap, not\nan inactivity window — see [`Self::idle_timeout_secs`] for that.)",
+            "description": "**Absolute max-age cap** in seconds: the cluster is reaped this long\nafter creation regardless of activity. `None` disables the max-age\nreaper. (Despite the historical name, this is a wall-clock age cap, not\nan inactivity window \u2014 see [`Self::idle_timeout_secs`] for that.)",
             "format": "int64",
             "minimum": 0,
             "type": [
@@ -721,7 +721,7 @@
         "type": "object"
       },
       "ClusterState": {
-        "description": "Lifecycle states of a managed cluster (PLAN.md §3.1).",
+        "description": "Lifecycle states of a managed cluster (PLAN.md \u00a73.1).",
         "enum": [
           "pending",
           "provisioning",
@@ -746,7 +746,7 @@
             ]
           },
           "desired": {
-            "description": "\"running\" | \"suspended\" | \"terminated\" — the operator's intent.",
+            "description": "\"running\" | \"suspended\" | \"terminated\" \u2014 the operator's intent.",
             "type": "string"
           },
           "engine": {
@@ -867,7 +867,7 @@
             "type": "integer"
           },
           "label": {
-            "description": "Human label (\"ci\", \"laptop\") — shown in listings.",
+            "description": "Human label (\"ci\", \"laptop\") \u2014 shown in listings.",
             "type": "string"
           }
         },
@@ -878,7 +878,7 @@
         "type": "object"
       },
       "CreateTokenResponse": {
-        "description": "`POST /api/v1/auth/tokens` success body. The plaintext `token` is\nreturned ONLY here — store it now; it cannot be recovered.",
+        "description": "`POST /api/v1/auth/tokens` success body. The plaintext `token` is\nreturned ONLY here \u2014 store it now; it cannot be recovered.",
         "properties": {
           "expires_at": {
             "description": "Unix seconds.",
@@ -945,7 +945,7 @@
         "type": "object"
       },
       "Engine": {
-        "description": "The compute engine a cluster is provisioned on (multi-engine spike). The\ncontrol plane is engine-neutral above the provisioner seam; this\ndiscriminator is what the reconciler and the provisioner router dispatch\non. `Ray` is the default so specs persisted before multi-engine — and any\nclient that omits the field — still deserialize as Ray clusters, exactly\nas before.",
+        "description": "The compute engine a cluster is provisioned on (multi-engine spike). The\ncontrol plane is engine-neutral above the provisioner seam; this\ndiscriminator is what the reconciler and the provisioner router dispatch\non. `Ray` is the default so specs persisted before multi-engine \u2014 and any\nclient that omits the field \u2014 still deserialize as Ray clusters, exactly\nas before.",
         "enum": [
           "ray",
           "dask"
@@ -971,7 +971,7 @@
             "additionalProperties": {
               "type": "string"
             },
-            "description": "Resource key → nominal quota quantity string.",
+            "description": "Resource key \u2192 nominal quota quantity string.",
             "propertyNames": {
               "type": "string"
             },
@@ -993,7 +993,7 @@
         "type": "object"
       },
       "GpuSharing": {
-        "description": "How a pool's GPUs may be shared between workloads (#58).\n\nNVIDIA GPU time-slicing (and fractional `nvidia.com/gpu` requests via the\ndevice plugin) shares one GPU's SMs across processes with no hardware\nisolation — acceptable within one tenant, never across tenants. MIG is\nhardware partitioning and whole-GPU allocation needs no sharing at all,\nso both are isolation-safe. The tenant-isolation rule itself is enforced\nby the policy package's GPU admission logic at admission time; this field is the per-pool\nknob it evaluates.",
+        "description": "How a pool's GPUs may be shared between workloads (#58).\n\nNVIDIA GPU time-slicing (and fractional `nvidia.com/gpu` requests via the\ndevice plugin) shares one GPU's SMs across processes with no hardware\nisolation \u2014 acceptable within one tenant, never across tenants. MIG is\nhardware partitioning and whole-GPU allocation needs no sharing at all,\nso both are isolation-safe. The tenant-isolation rule itself is enforced\nby the policy package's GPU admission logic at admission time; this field is the per-pool\nknob it evaluates.",
         "enum": [
           "whole-gpu",
           "mig",
@@ -1025,17 +1025,25 @@
           },
           "subject": {
             "type": "string"
+          },
+          "projects": {
+            "description": "The projects the caller holds scoped grants in, from group-derived\nproject roles and stored assignments alike, sorted by name.\n\nDistinct from `roles`, which lists the caller's *global* roles: a global\noperator may act in every project and this list can name none, so a\nclient that finds it empty should read `roles` before concluding the\ncaller may do nothing.",
+            "items": {
+              "$ref": "#/components/schemas/ProjectGrant"
+            },
+            "type": "array"
           }
         },
         "required": [
           "subject",
           "groups",
-          "roles"
+          "roles",
+          "projects"
         ],
         "type": "object"
       },
       "JobView": {
-        "description": "A job in the persistent, cross-cluster history (Phase 3, spec §5.5).",
+        "description": "A job in the persistent, cross-cluster history (Phase 3, spec \u00a75.5).",
         "properties": {
           "cluster": {
             "type": "string"
@@ -1075,7 +1083,7 @@
         "type": "object"
       },
       "LocalRole": {
-        "description": "A local user's role (ADR-0011: roles are a column on the user, resolved\nper request — no claim staleness). Stored as TEXT in `local_users.role`;\nthe vocabulary mirrors the auth subsystem's Role type (kept as a separate enum so\ncore never depends on the auth package).",
+        "description": "A local user's role (ADR-0011: roles are a column on the user, resolved\nper request \u2014 no claim staleness). Stored as TEXT in `local_users.role`;\nthe vocabulary mirrors the auth subsystem's Role type (kept as a separate enum so\ncore never depends on the auth package).",
         "enum": [
           "viewer",
           "developer",
@@ -1086,7 +1094,7 @@
         "type": "string"
       },
       "LocalUserView": {
-        "description": "The public projection of a local user — everything EXCEPT the password\nhash and the lockout internals that are nobody else's business.",
+        "description": "The public projection of a local user \u2014 everything EXCEPT the password\nhash and the lockout internals that are nobody else's business.",
         "properties": {
           "created_at": {
             "description": "Unix seconds.",
@@ -1153,7 +1161,7 @@
         "type": "object"
       },
       "LoginResponse": {
-        "description": "`POST /api/v1/auth/login` success body. `token` is an opaque\n`bfr_…` bearer credential (ADR-0011: stored, never signed).",
+        "description": "`POST /api/v1/auth/login` success body. `token` is an opaque\n`bfr_\u2026` bearer credential (ADR-0011: stored, never signed).",
         "properties": {
           "expires_at": {
             "description": "Unix seconds after which the token no longer authenticates.",
@@ -1185,7 +1193,7 @@
         "description": "A single Ray node (head or one worker) as Kubernetes sees it: the pod\nKubeRay created for it, its scheduling/readiness, and the compute it\nrequests. Fields are `Option` because a pod may not yet be scheduled\n(no IP/host) and a quantity may be unparseable or unset.",
         "properties": {
           "cpu": {
-            "description": "CPU cores requested, summed across the pod's containers and parsed\nfrom the K8s quantity (`500m` → 0.5). `None` when unset/unparseable.",
+            "description": "CPU cores requested, summed across the pod's containers and parsed\nfrom the K8s quantity (`500m` \u2192 0.5). `None` when unset/unparseable.",
             "format": "double",
             "type": [
               "number",
@@ -1219,7 +1227,7 @@
             "type": "boolean"
           },
           "memory_bytes": {
-            "description": "Memory bytes requested, summed across the pod's containers (`2Gi` →\n2147483648). `None` when unset/unparseable.",
+            "description": "Memory bytes requested, summed across the pod's containers (`2Gi` \u2192\n2147483648). `None` when unset/unparseable.",
             "format": "int64",
             "minimum": 0,
             "type": [
@@ -1273,7 +1281,7 @@
             "additionalProperties": {
               "$ref": "#/components/schemas/AdmissionRule"
             },
-            "description": "project (or `\"*\"`) → admission limits (#7). Empty when none are configured.",
+            "description": "project (or `\"*\"`) \u2192 admission limits (#7). Empty when none are configured.",
             "propertyNames": {
               "type": "string"
             },
@@ -1283,14 +1291,14 @@
             "additionalProperties": {
               "$ref": "#/components/schemas/BudgetView"
             },
-            "description": "project → time-windowed compute budget (#77). Empty when none are\nconfigured.",
+            "description": "project \u2192 time-windowed compute budget (#77). Empty when none are\nconfigured.",
             "propertyNames": {
               "type": "string"
             },
             "type": "object"
           },
           "editable": {
-            "description": "Always true in v1 — the policy is editable via PUT.",
+            "description": "Always true in v1 \u2014 the policy is editable via PUT.",
             "type": "boolean"
           },
           "prices": {
@@ -1298,7 +1306,7 @@
               "format": "double",
               "type": "number"
             },
-            "description": "resource → $/unit-hour; `null` when no price sheet is configured.",
+            "description": "resource \u2192 $/unit-hour; `null` when no price sheet is configured.",
             "propertyNames": {
               "type": "string"
             },
@@ -1325,7 +1333,7 @@
               },
               "type": "object"
             },
-            "description": "project → (resource → limit). Empty when no quotas are configured.",
+            "description": "project \u2192 (resource \u2192 limit). Empty when no quotas are configured.",
             "propertyNames": {
               "type": "string"
             },
@@ -1389,7 +1397,7 @@
               },
               {
                 "$ref": "#/components/schemas/GpuSharing",
-                "description": "GPU sharing mode for this pool (#58). `None` inherits the platform\ndefault (`[gpu] default_sharing` in the policy file, itself\ndefaulting to `whole-gpu`). A pool shared by more than one project\nmay not resolve to `time-slice` — enforced at admission by\nthe policy package's GPU admission logic, not here (core validates shape; tenancy is\nknown only at the API edge, where allocations live)."
+                "description": "GPU sharing mode for this pool (#58). `None` inherits the platform\ndefault (`[gpu] default_sharing` in the policy file, itself\ndefaulting to `whole-gpu`). A pool shared by more than one project\nmay not resolve to `time-slice` \u2014 enforced at admission by\nthe policy package's GPU admission logic, not here (core validates shape; tenancy is\nknown only at the API edge, where allocations live)."
               }
             ]
           },
@@ -1411,7 +1419,7 @@
         "type": "object"
       },
       "PoolUsageView": {
-        "description": "Live point-in-time usage of one pool (Slice 4): built from the pool's\nlatest stored ClusterQueue/LocalQueue observation plus the spec's\nnominal quotas. NOT a timeseries — for history use `GET /api/v1/usage`.\n`projects` is the per-LocalQueue (per-project) attribution; empty when\nthe observation predates per-LQ status or none exists.",
+        "description": "Live point-in-time usage of one pool (Slice 4): built from the pool's\nlatest stored ClusterQueue/LocalQueue observation plus the spec's\nnominal quotas. NOT a timeseries \u2014 for history use `GET /api/v1/usage`.\n`projects` is the per-LocalQueue (per-project) attribution; empty when\nthe observation predates per-LQ status or none exists.",
         "properties": {
           "pool": {
             "type": "string"
@@ -1427,7 +1435,7 @@
               },
               "type": "object"
             },
-            "description": "project → resource → allocated quantity.",
+            "description": "project \u2192 resource \u2192 allocated quantity.",
             "propertyNames": {
               "type": "string"
             },
@@ -1511,7 +1519,7 @@
             "additionalProperties": {
               "type": "string"
             },
-            "description": "Resource key → summed nominal quota across flavors, as a string.\nA resource key whose quantity fails to parse on ANY flavor is\nomitted entirely (a partial sum would misreport capacity); the\nfailure is logged. Display math only — the spec stays authoritative.",
+            "description": "Resource key \u2192 summed nominal quota across flavors, as a string.\nA resource key whose quantity fails to parse on ANY flavor is\nomitted entirely (a partial sum would misreport capacity); the\nfailure is logged. Display math only \u2014 the spec stays authoritative.",
             "propertyNames": {
               "type": "string"
             },
@@ -1608,7 +1616,7 @@
         "type": "object"
       },
       "ProvidersResponse": {
-        "description": "Which auth providers this deployment offers (login-page metadata; not\nsensitive — the endpoint is public by design).",
+        "description": "Which auth providers this deployment offers (login-page metadata; not\nsensitive \u2014 the endpoint is public by design).",
         "properties": {
           "local": {
             "description": "Local username/password auth is enabled (ADR-0011).",
@@ -1750,7 +1758,7 @@
         "type": "object"
       },
       "RayJobSummary": {
-        "description": "A Ray job normalized to a stable Bifrost shape (api-v1.md §5.6). Every\nfield is optional: Ray's own records vary by version and by whether the\njob has started/finished. `status` is Ray's vocabulary verbatim\n(`PENDING | RUNNING | SUCCEEDED | FAILED | STOPPED`) — not snake_cased,\nper §5.7. `start_time`/`end_time` are Ray's unix-millis timestamps.",
+        "description": "A Ray job normalized to a stable Bifrost shape (api-v1.md \u00a75.6). Every\nfield is optional: Ray's own records vary by version and by whether the\njob has started/finished. `status` is Ray's vocabulary verbatim\n(`PENDING | RUNNING | SUCCEEDED | FAILED | STOPPED`) \u2014 not snake_cased,\nper \u00a75.7. `start_time`/`end_time` are Ray's unix-millis timestamps.",
         "properties": {
           "end_time": {
             "description": "Ray's `end_time` (unix millis); `None` while the job runs.",
@@ -1965,7 +1973,7 @@
         "type": "object"
       },
       "ResourceStat": {
-        "description": "A single resource's capacity, and its used amount when known. `used`/\n`total` are in the resource's natural unit: CPU in cores, GPU in device\ncount, memory in bytes. `used` is `None` when the cluster does not report\nlive utilization (e.g. a non-autoscaling cluster whose Ray dashboard has\nno load-metrics report) — the tile then shows capacity only.",
+        "description": "A single resource's capacity, and its used amount when known. `used`/\n`total` are in the resource's natural unit: CPU in cores, GPU in device\ncount, memory in bytes. `used` is `None` when the cluster does not report\nlive utilization (e.g. a non-autoscaling cluster whose Ray dashboard has\nno load-metrics report) \u2014 the tile then shows capacity only.",
         "properties": {
           "total": {
             "format": "double",
@@ -1985,7 +1993,7 @@
         "type": "object"
       },
       "ResourceUtilization": {
-        "description": "One resource's live utilization within a pool: `allocated` is the Kueue\nreservation-ledger total (summed across flavors from the latest\nClusterQueue observation), `nominal` the summed flavor quotas from the\nspec, `pct` = allocated / nominal × 100 (0 when nominal is 0 — a\npercentage of nothing is undefined, and 0 keeps the type non-optional).",
+        "description": "One resource's live utilization within a pool: `allocated` is the Kueue\nreservation-ledger total (summed across flavors from the latest\nClusterQueue observation), `nominal` the summed flavor quotas from the\nspec, `pct` = allocated / nominal \u00d7 100 (0 when nominal is 0 \u2014 a\npercentage of nothing is undefined, and 0 keeps the type non-optional).",
         "properties": {
           "allocated": {
             "format": "double",
@@ -2008,7 +2016,7 @@
         "type": "object"
       },
       "RoleMappingsView": {
-        "description": "Group→role mappings from the OIDC auth config; shape mirrors\nthe auth subsystem's role-mapping type (a wire twin so the auth package stays free of\nserialization/api deps).",
+        "description": "Group\u2192role mappings from the OIDC auth config; shape mirrors\nthe auth subsystem's role-mapping type (a wire twin so the auth package stays free of\nserialization/api deps).",
         "properties": {
           "admin": {
             "items": {
@@ -2051,10 +2059,10 @@
         "type": "object"
       },
       "RolesResponse": {
-        "description": "`GET /api/v1/access/roles` response. `mappings` is null when no OIDC\nvalidator is configured (local-auth or dev mode): group→role mappings\nare meaningless there — local users carry their role as a column.",
+        "description": "`GET /api/v1/access/roles` response. `mappings` is null when no OIDC\nvalidator is configured (local-auth or dev mode): group\u2192role mappings\nare meaningless there \u2014 local users carry their role as a column.",
         "properties": {
           "editable": {
-            "description": "Always false in v1 — editing stays in the config file + restart.",
+            "description": "Always false in v1 \u2014 editing stays in the config file + restart.",
             "type": "boolean"
           },
           "mappings": {
@@ -2101,7 +2109,7 @@
             "type": "string"
           },
           "serve_config_v2": {
-            "description": "The Serve application config (KubeRay `serveConfigV2`), passed\nthrough verbatim as a YAML string — Bifrost does not interpret it.",
+            "description": "The Serve application config (KubeRay `serveConfigV2`), passed\nthrough verbatim as a YAML string \u2014 Bifrost does not interpret it.",
             "type": "string"
           },
           "storage": {
@@ -2438,7 +2446,7 @@
               "format": "double",
               "type": "number"
             },
-            "description": "resource → resource-hours over the window.",
+            "description": "resource \u2192 resource-hours over the window.",
             "propertyNames": {
               "type": "string"
             },
@@ -2507,7 +2515,7 @@
         "type": "object"
       },
       "WorkerGroup": {
-        "description": "A homogeneous group of Ray worker nodes.\n\nAutoscaling in v0 is actuated exclusively through these replica bounds,\nwhich translate to KubeRay worker-group fields — never by reading demand\nfrom GCS (ADR-0002).",
+        "description": "A homogeneous group of Ray worker nodes.\n\nAutoscaling in v0 is actuated exclusively through these replica bounds,\nwhich translate to KubeRay worker-group fields \u2014 never by reading demand\nfrom GCS (ADR-0002).",
         "properties": {
           "cpu": {
             "type": "string"
@@ -2551,7 +2559,7 @@
         "type": "object"
       },
       "WorkerGroupNodes": {
-        "description": "One worker group and its nodes (api-v1.md §5.3).",
+        "description": "One worker group and its nodes (api-v1.md \u00a75.3).",
         "properties": {
           "desired": {
             "description": "Desired replicas: the group's `replicas` field, or `minReplicas` when\nautoscaling leaves `replicas` unmanaged (ADR-0007). Per-group desired\ncounts are not in the RayCluster status, so this is the spec's answer.",
@@ -2584,6 +2592,27 @@
           "nodes"
         ],
         "type": "object"
+      },
+      "ProjectGrant": {
+        "description": "One project the caller holds a scoped grant in, and the roles held\nthere. A client that has to name a project \u2014 the JupyterLab extension\nstarting a cluster, say \u2014 reads this rather than guessing a default.",
+        "properties": {
+          "name": {
+            "description": "The project's name, as `ClusterSpec.project` takes it.",
+            "type": "string"
+          },
+          "roles": {
+            "description": "Snake_case role names held *in this project*: \"viewer\", \"developer\",\n\"operator\", \"admin\". A caller needs \"operator\" (or \"admin\") to create\nor stop a cluster there.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "roles"
+        ],
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -2595,12 +2624,12 @@
     }
   },
   "info": {
-    "description": "FOSS control plane for Ray clusters. All endpoints take a Bearer JWT (OIDC). Note: the Ray Jobs API is NOT documented here — it is served by hostname, each registered cluster's hostname proxying Ray's own /api/jobs/ surface through the federating gateway. This spec covers Bifrost's own control-plane routes.",
+    "description": "FOSS control plane for Ray clusters. All endpoints take a Bearer JWT (OIDC). Note: the Ray Jobs API is NOT documented here \u2014 it is served by hostname, each registered cluster's hostname proxying Ray's own /api/jobs/ surface through the federating gateway. This spec covers Bifrost's own control-plane routes.",
     "license": {
       "name": "Apache-2.0"
     },
     "title": "Bifrost",
-    "version": "0.2.0"
+    "version": "0.3.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -2625,7 +2654,7 @@
             "description": "No/invalid token"
           },
           "403": {
-            "description": "Admin only — access-control surface (api-v1.md §2.2)"
+            "description": "Admin only \u2014 access-control surface (api-v1.md \u00a72.2)"
           },
           "503": {
             "description": "No store configured (gateway-only deployment)"
@@ -2703,7 +2732,7 @@
         "operationId": "upsert_assignment",
         "parameters": [
           {
-            "description": "The principal to bind: a token `sub` (Keycloak UUID) or a `preferred_username` — both are matched at evaluation (#88)",
+            "description": "The principal to bind: a token `sub` (Keycloak UUID) or a `preferred_username` \u2014 both are matched at evaluation (#88)",
             "in": "path",
             "name": "principal",
             "required": true,
@@ -2751,7 +2780,7 @@
             "bearer": []
           }
         ],
-        "summary": "Create or replace one assignment, Admin-only. The role and scope grammar\nare validated here — the store is dumb persistence.",
+        "summary": "Create or replace one assignment, Admin-only. The role and scope grammar\nare validated here \u2014 the store is dumb persistence.",
         "tags": [
           "access"
         ]
@@ -2775,7 +2804,7 @@
             "description": "No/invalid token"
           },
           "403": {
-            "description": "Admin only — access-control surface (api-v1.md §2.2)"
+            "description": "Admin only \u2014 access-control surface (api-v1.md \u00a72.2)"
           }
         },
         "security": [
@@ -2970,7 +2999,7 @@
             "description": "No/invalid token"
           },
           "403": {
-            "description": "Admin or Auditor only — audit subjects are Admin data"
+            "description": "Admin or Auditor only \u2014 audit subjects are Admin data"
           }
         },
         "security": [
@@ -2978,7 +3007,7 @@
             "bearer": []
           }
         ],
-        "summary": "List the persisted audit trail, Admin/Auditor-only (api-v1.md §5.9).",
+        "summary": "List the persisted audit trail, Admin/Auditor-only (api-v1.md \u00a75.9).",
         "tags": [
           "audit"
         ]
@@ -2989,7 +3018,7 @@
         "operationId": "verify_audit_trail",
         "parameters": [
           {
-            "description": "First `seq` to check (default 1 — the whole trail from genesis).\nThe window chains from the newest preceding row's stored hash, so a\nmid-trail window verifies against the same head it was written with.",
+            "description": "First `seq` to check (default 1 \u2014 the whole trail from genesis).\nThe window chains from the newest preceding row's stored hash, so a\nmid-trail window verifies against the same head it was written with.",
             "in": "query",
             "name": "from_seq",
             "required": false,
@@ -3096,7 +3125,7 @@
             "bearer": []
           }
         ],
-        "summary": "Log out: if the caller authenticated with a PAT, revoke it; otherwise a\n204 no-op (JWTs are stateless — there is nothing server-side to kill).",
+        "summary": "Log out: if the caller authenticated with a PAT, revoke it; otherwise a\n204 no-op (JWTs are stateless \u2014 there is nothing server-side to kill).",
         "tags": [
           "auth"
         ]
@@ -3225,7 +3254,7 @@
             "bearer": []
           }
         ],
-        "summary": "Revoke one of the caller's own tokens. Someone else's token (or a\nnonexistent prefix) is a 404 — ownership can't be probed.",
+        "summary": "Revoke one of the caller's own tokens. Someone else's token (or a\nnonexistent prefix) is a 404 \u2014 ownership can't be probed.",
         "tags": [
           "auth"
         ]
@@ -4533,7 +4562,7 @@
             "description": "No/invalid token"
           },
           "403": {
-            "description": "Admin only — the registry is the credential-routing table"
+            "description": "Admin only \u2014 the registry is the credential-routing table"
           }
         },
         "security": [
@@ -4711,7 +4740,7 @@
             "description": "No/invalid token"
           },
           "403": {
-            "description": "Admin only — governance is platform configuration"
+            "description": "Admin only \u2014 governance is platform configuration"
           }
         },
         "security": [
@@ -4719,7 +4748,7 @@
             "bearer": []
           }
         ],
-        "summary": "The effective governance policy. Admin-only: quotas and prices are\nplatform configuration (api-v1.md §2.2), classified with `Target::Cluster`\nlike the registry/audit surfaces.",
+        "summary": "The effective governance policy. Admin-only: quotas and prices are\nplatform configuration (api-v1.md \u00a72.2), classified with `Target::Cluster`\nlike the registry/audit surfaces.",
         "tags": [
           "settings"
         ]
@@ -4754,7 +4783,7 @@
             "description": "No/invalid token"
           },
           "403": {
-            "description": "Admin only — governance is platform configuration"
+            "description": "Admin only \u2014 governance is platform configuration"
           }
         },
         "security": [
@@ -4762,7 +4791,7 @@
             "bearer": []
           }
         ],
-        "summary": "Replace sections of the governance policy. Admin-only. Edits take effect\non the very next request — quota admission, cost estimates, and the usage\nroll-up all read the store per request. Emits an `update_policy` audit\nevent on success.",
+        "summary": "Replace sections of the governance policy. Admin-only. Edits take effect\non the very next request \u2014 quota admission, cost estimates, and the usage\nroll-up all read the store per request. Emits an `update_policy` audit\nevent on success.",
         "tags": [
           "settings"
         ]
@@ -4921,7 +4950,7 @@
       "name": "clusters"
     },
     {
-      "description": "Ray Serve services (RayService). Deploy/update/delete need Write on the service target (Developer or Admin — deploying is code); reads are open to any authenticated role. KubeRay handles zero-downtime canary rollout.",
+      "description": "Ray Serve services (RayService). Deploy/update/delete need Write on the service target (Developer or Admin \u2014 deploying is code); reads are open to any authenticated role. KubeRay handles zero-downtime canary rollout.",
       "name": "services"
     },
     {
@@ -4929,11 +4958,11 @@
       "name": "pools"
     },
     {
-      "description": "Usage metering (Slice 4): resource-hours reports and the Prometheus gauge over the metered samples. Reads need Read on the cluster target (Viewer+) — consumption reporting is cluster data, not pool topology. Mounted only when a store is configured.",
+      "description": "Usage metering (Slice 4): resource-hours reports and the Prometheus gauge over the metered samples. Reads need Read on the cluster target (Viewer+) \u2014 consumption reporting is cluster data, not pool topology. Mounted only when a store is configured.",
       "name": "usage"
     },
     {
-      "description": "Governance policy management (api-v1.md §5.16): the effective price sheet and per-project quotas. Admin-only. The `--policy` file is the boot-time default; the store row wins once edited via PUT, and every consumer (quota admission, cost estimates, usage roll-up) reads the store per request, so edits apply without a restart. Mounted only when a store is configured.",
+      "description": "Governance policy management (api-v1.md \u00a75.16): the effective price sheet and per-project quotas. Admin-only. The `--policy` file is the boot-time default; the store row wins once edited via PUT, and every consumer (quota admission, cost estimates, usage roll-up) reads the store per request, so edits apply without a restart. Mounted only when a store is configured.",
       "name": "settings"
     },
     {
@@ -4941,7 +4970,7 @@
       "name": "registry"
     },
     {
-      "description": "The persisted audit trail (api-v1.md §5.9): every authn/authz decision, mutation, and proxied gateway request, newest-first with seq-cursor pagination and CSV export. Rows are hash-chained for tamper-evidence (#59); `audit/verify` replays the chain. Reads need Read on the audit target — Admin or Auditor — and are themselves audited (`audit_read` rows). Mounted only when a store is configured.",
+      "description": "The persisted audit trail (api-v1.md \u00a75.9): every authn/authz decision, mutation, and proxied gateway request, newest-first with seq-cursor pagination and CSV export. Rows are hash-chained for tamper-evidence (#59); `audit/verify` replays the chain. Reads need Read on the audit target \u2014 Admin or Auditor \u2014 and are themselves audited (`audit_read` rows). Mounted only when a store is configured.",
       "name": "audit"
     },
     {
@@ -4949,7 +4978,7 @@
       "name": "auth"
     },
     {
-      "description": "Identity & access (api-v1.md §5.8): `identity` is 'who am I' for any authenticated caller (the dev identity when auth is disabled); `access/roles` is the Admin-only read of the effective role mappings. Mounted unconditionally.",
+      "description": "Identity & access (api-v1.md \u00a75.8): `identity` is 'who am I' for any authenticated caller (the dev identity when auth is disabled); `access/roles` is the Admin-only read of the effective role mappings. Mounted unconditionally.",
       "name": "access"
     },
     {
