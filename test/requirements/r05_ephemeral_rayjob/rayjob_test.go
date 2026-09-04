@@ -30,6 +30,26 @@ const (
 	longEntrypoint    = `python -c "import time; time.sleep(600)"`
 )
 
+// waitDeployment waits for the RayJob's deployment status to catch up with a
+// job status the view already reports.
+//
+// KubeRay writes the two on different reconciles: a job reads SUCCEEDED or
+// FAILED before the deployment reads Complete or Failed, so asserting both
+// from one view is a race. It passed on grace and failed on the kind lane,
+// on the success path (run 33829270788) and then the failure path
+// (run 33855327123), which is what a race looks like.
+func waitDeployment(t *testing.T, tgt req.Target, id, want string) {
+	t.Helper()
+	req.Eventually(t, tgt, func() (bool, string) {
+		st, v := fixture.GetJob(t, tgt, "dev-a", id)
+		if st != http.StatusOK {
+			return false, "get=" + http.StatusText(st)
+		}
+		dep, _ := v["deployment_status"].(string)
+		return dep == want, "deployment_status=" + dep
+	})
+}
+
 func TestSubmitCreatesAnEphemeralCluster(t *testing.T) {
 	tgt := target.Get(t)
 	req.Covers(t, 5, "POST /api/v1/jobs creates a job with its own cluster; the view reports the cluster once it exists")
@@ -60,16 +80,7 @@ func TestJobCompletionRemovesItsCluster(t *testing.T) {
 	id := req.Name("done")
 	fixture.MustSubmitJob(t, tgt, "dev-a", fixture.SubmitJobBody(id, "team-a", okEntrypoint, quickTTL()))
 	view := fixture.WaitJob(t, tgt, "dev-a", id, "SUCCEEDED")
-	// KubeRay records SUCCEEDED first and marks the deployment Complete on
-	// a later reconcile, so the two are not observable in one read.
-	req.Eventually(t, tgt, func() (bool, string) {
-		st, v := fixture.GetJob(t, tgt, "dev-a", id)
-		if st != http.StatusOK {
-			return false, "get=" + http.StatusText(st)
-		}
-		dep, _ := v["deployment_status"].(string)
-		return dep == "Complete", "deployment_status=" + dep
-	})
+	waitDeployment(t, tgt, id, "Complete")
 	cluster, _ := view["cluster"].(string)
 	if cluster == "" {
 		t.Fatalf("finished job names no cluster: %v", view)
@@ -109,9 +120,7 @@ func TestFailedJobIsReportedAndCleanedUp(t *testing.T) {
 	id := req.Name("fail")
 	fixture.MustSubmitJob(t, tgt, "dev-a", fixture.SubmitJobBody(id, "team-a", failingEntrypoint, quickTTL()))
 	view := fixture.WaitJob(t, tgt, "dev-a", id, "FAILED")
-	if dep := view["deployment_status"]; dep != "Failed" {
-		t.Fatalf("deployment_status = %v, want Failed", dep)
-	}
+	waitDeployment(t, tgt, id, "Failed")
 	cluster, _ := view["cluster"].(string)
 	if k, ok := tgt.K8s(); ok && cluster != "" {
 		req.Eventually(t, tgt, func() (bool, string) {
