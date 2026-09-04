@@ -60,6 +60,14 @@ governance green; rbac-selfserve 21/1 (owner-pod job supervisor OOM-killed at th
 captured → #23 fails fast with the message and dumps the operator's RayJob lines); serving shard pending at time of
 writing. Next run on main ≥ 2aa728d is the one to read.
 
+**Resolved 2026-09-04 (#21–#30):** the RayJob/RayService failures on kind were a product bug, not the runner:
+`EnsureNamespacePosture` ran only on the cluster path, so a namespace whose first workload was a job or service had
+no tenant-allow policy and KubeRay's operator was dropped by the per-cluster allow
+(`docs/defects/2026-09-04-namespace-posture-only-on-cluster-path.md`). Fixed in #30 (job and service applies ensure
+the posture first). Along the way: #22 4Gi heads on kind (a real OOM of the job supervisor), #23/#28/#29 fail-fast
+and head diagnostics for RayJobs, #25 quota limit follows head CPU, #26 operator-peer probe test. Grace never showed
+the bug because clusters existed before the first job; redeploy grace once the fix publishes.
+
 ## Follow-ups (not done)
 
 - **J rename sweep** of the ~369 "mobula" mentions in bifrost (mechanical; last so it does not conflict).

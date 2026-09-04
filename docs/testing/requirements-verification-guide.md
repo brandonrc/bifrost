@@ -618,5 +618,5 @@ Lane-tuning knobs live in the workflow env and the grace script:
 | 14 | no prices on grace, `cost_usd` reads null | set prices in values; assert `cost_usd > 0` |
 | 16 | Dask deferred | scope decision |
 | 18 | no FIPS build, no scan gate, no control mapping | `GOFIPS140` target, Trivy job, controls doc |
-| lanes | kind lane not yet green after sharding; grace is the environment of record | debugging pass on RayService readiness and RayJob timing on 4 vCPU |
+| lanes | kind jobs/serving shards were red until 2026-09-04: namespace posture was ensured only on the cluster path (defect doc 2026-09-04), fixed in #30; grace is the environment of record | read the first kind run after #30; redeploy grace with the fixed image |
 | ops | bifrost-pack has no git remote; sync token is a personal token | create the pack repo; fine-grained PAT for `BIFROST_API_PUSH_TOKEN` |
