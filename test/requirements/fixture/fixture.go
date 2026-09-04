@@ -492,7 +492,7 @@ func WaitJob(t req.T, tgt req.Target, principal, id, want string) map[string]any
 			if !diagnosed && time.Since(emptySince) > 90*time.Second {
 				diagnosed = true
 				cluster, _ := v["cluster"].(string)
-				t.Logf("job %s has had no job status for 90s (deployment_status=%s); head diagnostics:\n%s", id, dep, DiagnoseJobHead(t, tgt, cluster))
+				t.Logf("job %s has had no job status for 90s (deployment_status=%s); head diagnostics:\n%s", id, dep, DiagnoseJobHead(t, tgt, id, cluster))
 			}
 		}
 		msg, _ := v["message"].(string)
@@ -504,7 +504,7 @@ func WaitJob(t req.T, tgt req.Target, principal, id, want string) map[string]any
 		// so say why now instead of polling out the budget.
 		if dep == "Failed" && status == "" {
 			cluster, _ := v["cluster"].(string)
-			t.Fatalf("job %s deployment failed before the job ran while waiting for %s: %s\n%s", id, want, msg, DiagnoseJobHead(t, tgt, cluster))
+			t.Fatalf("job %s deployment failed before the job ran while waiting for %s: %s\n%s", id, want, msg, DiagnoseJobHead(t, tgt, id, cluster))
 		}
 		return false, fmt.Sprintf("status=%q deployment_status=%q message=%q", status, dep, msg)
 	})
