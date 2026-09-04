@@ -8,7 +8,7 @@ toolchain and no tunnel.
 ## Install
 
 ```sh
-kubectl apply -f rbac.yaml       # ServiceAccount + two namespaced Roles
+kubectl apply -f rbac.yaml       # ServiceAccount + three namespaced Roles
 kubectl apply -f cronjob.yaml    # nightly run, and the template for on-demand
 ```
 
