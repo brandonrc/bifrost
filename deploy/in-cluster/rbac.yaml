@@ -91,15 +91,50 @@ rules:
   - apiGroups: [""]
     resources: [secrets]
     verbs: [list, delete]
+  # `create` as well as the sweep: the CNI precondition test installs a
+  # deny-all policy here and takes it away again, because an isolation result
+  # means nothing on a cluster whose CNI ignores NetworkPolicy.
   - apiGroups: [networking.k8s.io]
     resources: [networkpolicies]
-    verbs: [list, delete]
+    verbs: [create, list, delete]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: bifrost-requirements-probes
   namespace: jupyter
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: bifrost-requirements-probes
+subjects:
+  - kind: ServiceAccount
+    name: bifrost-requirements
+    namespace: bifrost
+---
+# KubeRay's namespace. Two tests pose as the operator to prove the tenant
+# policy admits it to a head's dashboard, which is what RayJob status and
+# RayService readiness depend on: a probe pod here, carrying the operator's
+# labels, is the only way to exercise that peer honestly. Pods and their logs,
+# nothing else — no access to the operator's own Deployment or its RBAC.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: bifrost-requirements-probes
+  namespace: kuberay
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, create, delete]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: bifrost-requirements-probes
+  namespace: kuberay
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

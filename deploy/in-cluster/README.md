@@ -14,8 +14,10 @@ kubectl apply -f cronjob.yaml    # nightly run, and the template for on-demand
 
 Check the four site-specific values in `cronjob.yaml` first: the image tag,
 `REQ_TARGET`, `REQ_GATEWAY_DOMAIN` (must match the deployment's
-`--gateway-domain`) and `REQ_NOWGET_RAY_IMAGE`. `rbac.yaml` names two
-namespaces, `bifrost` and `jupyter`; change both if yours differ.
+`--gateway-domain`) and `REQ_NOWGET_RAY_IMAGE`. `rbac.yaml` names three
+namespaces — `bifrost` (workload), `jupyter` (probe pods) and `kuberay` (where
+two tests pose as the operator to prove the tenant policy admits it) — so
+change all three if yours differ.
 
 ## Run it now
 
