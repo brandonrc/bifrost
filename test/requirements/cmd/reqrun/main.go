@@ -37,6 +37,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -185,6 +186,10 @@ func discover(dir, only string) ([]string, error) {
 
 // runPackage runs one package's binary, writing its test2json stream to
 // outPath and a one-line summary to stdout.
+// importPath prefixes a package name to match what `go test -json` reports,
+// which is what reqreport keys a package by.
+const importPath = "github.com/brandonrc/bifrost/test/requirements/"
+
 func runPackage(bin, name, outPath, timeout string) (bool, error) {
 	file, err := os.Create(outPath)
 	if err != nil {
@@ -193,11 +198,28 @@ func runPackage(bin, name, outPath, timeout string) (bool, error) {
 	defer func() { _ = file.Close() }()
 
 	fmt.Printf("=== %s\n", name)
+	// The binary's own stream is kept next to the events: it is what a person
+	// reads when a failure needs more than the summary, and it is the input
+	// the conversion is answerable to.
+	rawPath := strings.TrimSuffix(outPath, ".json") + ".out"
+	raw, err := os.Create(rawPath)
+	if err != nil {
+		return false, fmt.Errorf("creating %s: %w", rawPath, err)
+	}
+	defer func() { _ = raw.Close() }()
+
 	cmd := exec.Command(bin, "-test.v=test2json", "-test.timeout", timeout)
-	cmd.Stdout = file
-	cmd.Stderr = file
+	cmd.Stdout = raw
+	cmd.Stderr = raw
 	start := time.Now()
 	runErr := cmd.Run()
+
+	if _, err := raw.Seek(0, io.SeekStart); err != nil {
+		return false, fmt.Errorf("rereading %s: %w", rawPath, err)
+	}
+	if err := convert(importPath+name, raw, file); err != nil {
+		return false, fmt.Errorf("converting %s: %w", name, err)
+	}
 	// Read the stream back for the summary rather than parsing it inline: the
 	// file is the artifact a human or reqreport reads afterwards, so it is the
 	// thing whose contents should decide what this line says.
