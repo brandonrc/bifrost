@@ -21,6 +21,11 @@ import (
 // elapsed fields `go test -json` also carries are left out — reqreport reads
 // Action, Package, Test and Output.
 //
+// The framing byte matters: each line the harness writes carries a leading
+// 0x16, and a converter that ignores it sees no markers at all — every line
+// looks like package output, every count reads zero, and the run still exits
+// 0 because the binaries did pass. That was the first in-cluster run.
+//
 // The markers, from cmd/internal/test2json:
 //
 //	=== RUN   TestX      a test starts
@@ -56,7 +61,12 @@ func convert(pkg string, r io.Reader, w io.Writer) error {
 	}
 
 	for scanner.Scan() {
-		line := scanner.Text()
+		// A binary run with -test.v=test2json prefixes each line it writes as
+		// the harness (rather than as the test) with 0x16. That byte is the
+		// framing this mode exists to provide: it is what tells a converter
+		// that `=== RUN` is a marker and not something a test happened to
+		// print. It is consumed here, so it never reaches an Output field.
+		line := strings.TrimLeft(scanner.Text(), "\x16")
 		trimmed := strings.TrimLeft(line, " \t")
 
 		// Attribution markers. `=== RUN` also starts the test.

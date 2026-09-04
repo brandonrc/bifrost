@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"os/exec"
 	"sort"
 	"strings"
@@ -14,32 +15,7 @@ import (
 // `=== NAME` line with an empty name that ends a test's attribution; the rest
 // adds what that package happened not to exercise: a subtest, a parallel
 // interleave, a failure with its assertion line, and the package's own trailer.
-const sample = `=== RUN   TestPoolAndAllocationLifecycle
-    pools_test.go:22: REQ: kind=covers req=13 reason="an administrator creates a pool"
---- PASS: TestPoolAndAllocationLifecycle (21.40s)
-=== NAME
-=== RUN   TestPermissionMatrix
-=== PAUSE TestPermissionMatrix
-=== RUN   TestSuspendResume
-=== CONT  TestPermissionMatrix
-    matrix_test.go:35: REQ: kind=covers req=3 reason="every operation"
-=== NAME  TestSuspendResume
-    lifecycle_test.go:88: suspend as project operator
---- PASS: TestSuspendResume (3.01s)
-=== NAME  TestPermissionMatrix
-    matrix_test.go:140: create_pool as dev-a = 200, permissions.yaml says deny (403)
---- FAIL: TestPermissionMatrix (12.02s)
-=== RUN   TestIdleClusterIsReaped
-    hygiene_test.go:20: REQ: kind=covers req=6 reason="an idle cluster is reaped"
---- SKIP: TestIdleClusterIsReaped (0.00s)
-=== RUN   TestWithSubtests
-=== RUN   TestWithSubtests/first_case
-    sub_test.go:9: checking
-=== NAME  TestWithSubtests
---- FAIL: TestWithSubtests (0.11s)
-    --- FAIL: TestWithSubtests/first_case (0.10s)
-FAIL
-`
+const sample = "\x16=== RUN   TestPoolAndAllocationLifecycle\n    pools_test.go:22: REQ: kind=covers req=13 reason=\"an administrator creates a pool\"\n\x16--- PASS: TestPoolAndAllocationLifecycle (21.40s)\n\x16=== NAME\n\x16=== RUN   TestPermissionMatrix\n\x16=== PAUSE TestPermissionMatrix\n\x16=== RUN   TestSuspendResume\n\x16=== CONT  TestPermissionMatrix\n    matrix_test.go:35: REQ: kind=covers req=3 reason=\"every operation\"\n\x16=== NAME  TestSuspendResume\n    lifecycle_test.go:88: suspend as project operator\n\x16--- PASS: TestSuspendResume (3.01s)\n\x16=== NAME  TestPermissionMatrix\n    matrix_test.go:140: create_pool as dev-a = 200, permissions.yaml says deny (403)\n\x16--- FAIL: TestPermissionMatrix (12.02s)\n\x16=== RUN   TestIdleClusterIsReaped\n    hygiene_test.go:20: REQ: kind=covers req=6 reason=\"an idle cluster is reaped\"\n\x16--- SKIP: TestIdleClusterIsReaped (0.00s)\n\x16=== RUN   TestWithSubtests\n\x16=== RUN   TestWithSubtests/first_case\n    sub_test.go:9: checking\n\x16=== NAME  TestWithSubtests\n\x16--- FAIL: TestWithSubtests (0.11s)\n\x16    --- FAIL: TestWithSubtests/first_case (0.10s)\n\x16FAIL\n\n"
 
 const samplePkg = "github.com/brandonrc/bifrost/test/requirements/r03_rbac"
 
@@ -148,5 +124,42 @@ func TestConvertAgreesWithGoToolTest2json(t *testing.T) {
 	sort.Strings(got)
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("disagreement with go tool test2json:\n ours %v\ntheirs %v", got, want)
+	}
+}
+
+// The hand-written sample above is one kind of evidence; a stream a real
+// requirement binary produced is another, and it is the one that caught the
+// framing byte. This file is the r01 package's output from an in-cluster run,
+// captured verbatim.
+func TestConvertHandlesARealStream(t *testing.T) {
+	raw, err := os.ReadFile("testdata/real-stream.out")
+	if err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	if !bytes.Contains(raw, []byte{0x16}) {
+		t.Fatal("the fixture lost its framing bytes; re-capture it with cat, not a terminal")
+	}
+	var buf bytes.Buffer
+	if err := convert(samplePkg, bytes.NewReader(raw), &buf); err != nil {
+		t.Fatalf("convert: %v", err)
+	}
+	got := results(t, buf.Bytes())
+	// Three tests passed and one skipped — the serve-endpoint test, which
+	// needs a capability grace does not declare — plus the package trailer.
+	want := []string{
+		"pass TestDeployServiceConvergesToServing",
+		"pass TestRedeploySameNameBumpsGeneration",
+		"pass TestDeleteServiceConvergesToTerminated",
+		"skip TestServeEndpointAnswersThroughTheGateway",
+		"pass ",
+	}
+	sort.Strings(got)
+	sort.Strings(want)
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("real stream:\n got %v\nwant %v", got, want)
+	}
+	// And no Output field carries the framing byte onwards.
+	if bytes.Contains(buf.Bytes(), []byte("\\u0016")) {
+		t.Error("a framing byte reached an Output field")
 	}
 }
