@@ -60,9 +60,16 @@ func TestJobCompletionRemovesItsCluster(t *testing.T) {
 	id := req.Name("done")
 	fixture.MustSubmitJob(t, tgt, "dev-a", fixture.SubmitJobBody(id, "team-a", okEntrypoint, quickTTL()))
 	view := fixture.WaitJob(t, tgt, "dev-a", id, "SUCCEEDED")
-	if dep := view["deployment_status"]; dep != "Complete" {
-		t.Fatalf("deployment_status = %v, want Complete", dep)
-	}
+	// KubeRay records SUCCEEDED first and marks the deployment Complete on
+	// a later reconcile, so the two are not observable in one read.
+	req.Eventually(t, tgt, func() (bool, string) {
+		st, v := fixture.GetJob(t, tgt, "dev-a", id)
+		if st != http.StatusOK {
+			return false, "get=" + http.StatusText(st)
+		}
+		dep, _ := v["deployment_status"].(string)
+		return dep == "Complete", "deployment_status=" + dep
+	})
 	cluster, _ := view["cluster"].(string)
 	if cluster == "" {
 		t.Fatalf("finished job names no cluster: %v", view)
