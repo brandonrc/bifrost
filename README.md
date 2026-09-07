@@ -50,7 +50,8 @@ internal/auth          OIDC discovery, JWKS, RBAC, local users & PATs
 internal/controller    persistent store + level-triggered reconcile engine
 internal/provision     the ONLY package that talks Kubernetes: typed
                        KubeRay/Kueue translators behind a Provisioner interface
-internal/policy        pure functions: quotas, budgets, cost, GPU sharing
+internal/policy        pure functions: quotas, budgets, cost, GPU sharing,
+                       engine minimums (Ray's 2Gi per-container memory floor)
 internal/core          the domain model — imports nothing but stdlib
 ```
 

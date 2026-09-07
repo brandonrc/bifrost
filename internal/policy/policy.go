@@ -233,6 +233,60 @@ func ClusterDemand(spec *core.ClusterSpec) (min, max ResourceMap, err error) {
 	return min, max, nil
 }
 
+// RayMinMemoryGiB is the per-container admission floor for engine=ray, in
+// GiB: the Ray head and every worker group must request at least this much
+// memory. Ray derives its object-store cap from the container memory limit
+// and hard-fails at startup below ~75MiB of object store ("Attempting to cap
+// object store memory usage at ... but the minimum allowed is 78643200
+// bytes"), so a 1Gi head crash-loops forever and the cluster wedges in
+// provisioning with nothing reaping it. The floor is deliberately
+// conservative: it matches the known-good shipped profile (head 2Gi /
+// workers 2Gi), well above the empirical failure point.
+//
+// This is a package constant, not settings-surface config: the store-backed
+// policy row is a frozen wire contract (prices/quotas/budgets/admission
+// rules only), and an engine's startup invariant is not governance policy
+// an admin should tune per deployment.
+const RayMinMemoryGiB = 2.0
+
+// AdmitEngineMinimums rejects engine-specific resource floors that
+// Kubernetes would schedule happily but the engine itself cannot start
+// under. Only engine=ray has a floor today (RayMinMemoryGiB on the head and
+// every worker group); dask and any other engine are unchecked. Deliberately
+// separate from ClusterDemand: that function also accounts EXISTING stored
+// clusters for quota, where a newly-introduced floor must not turn
+// pre-existing sub-floor specs into fail-closed 500s. Called on create and
+// update (create_cluster is an upsert) via validateClusterShape, which
+// ray-job submission and profile-catalog PUT share, so no path can persist
+// a shape the floor refuses.
+func AdmitEngineMinimums(spec *core.ClusterSpec) error {
+	if spec.Engine != core.EngineRay {
+		return nil
+	}
+	head, err := MemGiB(spec.HeadMemory)
+	if err != nil {
+		return wrapQuantity(err)
+	}
+	if head < RayMinMemoryGiB {
+		return QuantityError{Msg: fmt.Sprintf(
+			"engine ray: head_memory %q is below the %gGi minimum (Ray cannot start with less and would crash-loop forever)",
+			spec.HeadMemory, RayMinMemoryGiB)}
+	}
+	for i := range spec.WorkerGroups {
+		g := &spec.WorkerGroups[i]
+		mem, err := MemGiB(g.Memory)
+		if err != nil {
+			return wrapQuantity(err)
+		}
+		if mem < RayMinMemoryGiB {
+			return QuantityError{Msg: fmt.Sprintf(
+				"engine ray: worker group %s: memory %q is below the %gGi minimum (Ray cannot start with less and would crash-loop forever)",
+				g.Name, g.Memory, RayMinMemoryGiB)}
+		}
+	}
+	return nil
+}
+
 // ServiceDemand is the resource demand of a Ray Serve service (requirement
 // 4): head + worker_replicas × worker shape. Serve worker replicas are
 // fixed (autoscaling of Serve deployments is Ray Serve's own concern, not

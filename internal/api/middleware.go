@@ -23,8 +23,9 @@
 // must additionally hold the Target::Job permission the request's verb
 // requires (required_permission/target_for_path collapse to a fixed
 // Target::Job here — the whole cluster-host surface IS the proxied Ray
-// job surface) before the request is allowed to fall through to the
-// gateway at all.
+// job surface) AND sit inside the target entry's tenant boundary
+// (admin/owner/project-member — see authorizeGatewayRequest) before the
+// request is allowed to fall through to the gateway at all.
 package api
 
 import (
@@ -127,17 +128,21 @@ func requiredGatewayPermission(method string) auth.PermissionType {
 }
 
 // authorizeGatewayRequest enforces the permission cluster-host traffic
-// requires. identity is always non-nil here — RequireAuth only reaches
-// this call after successfully resolving one.
-//
-// The target follows the entry: a `jobs` entry fronts a Ray Jobs API
-// (auth.TargetJob), a `serve` entry a Serve application (auth.TargetService).
-// A static entry (Project "") keeps the original global check; a dynamic
-// entry registered by the reconciler for a project's cluster, job or
-// service is authorized within that project — the same rule the project's
-// own routes apply (authorizeInProject): a caller narrowed to other
-// projects is refused, then global roles or a covering assignment must
-// grant the verb's permission.
+// requires, PLUS the tenant boundary: the verb's role check is necessary
+// but not sufficient — it says nothing about WHICH cluster the request is
+// aimed at. A developer holding a global role but zero project ties must
+// not drive arbitrary commands into another tenant's cluster through its
+// hostname (red-team finding: gateway dispatch checked only the verb, so
+// any developer could submit a Ray job — remote code execution — to, and
+// any viewer read job history/logs of, a foreign cluster). The target
+// follows the entry: a `jobs` entry fronts a Ray Jobs API
+// (auth.TargetJob), a `serve` entry a Serve application
+// (auth.TargetService). Ownership crosses the tenant boundary but never
+// waives the verb's permission — a viewer who owns a cluster still may
+// not submit jobs through it. Auditor gets nothing here: the gateway is
+// the job surface, not an audit surface, and RoleAuditor holds no
+// Target::Job/Service grant anyway. The denial follows the mutation
+// convention: 403, audited with Method and Path.
 //
 // Deliberately NOT authz.go's shared Authorize helper: auth_layer.rs's
 // require_auth doesn't call its own authorize() either, because this
@@ -153,11 +158,17 @@ func authorizeGatewayRequest(store controller.Store, identity *auth.Identity, r 
 	if endpoint.Target == core.RegistryTargetServe {
 		target = auth.TargetService
 	}
-	if gatewayPermitted(r.Context(), store, identity, required, target, endpoint.Project) {
+	permitted, within := gatewayDecision(r.Context(), store, identity, required, target, endpoint)
+	if permitted && within {
 		return nil
 	}
 	subject := identity.Subject
 	reason := "insufficient_permission"
+	if permitted {
+		// The verb's permission was satisfied but the tenant boundary
+		// was not — distinguishable in the audit trail.
+		reason = "foreign_cluster"
+	}
 	status := uint16(http.StatusForbidden)
 	method := r.Method
 	path := r.URL.Path
@@ -175,18 +186,57 @@ func authorizeGatewayRequest(store controller.Store, identity *auth.Identity, r 
 	return ErrForbidden
 }
 
-// gatewayPermitted is the decision half of authorizeGatewayRequest: the
-// global check for a static entry (project ""), the project-scoped rule
-// (see authorizeInProject) for a dynamic one.
-func gatewayPermitted(ctx context.Context, store controller.Store, identity *auth.Identity, required auth.PermissionType, target auth.Target, project string) bool {
-	if project == "" {
-		return identity.Permits(required, target)
+// gatewayDecision is the decision half of authorizeGatewayRequest, split
+// into its two necessary conditions so the denial can say which one
+// failed:
+//
+//   - permitted: the verb's permission, by a global role OR a
+//     project-scoped assignment covering the entry's project whose role
+//     grants it (a project-scoped developer may submit where a global
+//     developer cannot reach);
+//   - within: the tenant boundary — Admin, the recorded owner of a
+//     store-backed cluster row, or a project member (ANY project-scoped
+//     assignment covering the project — membership is role-agnostic here,
+//     matching the control-plane routes: the assignment defines where the
+//     caller operates, their global roles what they may do). A global
+//     role alone never crosses the tenant boundary.
+//
+// The project/owner come from the store row when one exists (a `jobs`
+// entry may front a lifecycle cluster even via a static registry entry
+// that predates the reconciler's dynamic registration — the store row is
+// authoritative); otherwise from the entry's own Project (the reconciler
+// stamps it on dynamic entries for clusters, jobs and services). An entry
+// with no tenant information at all — static, no Project, no store row —
+// is an externally-managed cluster and keeps the original global check.
+// A store lookup failure fails closed.
+func gatewayDecision(ctx context.Context, store controller.Store, identity *auth.Identity, required auth.PermissionType, target auth.Target, endpoint core.ClusterEndpoint) (permitted, within bool) {
+	if identity == nil {
+		return true, true // dev mode (RequireAuth never reaches here authenticated-less)
 	}
-	assignments, narrowed := readScope(ctx, store, identity)
-	if len(narrowed) > 0 && !containsString(narrowed, project) {
-		return false
+	project := endpoint.Project
+	var owner *string
+	if endpoint.Target != core.RegistryTargetServe && store != nil {
+		// Serve entries front RayServices, which the cluster store does
+		// not hold; every other entry may name a lifecycle cluster.
+		c, err := store.Get(ctx, endpoint.Id)
+		if err != nil {
+			slog.Warn("api: gateway tenant-scope cluster lookup failed", "cluster", endpoint.Id, "error", err)
+			return false, false
+		}
+		if c != nil {
+			project = c.Spec.Project
+			owner = c.Spec.Owner
+		}
 	}
-	return identity.Permits(required, target) || identity.PermitsScoped(required, target, assignments, project)
+	if project == "" && owner == nil {
+		return identity.Permits(required, target), true
+	}
+	member := projectScopedAssignmentCovers(ctx, store, identity, project)
+	permitted = identity.Permits(required, target) ||
+		projectAssignmentGrants(ctx, store, identity, project, required, target)
+	within = hasRole(identity, auth.RoleAdmin) || member ||
+		(owner != nil && *owner == identity.Owner())
+	return permitted, within
 }
 
 func bearerToken(r *http.Request) (string, bool) {

@@ -326,8 +326,10 @@ func profilesFromWire(in []ProfileSpec) ([]core.Profile, error) {
 			p.Projects = append([]string(nil), (*w.Projects)...)
 		}
 		// The shape a cluster gets from this profile must itself be
-		// buildable: run the create-time shape validation on it.
-		synthetic := core.ClusterSpec{HeadCpu: p.HeadCpu, HeadMemory: p.HeadMemory, WorkerGroups: p.WorkerGroups}
+		// buildable: run the create-time shape validation on it. Profiles
+		// are Ray-shaped (they fix ray_version), so the synthetic spec is
+		// engine=ray and the Ray memory floor applies to it.
+		synthetic := core.ClusterSpec{Engine: core.EngineRay, HeadCpu: p.HeadCpu, HeadMemory: p.HeadMemory, WorkerGroups: p.WorkerGroups}
 		if err := validateClusterShape(&synthetic); err != nil {
 			return nil, badRequest(what + httpMessage(err))
 		}

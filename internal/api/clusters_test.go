@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/brandonrc/bifrost/internal/auth"
@@ -98,7 +99,10 @@ func minimalClusterSpec(name, project string) ClusterSpec {
 
 // --- ListClusters / GetCluster ---
 
-func TestListClusters_UnscopedReadPermitted(t *testing.T) {
+// The red-team finding this pins: a global viewer role with NO project tie
+// must NOT list a foreign owner's cluster — unscoped global roles do not
+// cross tenant boundaries on the read surface.
+func TestListClusters_GlobalRoleWithoutProjectTieSeesNothing(t *testing.T) {
 	store := controller.NewMemoryStore()
 	ctx := context.Background()
 	if _, err := store.UpsertDesired(ctx, "c1", core.ClusterSpec{Name: "c1", Project: "p1", RayVersion: "x", Image: "x", HeadCpu: "1", HeadMemory: "1Gi"}); err != nil {
@@ -111,8 +115,29 @@ func TestListClusters_UnscopedReadPermitted(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	views := mustResponse[ListClusters200JSONResponse](t, resp)
+	if len(views) != 0 {
+		t.Fatalf("got %d clusters, want 0 (foreign cluster must be filtered out)", len(views))
+	}
+}
+
+// The same global viewer DOES see the cluster once they own it: ownership
+// (spec.owner, stamped server-side at create) is a tenant boundary of one.
+func TestListClusters_OwnerSeesOwnCluster(t *testing.T) {
+	store := controller.NewMemoryStore()
+	ctx := context.Background()
+	owner := "alice"
+	if _, err := store.UpsertDesired(ctx, "c1", core.ClusterSpec{Name: "c1", Project: "p1", Owner: &owner, RayVersion: "x", Image: "x", HeadCpu: "1", HeadMemory: "1Gi"}); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{Store: store}
+
+	resp, err := s.ListClusters(ctxWithIdentity(testIdentity("alice", auth.RoleViewer)), ListClustersRequestObject{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	views := mustResponse[ListClusters200JSONResponse](t, resp)
 	if len(views) != 1 {
-		t.Fatalf("got %d clusters, want 1", len(views))
+		t.Fatalf("got %d clusters, want 1 (own cluster must be visible)", len(views))
 	}
 	if views[0].Id != "c1" || views[0].Project != "p1" || views[0].Desired != "running" {
 		t.Errorf("unexpected view: %+v", views[0])
@@ -257,11 +282,112 @@ func TestCreateCluster_FractionalGPURejectedInMultiTenantPool(t *testing.T) {
 	s := &Server{Store: store}
 	spec := minimalClusterSpec("c1", "proj-a")
 	gpu := "0.5"
-	spec.WorkerGroups = []WorkerGroup{{Name: "w", Cpu: "1", Memory: "1Gi", Gpu: &gpu, MinReplicas: 0, MaxReplicas: 1}}
+	spec.WorkerGroups = []WorkerGroup{{Name: "w", Cpu: "1", Memory: "2Gi", Gpu: &gpu, MinReplicas: 0, MaxReplicas: 1}}
 	body := CreateCluster{Id: "c1", Spec: spec}
 
 	_, err := s.CreateCluster(ctxWithIdentity(testIdentity("op", auth.RoleOperator)), CreateClusterRequestObject{Body: &body})
 	mustHTTPError(t, err, 400)
+}
+
+// --- Ray engine memory floor (policy.AdmitEngineMinimums) ---
+
+func TestCreateCluster_RayMemoryFloor(t *testing.T) {
+	cases := []struct {
+		name       string
+		mutate     func(*ClusterSpec)
+		wantStatus int // 0 means the create must succeed
+	}{
+		{"ray head 1Gi rejected", func(s *ClusterSpec) { s.HeadMemory = "1Gi" }, 400},
+		{"ray head 2Gi accepted", func(*ClusterSpec) {}, 0},
+		{"ray head 2048Mi accepted (boundary)", func(s *ClusterSpec) { s.HeadMemory = "2048Mi" }, 0},
+		{"ray worker 1Gi rejected", func(s *ClusterSpec) {
+			s.WorkerGroups = []WorkerGroup{{Name: "w", Cpu: "1", Memory: "1Gi", MinReplicas: 0, MaxReplicas: 1}}
+		}, 400},
+		{"ray worker 2Gi accepted", func(s *ClusterSpec) {
+			s.WorkerGroups = []WorkerGroup{{Name: "w", Cpu: "1", Memory: "2Gi", MinReplicas: 0, MaxReplicas: 1}}
+		}, 0},
+		{"dask small memory accepted", func(s *ClusterSpec) {
+			e := Dask
+			s.Engine = &e
+			s.HeadMemory = "256Mi"
+			s.WorkerGroups = []WorkerGroup{{Name: "w", Cpu: "1", Memory: "256Mi", MinReplicas: 0, MaxReplicas: 1}}
+		}, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := controller.NewMemoryStore()
+			s := &Server{Store: store}
+			spec := minimalClusterSpec("c1", "proj-a")
+			tc.mutate(&spec)
+			body := CreateCluster{Id: "c1", Spec: spec}
+
+			resp, err := s.CreateCluster(ctxWithIdentity(testIdentity("op", auth.RoleOperator)), CreateClusterRequestObject{Body: &body})
+			if tc.wantStatus == 0 {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				mustResponse[CreateCluster201Response](t, resp)
+				if c, _ := store.Get(context.Background(), "c1"); c == nil {
+					t.Fatal("accepted cluster was not persisted")
+				}
+				return
+			}
+			mustHTTPError(t, err, tc.wantStatus)
+			if c, _ := store.Get(context.Background(), "c1"); c != nil {
+				t.Fatal("a floor-rejected cluster must not be persisted")
+			}
+		})
+	}
+}
+
+func TestCreateCluster_RayMemoryFloorNamesFieldAndFloor(t *testing.T) {
+	store := controller.NewMemoryStore()
+	s := &Server{Store: store}
+	spec := minimalClusterSpec("c1", "proj-a")
+	spec.HeadMemory = "1Gi"
+	body := CreateCluster{Id: "c1", Spec: spec}
+
+	_, err := s.CreateCluster(ctxWithIdentity(testIdentity("op", auth.RoleOperator)), CreateClusterRequestObject{Body: &body})
+	var httpErr HTTPError
+	if !errors.As(err, &httpErr) {
+		t.Fatalf("error = %#v, want an HTTPError", err)
+	}
+	if httpErr.Status != 400 {
+		t.Fatalf("status = %d, want 400", httpErr.Status)
+	}
+	for _, want := range []string{"head_memory", "1Gi", "2Gi"} {
+		if !strings.Contains(httpErr.Message, want) {
+			t.Fatalf("message %q does not name %q", httpErr.Message, want)
+		}
+	}
+}
+
+// The create route is an upsert (the client names the id), so the floor must
+// also gate updates: re-POSTing an existing cluster with a sub-floor spec
+// rejects and leaves the stored spec untouched.
+func TestCreateCluster_RayMemoryFloorAppliesToUpdates(t *testing.T) {
+	store := controller.NewMemoryStore()
+	s := &Server{Store: store}
+	ctx := ctxWithIdentity(testIdentity("op", auth.RoleOperator))
+
+	good := CreateCluster{Id: "c1", Spec: minimalClusterSpec("c1", "proj-a")}
+	if _, err := s.CreateCluster(ctx, CreateClusterRequestObject{Body: &good}); err != nil {
+		t.Fatalf("initial create failed: %v", err)
+	}
+
+	badSpec := minimalClusterSpec("c1", "proj-a")
+	badSpec.HeadMemory = "1Gi"
+	bad := CreateCluster{Id: "c1", Spec: badSpec}
+	_, err := s.CreateCluster(ctx, CreateClusterRequestObject{Body: &bad})
+	mustHTTPError(t, err, 400)
+
+	stored, gerr := store.Get(context.Background(), "c1")
+	if gerr != nil || stored == nil {
+		t.Fatalf("stored cluster missing: %v", gerr)
+	}
+	if stored.Spec.HeadMemory != "2Gi" {
+		t.Fatalf("stored head_memory = %q, want the original 2Gi (rejected update must not mutate)", stored.Spec.HeadMemory)
+	}
 }
 
 // --- DeleteCluster / purge ---

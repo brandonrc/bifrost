@@ -489,3 +489,72 @@ func TestLimitFromQuantities(t *testing.T) {
 		t.Fatalf("nil map: %v %v", got, err)
 	}
 }
+
+// Admission floor for engine=ray (AdmitEngineMinimums): Ray derives its
+// object-store cap from container memory and hard-fails below its ~75MiB
+// object-store minimum, so a sub-2Gi head or worker crash-loops forever and
+// the cluster wedges in provisioning. The 2Gi floor matches the known-good
+// shipped profile. Dask has no such floor and must be untouched.
+func TestAdmitEngineMinimums(t *testing.T) {
+	cases := []struct {
+		name    string
+		spec    *core.ClusterSpec
+		wantErr string // "" means admit; otherwise the message must contain it
+	}{
+		{
+			name: "ray head 1Gi rejected",
+			spec: &core.ClusterSpec{Engine: core.EngineRay, HeadMemory: "1Gi"},
+			// Field and floor must both be named.
+			wantErr: `head_memory "1Gi" is below the 2Gi minimum`,
+		},
+		{
+			name: "ray head 2Gi accepted",
+			spec: &core.ClusterSpec{Engine: core.EngineRay, HeadMemory: "2Gi"},
+		},
+		{
+			name: "ray head 2048Mi accepted (boundary)",
+			spec: &core.ClusterSpec{Engine: core.EngineRay, HeadMemory: "2048Mi"},
+		},
+		{
+			name: "ray worker 1Gi rejected",
+			spec: &core.ClusterSpec{Engine: core.EngineRay, HeadMemory: "2Gi",
+				WorkerGroups: []core.WorkerGroup{{Name: "w", Memory: "1Gi"}}},
+			wantErr: `worker group w: memory "1Gi" is below the 2Gi minimum`,
+		},
+		{
+			name: "ray worker 2Gi accepted",
+			spec: &core.ClusterSpec{Engine: core.EngineRay, HeadMemory: "2Gi",
+				WorkerGroups: []core.WorkerGroup{{Name: "w", Memory: "2Gi"}}},
+		},
+		{
+			name: "dask small memory accepted",
+			spec: &core.ClusterSpec{Engine: core.EngineDask, HeadMemory: "256Mi",
+				WorkerGroups: []core.WorkerGroup{{Name: "w", Memory: "128Mi"}}},
+		},
+		{
+			name:    "unparseable memory rejected as quantity error",
+			spec:    &core.ClusterSpec{Engine: core.EngineRay, HeadMemory: "banana"},
+			wantErr: "invalid memory",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := AdmitEngineMinimums(tc.spec)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error %q does not contain %q", err.Error(), tc.wantErr)
+			}
+			if _, ok := err.(QuantityError); !ok {
+				t.Fatalf("expected QuantityError, got %T: %v", err, err)
+			}
+		})
+	}
+}

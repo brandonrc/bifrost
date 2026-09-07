@@ -51,7 +51,7 @@ func TestValidRequestBodyReachesHandler(t *testing.T) {
 	s := api.NewServer()
 	s.Store = controller.NewMemoryStore()
 	h := apitest.NewHandler(s)
-	rec := post(t, h, "/api/v1/clusters", `{"id":"ok-1","spec":{"name":"ok-1","project":"p","image":"i","ray_version":"2.56.0","head_cpu":"1","head_memory":"1Gi","worker_groups":[]}}`)
+	rec := post(t, h, "/api/v1/clusters", `{"id":"ok-1","spec":{"name":"ok-1","project":"p","image":"i","ray_version":"2.56.0","head_cpu":"1","head_memory":"2Gi","worker_groups":[]}}`)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
 	}
@@ -80,13 +80,13 @@ func TestCreateClusterInvalidK8sNameIs400(t *testing.T) {
 	s := api.NewServer()
 	s.Store = controller.NewMemoryStore()
 	h := apitest.NewHandler(s)
-	rec := post(t, h, "/api/v1/clusters", `{"id":"Not_Valid!","spec":{"name":"x","project":"p","image":"i","ray_version":"2.56.0","head_cpu":"1","head_memory":"1Gi","worker_groups":[]}}`)
+	rec := post(t, h, "/api/v1/clusters", `{"id":"Not_Valid!","spec":{"name":"x","project":"p","image":"i","ray_version":"2.56.0","head_cpu":"1","head_memory":"2Gi","worker_groups":[]}}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
 	}
 }
 
-const validCreateClusterBody = `{"id":"ok-1","spec":{"name":"ok-1","project":"p","image":"i","ray_version":"2.56.0","head_cpu":"1","head_memory":"1Gi","worker_groups":[]}}`
+const validCreateClusterBody = `{"id":"ok-1","spec":{"name":"ok-1","project":"p","image":"i","ray_version":"2.56.0","head_cpu":"1","head_memory":"2Gi","worker_groups":[]}}`
 
 // The contract declares application/json as the only media type CreateCluster
 // accepts, so ValidateRequests enforces it — a compatibility change from the

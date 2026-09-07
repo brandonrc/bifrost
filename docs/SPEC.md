@@ -52,7 +52,7 @@ package boundaries with an enforced import graph (depguard):
 | predecessor crate | bifrost package | Responsibility |
 |---|---|---|
 | `core` | `internal/core` | Domain model: ClusterSpec/State machine, pools, registry, RBAC records, audit model. **Must not import k8s or DB packages** (predecessor ADR-0002). |
-| `policy` | `internal/policy` | Pure functions: resource accounting, cost estimation, quota admission, K8s quantity parsing. No I/O. |
+| `policy` | `internal/policy` | Pure functions: resource accounting, cost estimation, quota admission, engine minimums (Ray's 2Gi per-container memory floor), K8s quantity parsing. No I/O. |
 | `provision` | `internal/provision` | The ONLY k8s-aware package. Provisioner interface; spec→manifest translators for KubeRay/Kueue/Dask (typed upstream APIs); EngineRouter. |
 | `controller` | `internal/controller` | Store interface (memory/SQLite/Postgres) + level-triggered observation-first reconcile engine, pool reconciler, metering loop. |
 | `auth` | `internal/auth` | OIDC discovery/JWKS/RS256 validation, RBAC permission sets, device-code/client-credentials/token-exchange flows, local users + `bfr_*` PATs (bcrypt). |

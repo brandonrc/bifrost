@@ -19,9 +19,10 @@
 //     cut) — tail-capped pod logs.
 //
 // Every route requires the same read-scoped authorization as the other
-// cluster reads (#49): a developer sees only their project's clusters,
-// Admin sees all; an out-of-scope cluster is 404 (never leaks existence).
-// Ported from the Rust predecessor's cluster_obs.rs.
+// cluster reads (#49): a caller sees only a cluster they own, whose project
+// they hold a scoped assignment for, or — as global roles — Admin/Auditor,
+// who see everything; an out-of-scope cluster is 404 (never leaks
+// existence). Ported from the Rust predecessor's cluster_obs.rs.
 package api
 
 import (
@@ -97,56 +98,68 @@ func serviceUnavailable(msg string) error {
 }
 
 // clusterScope is the visibility a caller has to a cluster for a read:
-// either a store-backed cluster with a project (scoping applies) or a
-// registry-only cluster (no project — only global reads see it). Ported
-// from cluster_obs.rs's ClusterScope.
+// either a store-backed cluster (tenant scoping applied — see
+// scopeForRead) or a registry-only cluster (no store row, hence no
+// owner/project to scope by — only the global read check in
+// authorizeClusterRead sees it). Ported from cluster_obs.rs's ClusterScope.
 type clusterScope struct {
 	project    string
 	registered bool
 }
 
-// scopeForRead resolves a cluster for a read, applying read-scoping (#49):
-// a caller narrowed by project-scoped assignments gets 404 (not 403) for a
-// cluster outside their projects — the list hides it, so a by-name read
-// must not leak its existence. Ported from cluster_obs.rs's
-// scope_for_read.
-func (s *Server) scopeForRead(ctx context.Context, identity *auth.Identity, id core.ClusterId) (clusterScope, error) {
+// scopeForRead resolves a cluster for a read, applying tenant read-scoping
+// (red-team findings, #49 posture narrowed): for a store-backed cluster the
+// caller must be Admin, Auditor, the recorded owner, or hold a project-
+// scoped assignment covering the cluster's project — anything else 404s
+// (not 403), so an out-of-scope read never leaks the cluster's existence.
+// A registry-only cluster (no store row) keeps the global-read posture:
+// project-scoped callers 404 (a project tie can never cover a cluster with
+// no project), everyone else passes through to authorizeClusterRead.
+func (s *Server) scopeForRead(ctx context.Context, identity *auth.Identity, id core.ClusterId, action auth.PermissionType, target auth.Target) (clusterScope, error) {
 	c, err := s.Store.Get(ctx, id)
 	if err != nil {
 		return clusterScope{}, wrapStoreErr(err)
 	}
 	if c != nil {
-		_, narrowed := readScope(ctx, s.Store, identity)
-		if len(narrowed) > 0 && !containsString(narrowed, c.Spec.Project) {
+		if !clusterTenantAccess(ctx, s.Store, identity, c, action, target, true) {
 			return clusterScope{}, notFound("no such cluster")
 		}
 		return clusterScope{project: c.Spec.Project}, nil
 	}
 	// Not in the store: only an externally-registered cluster can be read
-	// here. A project-narrowed caller can't see a cluster with no project,
-	// so it 404s exactly as a hidden one would.
+	// here. A caller tied to specific projects can't see a cluster with no
+	// project, so it 404s exactly as a hidden one would.
 	if s.Registry == nil {
 		return clusterScope{}, notFound("no such cluster")
 	}
 	if _, ok := s.Registry.ByID(id); !ok {
 		return clusterScope{}, notFound("no such cluster")
 	}
-	_, narrowed := readScope(ctx, s.Store, identity)
-	if len(narrowed) > 0 {
-		return clusterScope{}, notFound("no such cluster")
+	if identity != nil && !hasRole(identity, auth.RoleAdmin, auth.RoleAuditor) {
+		for _, a := range EffectiveAssignments(ctx, s.Store, identity) {
+			if a.Scope != auth.GlobalScope {
+				return clusterScope{}, notFound("no such cluster")
+			}
+		}
 	}
 	return clusterScope{registered: true}, nil
 }
 
-// authorizeClusterRead is the shared read-authorization step every route in
-// this file needs after scopeForRead: scoped for a project-owned cluster,
-// unscoped (global) for a registry-only one — ported from cluster_obs.rs's
-// deny_cluster_read (folded into cluster_nodes/cluster_jobs there too).
+// authorizeClusterRead is the remaining authorization step for a
+// REGISTRY-ONLY cluster scope (scope.registered): the global (unscoped)
+// read check, with the auditor role admitted on reads exactly as everywhere
+// else on the read surface. For a store-backed cluster it is a no-op —
+// scopeForRead's clusterTenantAccess check already decided, and it admits
+// Admin/Auditor/owner without requiring their roles to carry the endpoint's
+// specific grant.
 func (s *Server) authorizeClusterRead(ctx context.Context, identity *auth.Identity, scope clusterScope, action auth.PermissionType, target auth.Target) error {
-	if scope.registered {
-		return Authorize(ctx, s.Store, identity, action, target)
+	if !scope.registered {
+		return nil
 	}
-	return AuthorizeScoped(ctx, s.Store, identity, action, target, scope.project)
+	if identity != nil && action == auth.Read && hasRole(identity, auth.RoleAuditor) {
+		return nil
+	}
+	return Authorize(ctx, s.Store, identity, action, target)
 }
 
 // provisionNotFound reports whether err is a provision.ProvisionError
@@ -229,7 +242,7 @@ func wireClusterLogs(c *core.ClusterLogs) ClusterLogs {
 func (s *Server) ClusterNodes(ctx context.Context, req ClusterNodesRequestObject) (ClusterNodesResponseObject, error) {
 	identity, _ := IdentityFromContext(ctx)
 	id := core.ClusterId(req.Id)
-	scope, err := s.scopeForRead(ctx, identity, id)
+	scope, err := s.scopeForRead(ctx, identity, id, auth.Read, auth.TargetCluster)
 	if err != nil {
 		return nil, err
 	}
@@ -262,7 +275,7 @@ func (s *Server) ClusterNodes(ctx context.Context, req ClusterNodesRequestObject
 func (s *Server) ClusterEvents(ctx context.Context, req ClusterEventsRequestObject) (ClusterEventsResponseObject, error) {
 	identity, _ := IdentityFromContext(ctx)
 	id := core.ClusterId(req.Id)
-	scope, err := s.scopeForRead(ctx, identity, id)
+	scope, err := s.scopeForRead(ctx, identity, id, auth.Read, auth.TargetCluster)
 	if err != nil {
 		return nil, err
 	}
@@ -295,7 +308,7 @@ func (s *Server) ClusterEvents(ctx context.Context, req ClusterEventsRequestObje
 func (s *Server) ClusterLogs(ctx context.Context, req ClusterLogsRequestObject) (ClusterLogsResponseObject, error) {
 	identity, _ := IdentityFromContext(ctx)
 	id := core.ClusterId(req.Id)
-	scope, err := s.scopeForRead(ctx, identity, id)
+	scope, err := s.scopeForRead(ctx, identity, id, auth.Read, auth.TargetCluster)
 	if err != nil {
 		return nil, err
 	}
@@ -437,7 +450,7 @@ func readCapped(r io.Reader, maxBytes int64) (body []byte, ok bool, err error) {
 func (s *Server) ClusterJobs(ctx context.Context, req ClusterJobsRequestObject) (ClusterJobsResponseObject, error) {
 	identity, _ := IdentityFromContext(ctx)
 	id := core.ClusterId(req.Id)
-	scope, err := s.scopeForRead(ctx, identity, id)
+	scope, err := s.scopeForRead(ctx, identity, id, auth.Read, auth.TargetJob)
 	if err != nil {
 		return nil, err
 	}
@@ -678,7 +691,7 @@ var (
 func (s *Server) ClusterMetrics(ctx context.Context, req ClusterMetricsRequestObject) (ClusterMetricsResponseObject, error) {
 	identity, _ := IdentityFromContext(ctx)
 	id := core.ClusterId(req.Id)
-	scope, err := s.scopeForRead(ctx, identity, id)
+	scope, err := s.scopeForRead(ctx, identity, id, auth.Read, auth.TargetCluster)
 	if err != nil {
 		return nil, err
 	}

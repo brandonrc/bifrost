@@ -148,10 +148,10 @@ func TestSubmitJobRefusesWhatItCannotDeliver(t *testing.T) {
 		"disallowed image": func(b *SubmitJobJSONRequestBody) { b.Spec.Image = "evil/ray:2.56.0" },
 		"no derivable ray": func(b *SubmitJobJSONRequestBody) { b.Spec.Image = "rayproject/ray:latest" },
 		"too many workers": func(b *SubmitJobJSONRequestBody) {
-			b.Spec.WorkerGroups = &[]WorkerGroup{{Name: "w", Cpu: "1", Memory: "1Gi", MinReplicas: 3, MaxReplicas: 3, Replicas: 3}}
+			b.Spec.WorkerGroups = &[]WorkerGroup{{Name: "w", Cpu: "1", Memory: "2Gi", MinReplicas: 3, MaxReplicas: 3, Replicas: 3}}
 		},
 		"incoherent replica": func(b *SubmitJobJSONRequestBody) {
-			b.Spec.WorkerGroups = &[]WorkerGroup{{Name: "w", Cpu: "1", Memory: "1Gi", MinReplicas: 2, MaxReplicas: 1, Replicas: 1}}
+			b.Spec.WorkerGroups = &[]WorkerGroup{{Name: "w", Cpu: "1", Memory: "2Gi", MinReplicas: 2, MaxReplicas: 1, Replicas: 1}}
 		},
 	}
 	for name, mut := range cases {
@@ -328,18 +328,38 @@ func TestListRegistryReportsSourceAndTarget(t *testing.T) {
 }
 
 // The gateway's host-is-cluster gate authorizes a dynamic entry within its
-// project and by its target: a developer narrowed to team-b is refused on
-// team-a's job cluster, an operator may read it, and a serve entry is
-// judged against TargetService.
+// project and by its target. The tenant boundary (red-team fix): a global
+// role alone — operator reading jobs, viewer reading jobs, operator
+// reading serve — does NOT reach a project's entry; the caller must be
+// Admin, the recorded owner of the store-backed cluster, or a project
+// member (any project-scoped assignment covering the entry's project —
+// the r03 principal "dev-a" is a global developer holding operator on
+// team-a, and reaches team-a's entries as a member while their developer
+// role supplies the verb). Ownership never waives the verb: a viewer who
+// owns the cluster still may not submit. A static entry with no tenant
+// information keeps the original global check; a static entry whose id IS
+// a store-backed cluster is tenant-scoped like a dynamic one.
 func TestGatewayAuthorizationIsProjectAndTargetScoped(t *testing.T) {
 	store := newMemStore(t)
 	devA := projectDev("team-a")
 	devB := projectDev("team-b")
+	devGlobal := testIdentity("dev-x", auth.RoleDeveloper)
 	operator := testIdentity("op", auth.RoleOperator)
 	viewer := testIdentity("viewer", auth.RoleViewer)
 	jobsA := core.ClusterEndpoint{Id: "job-1", Hostname: "job-1.gw", ApiBaseUrl: "http://h:8265", Project: "team-a", Target: core.RegistryTargetJobs}
 	serveA := core.ClusterEndpoint{Id: "svc-1", Hostname: "svc-1.gw", ApiBaseUrl: "http://h:8000", Project: "team-a", Target: core.RegistryTargetServe}
 	static := core.ClusterEndpoint{Id: "s", Hostname: "s.gw", ApiBaseUrl: "http://h:8265"}
+
+	// A static-file entry whose id is a store-backed tenant cluster is
+	// scoped by the STORE row (authoritative), even though the entry
+	// itself carries no Project — the pre-fix hole this closes.
+	owner := "owner-1"
+	if _, err := storeAsServer(store).Store.UpsertDesired(context.Background(), "owned", core.ClusterSpec{
+		Name: "owned", Project: "team-a", Owner: &owner, RayVersion: "2.9.0", Image: "x", HeadCpu: "1", HeadMemory: "1Gi",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	staticOwned := core.ClusterEndpoint{Id: "owned", Hostname: "owned.gw", ApiBaseUrl: "http://h:8265"}
 
 	cases := []struct {
 		name     string
@@ -351,14 +371,24 @@ func TestGatewayAuthorizationIsProjectAndTargetScoped(t *testing.T) {
 		{"own project's dev reads jobs", devA, http.MethodGet, jobsA, true},
 		{"own project's dev submits", devA, http.MethodPost, jobsA, true},
 		{"other project's dev is refused", devB, http.MethodGet, jobsA, false},
-		{"global operator reads jobs", operator, http.MethodGet, jobsA, true},
+		// Red-team case: a developer with ZERO project memberships must
+		// not reach another tenant's cluster through its hostname.
+		{"global developer with no project ties is refused", devGlobal, http.MethodPost, jobsA, false},
+		// A global role alone never crosses the tenant boundary.
+		{"global operator reads jobs", operator, http.MethodGet, jobsA, false},
 		{"global operator cannot submit", operator, http.MethodPost, jobsA, false},
-		{"viewer reads jobs", viewer, http.MethodGet, jobsA, true},
+		{"viewer reads jobs", viewer, http.MethodGet, jobsA, false},
 		{"own project's dev calls serve", devA, http.MethodPost, serveA, true},
 		{"other project's dev refused on serve", devB, http.MethodPost, serveA, false},
-		{"operator reads serve", operator, http.MethodGet, serveA, true},
+		{"operator reads serve", operator, http.MethodGet, serveA, false},
 		{"static entry keeps the global rule for dev", devB, http.MethodGet, static, true},
 		{"static entry refuses a write by an operator", operator, http.MethodDelete, static, false},
+		// Store-backed cluster behind a static entry: only the owner (or
+		// admin / a team-a member) gets through.
+		{"static entry for own cluster: owner reads", testIdentity("owner-1", auth.RoleViewer), http.MethodGet, staticOwned, true},
+		{"static entry for own cluster: owner submits as developer", testIdentity("owner-1", auth.RoleDeveloper), http.MethodPost, staticOwned, true},
+		{"static entry for foreign cluster: global developer refused", devGlobal, http.MethodGet, staticOwned, false},
+		{"static entry for foreign cluster: admin reads", testIdentity("root", auth.RoleAdmin), http.MethodGet, staticOwned, true},
 	}
 	for _, tc := range cases {
 		r := httptest.NewRequest(tc.method, "/api/jobs/", nil)
@@ -368,6 +398,9 @@ func TestGatewayAuthorizationIsProjectAndTargetScoped(t *testing.T) {
 		}
 	}
 }
+
+// storeAsServer wraps a bare store in a Server for spec seeding.
+func storeAsServer(store controller.Store) *Server { return &Server{Store: store} }
 
 // okOr is statusOf tolerating success: 200 for a nil error.
 func okOr(t *testing.T, err error) int {

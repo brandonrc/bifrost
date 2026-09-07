@@ -20,7 +20,7 @@ func TestInprocCreateConvergesToRunning(t *testing.T) {
 	id := req.Name("smoke")
 
 	body := client.CreateClusterJSONRequestBody{}
-	if err := json.Unmarshal([]byte(`{"id":"`+id+`","spec":{"name":"`+id+`","project":"team-a","image":"rayproject/ray:2.56.0","ray_version":"2.56.0","head_cpu":"1","head_memory":"1Gi","worker_groups":[{"name":"w","cpu":"1","memory":"1Gi","replicas":1,"min_replicas":1,"max_replicas":1}]}}`), &body); err != nil {
+	if err := json.Unmarshal([]byte(`{"id":"`+id+`","spec":{"name":"`+id+`","project":"team-a","image":"rayproject/ray:2.56.0","ray_version":"2.56.0","head_cpu":"1","head_memory":"2Gi","worker_groups":[{"name":"w","cpu":"1","memory":"2Gi","replicas":1,"min_replicas":1,"max_replicas":1}]}}`), &body); err != nil {
 		t.Fatal(err)
 	}
 

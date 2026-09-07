@@ -203,6 +203,93 @@ func assignmentsFor(ctx context.Context, store controller.Store, subject string)
 	return out
 }
 
+// hasRole reports whether id holds any of the given roles.
+func hasRole(id *auth.Identity, roles ...auth.Role) bool {
+	if id == nil {
+		return false
+	}
+	for _, r := range id.Roles {
+		for _, want := range roles {
+			if r == want {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// projectAssignmentGrants reports whether any effective project-scoped
+// assignment (NOT the global "*" scope) covers project with a role that
+// grants (action, target). This is the "the assignment itself licenses
+// the verb" half of the rule (a project-scoped developer may submit where
+// a global developer may not reach); it is NOT "project membership" —
+// see projectScopedAssignmentCovers.
+func projectAssignmentGrants(ctx context.Context, store controller.Store, identity *auth.Identity, project string, action auth.PermissionType, target auth.Target) bool {
+	if identity == nil {
+		return false
+	}
+	for _, a := range EffectiveAssignments(ctx, store, identity) {
+		if a.Scope != auth.GlobalScope && auth.ScopeCovers(a.Scope, project) && a.Role.Grants(action, target) {
+			return true
+		}
+	}
+	return false
+}
+
+// projectScopedAssignmentCovers reports whether the identity holds ANY
+// effective project-scoped assignment covering project — project
+// membership in this tree's RBAC model: the scoped binding defines where
+// the caller operates (readScope's pinned edge case), while their global
+// roles decide what they may do there. Deliberately role-agnostic: the
+// r03 principal "dev-a" is a global developer holding operator on
+// team-a, and must reach team-a's surfaces as a member (the operator
+// grant does not itself carry Write-on-Job).
+func projectScopedAssignmentCovers(ctx context.Context, store controller.Store, identity *auth.Identity, project string) bool {
+	if identity == nil {
+		return false
+	}
+	for _, a := range EffectiveAssignments(ctx, store, identity) {
+		if a.Scope != auth.GlobalScope && auth.ScopeCovers(a.Scope, project) {
+			return true
+		}
+	}
+	return false
+}
+
+// clusterTenantAccess reports whether identity sits inside the tenant
+// boundary of the stored cluster c for (action, target). The read-side
+// scoping rule (red-team findings, #49 posture narrowed to match the
+// mutation convention):
+//   - Admin: everything, everywhere.
+//   - Auditor: every READ when auditorAll is set (audit evidence is its
+//     purpose — consistent with the audit surface staying Admin/Auditor-only);
+//     never any write.
+//   - the cluster's recorded Owner (spec.owner, matched against
+//     identity.Owner() — the same value CreateCluster stamps server-side).
+//   - an effective assignment scoped to c.Spec.Project ("project:<name>",
+//     NOT the global "*") whose role grants (action, target) — i.e. project
+//     membership, with the role still deciding what the member may do.
+//
+// Global ("*") assignments and unscoped global roles do NOT cross the
+// tenant boundary on their own: a viewer/developer/operator with zero
+// project ties reads only clusters they own. identity == nil (dev mode)
+// permits everything, exactly like Authorize/AuthorizeScoped.
+func clusterTenantAccess(ctx context.Context, store controller.Store, identity *auth.Identity, c *controller.StoredCluster, action auth.PermissionType, target auth.Target, auditorAll bool) bool {
+	if identity == nil {
+		return true
+	}
+	if hasRole(identity, auth.RoleAdmin) {
+		return true
+	}
+	if auditorAll && action == auth.Read && hasRole(identity, auth.RoleAuditor) {
+		return true
+	}
+	if c.Spec.Owner != nil && *c.Spec.Owner == identity.Owner() {
+		return true
+	}
+	return projectAssignmentGrants(ctx, store, identity, c.Spec.Project, action, target)
+}
+
 // identitySubject returns a pointer to id's subject, or nil for an
 // unauthenticated (dev mode) caller — the shape every AuditEvent.Subject
 // field needs.

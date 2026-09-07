@@ -95,13 +95,17 @@ func clusterSpecFromWire(w *ClusterSpec) (core.ClusterSpec, error) {
 }
 
 // validateClusterShape is the shape check the contract cannot express:
-// every quantity parses as a Kubernetes quantity and every worker group's
-// replica bounds are coherent. Shared by create_cluster and the profile
-// catalog's PUT validation, so a profile can never define a shape a
-// create would refuse.
+// every quantity parses as a Kubernetes quantity, every worker group's
+// replica bounds are coherent, and the engine's startup minimums hold (for
+// ray, the per-container memory floor — see policy.AdmitEngineMinimums).
+// Shared by create_cluster and the profile catalog's PUT validation, so a
+// profile can never define a shape a create would refuse.
 func validateClusterShape(spec *core.ClusterSpec) error {
 	if _, _, derr := policy.ClusterDemand(spec); derr != nil {
 		return badRequest("invalid spec: " + derr.Error())
+	}
+	if merr := policy.AdmitEngineMinimums(spec); merr != nil {
+		return badRequest("invalid spec: " + merr.Error())
 	}
 	for _, g := range spec.WorkerGroups {
 		if g.MinReplicas > g.MaxReplicas || g.Replicas < g.MinReplicas || g.Replicas > g.MaxReplicas {
@@ -229,17 +233,30 @@ func cutPrefix(s, prefix string) (string, bool) {
 	return "", false
 }
 
+// readGate is the shared list-endpoint admission gate: a caller with no
+// global read permission, no effective assignment, and neither the Admin nor
+// Auditor role can see anything at all, so the request is refused outright
+// (deny-by-default, with the denial audited). Callers that pass the gate are
+// still filtered per-row by clusterTenantAccess / jobVisible — a global
+// viewer/developer/operator role alone does NOT cross tenant boundaries.
+func readGate(ctx context.Context, store controller.Store, identity *auth.Identity, target auth.Target) error {
+	if identity == nil || hasRole(identity, auth.RoleAdmin, auth.RoleAuditor) ||
+		identity.Permits(auth.Read, target) || len(EffectiveAssignments(ctx, store, identity)) > 0 {
+		return nil
+	}
+	return Authorize(ctx, store, identity, auth.Read, target)
+}
+
 // ListClusters lists every cluster the caller may read (#49 scoped RBAC +
-// ADR-0009 addendum read-scoping — see readScope).
+// tenant read-scoping): Admin and Auditor see all; anyone else sees only
+// clusters they own or whose project they hold a scoped assignment for. A
+// caller with a global role but zero project ties gets a filtered list —
+// never foreign owners' clusters (red-team finding: observability reads
+// were globally open).
 func (s *Server) ListClusters(ctx context.Context, _ ListClustersRequestObject) (ListClustersResponseObject, error) {
 	identity, _ := IdentityFromContext(ctx)
-	assignments, narrowed := readScope(ctx, s.Store, identity)
-	if len(narrowed) == 0 && identity != nil {
-		if !identity.Permits(auth.Read, auth.TargetCluster) && len(assignments) == 0 {
-			if err := Authorize(ctx, s.Store, identity, auth.Read, auth.TargetCluster); err != nil {
-				return nil, err
-			}
-		}
+	if err := readGate(ctx, s.Store, identity, auth.TargetCluster); err != nil {
+		return nil, err
 	}
 	clusters, err := s.Store.List(ctx)
 	if err != nil {
@@ -253,31 +270,23 @@ func (s *Server) ListClusters(ctx context.Context, _ ListClustersRequestObject) 
 	queues := map[string]*string{}
 	for i := range clusters {
 		c := &clusters[i]
-		var visible bool
-		switch {
-		case len(narrowed) > 0:
-			visible = containsString(narrowed, c.Spec.Project)
-		case identity != nil:
-			visible = identity.PermitsScoped(auth.Read, auth.TargetCluster, assignments, c.Spec.Project)
-		default:
-			visible = true
+		if !clusterTenantAccess(ctx, s.Store, identity, c, auth.Read, auth.TargetCluster, true) {
+			continue
 		}
-		if visible {
-			q, ok := queues[c.Spec.Project]
-			if !ok {
-				q = s.queueNameForProject(ctx, c.Spec.Project)
-				queues[c.Spec.Project] = q
-			}
-			views = append(views, clusterView(c, prices, q, s.gatewayURLFor(c.ID)))
+		q, ok := queues[c.Spec.Project]
+		if !ok {
+			q = s.queueNameForProject(ctx, c.Spec.Project)
+			queues[c.Spec.Project] = q
 		}
+		views = append(views, clusterView(c, prices, q, s.gatewayURLFor(c.ID)))
 	}
 	return ListClusters200JSONResponse(views), nil
 }
 
-// GetCluster reads one cluster (#49 scoped RBAC + read-scoping): an
-// out-of-scope cluster (narrowed away by project-scoped assignments) 404s
-// rather than 403s — the list hides it, so the by-name read must not leak
-// its existence either.
+// GetCluster reads one cluster (tenant read-scoping): an out-of-scope
+// cluster (not Admin, not Auditor, not the owner, no assignment covering
+// its project) 404s rather than 403s — the list hides it, so the by-name
+// read must not leak its existence either.
 func (s *Server) GetCluster(ctx context.Context, req GetClusterRequestObject) (GetClusterResponseObject, error) {
 	identity, _ := IdentityFromContext(ctx)
 	c, err := s.Store.Get(ctx, core.ClusterId(req.Id))
@@ -287,12 +296,8 @@ func (s *Server) GetCluster(ctx context.Context, req GetClusterRequestObject) (G
 	if c == nil {
 		return nil, notFound("no such cluster")
 	}
-	_, narrowed := readScope(ctx, s.Store, identity)
-	if len(narrowed) > 0 && !containsString(narrowed, c.Spec.Project) {
+	if !clusterTenantAccess(ctx, s.Store, identity, c, auth.Read, auth.TargetCluster, true) {
 		return nil, notFound("no such cluster")
-	}
-	if err := AuthorizeScoped(ctx, s.Store, identity, auth.Read, auth.TargetCluster, c.Spec.Project); err != nil {
-		return nil, err
 	}
 	prices, err := s.effectivePrices(ctx)
 	if err != nil {
@@ -749,27 +754,62 @@ func (s *Server) ResumeCluster(ctx context.Context, req ResumeClusterRequestObje
 }
 
 // ListJobs lists the persistent, cross-cluster job history, newest
-// submitted first.
+// submitted first — filtered to what the caller may see (tenant
+// read-scoping, same rule as the cluster reads): Admin and Auditor see
+// everything; anyone else sees jobs they submitted themselves and jobs
+// whose cluster they could read (own the cluster or hold a scoped
+// assignment covering its project). Jobs whose cluster Bifrost does not
+// manage in the store stay visible to any global Read-on-Job role — a
+// registry-only cluster carries no owner/project to scope by, mirroring
+// the registry-only read path in cluster_obs.go.
 func (s *Server) ListJobs(ctx context.Context, _ ListJobsRequestObject) (ListJobsResponseObject, error) {
 	identity, _ := IdentityFromContext(ctx)
-	if err := Authorize(ctx, s.Store, identity, auth.Read, auth.TargetJob); err != nil {
+	if err := readGate(ctx, s.Store, identity, auth.TargetJob); err != nil {
 		return nil, err
 	}
 	jobs, err := s.Store.ListJobs(ctx)
 	if err != nil {
 		return nil, wrapStoreErr(err)
 	}
-	views := make([]JobView, len(jobs))
-	for i, j := range jobs {
+	views := make([]JobView, 0, len(jobs))
+	for i := range jobs {
+		j := &jobs[i]
+		if !s.jobVisible(ctx, identity, j) {
+			continue
+		}
 		var dur *int64
 		if j.DurationSecs != nil {
 			v := int64(*j.DurationSecs)
 			dur = &v
 		}
-		views[i] = JobView{
+		views = append(views, JobView{
 			Id: j.Id, Cluster: j.Cluster, Submitter: j.Submitter, Status: j.Status,
 			DurationSecs: dur, SubmittedAt: int64(j.SubmittedAt),
-		}
+		})
 	}
 	return ListJobs200JSONResponse(views), nil
+}
+
+// jobVisible applies the tenant read-scope to one job history row. A store
+// failure fails closed (the row is hidden): an error can never widen what
+// a caller sees.
+func (s *Server) jobVisible(ctx context.Context, identity *auth.Identity, j *core.JobRecord) bool {
+	if identity == nil {
+		return true
+	}
+	if hasRole(identity, auth.RoleAdmin, auth.RoleAuditor) {
+		return true
+	}
+	if j.Submitter == identity.Subject {
+		return true
+	}
+	c, err := s.Store.Get(ctx, core.ClusterId(j.Cluster))
+	if err != nil {
+		slog.Warn("api: job-scope cluster lookup failed", "cluster", j.Cluster, "error", err)
+		return false
+	}
+	if c == nil {
+		return identity.Permits(auth.Read, auth.TargetJob)
+	}
+	return clusterTenantAccess(ctx, s.Store, identity, c, auth.Read, auth.TargetJob, true)
 }

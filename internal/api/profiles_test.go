@@ -16,7 +16,7 @@ func u32(v uint32) *uint32 { return &v }
 func smallProfile(projects ...string) core.Profile {
 	return core.Profile{
 		Name: "small", Image: "rayproject/ray:2.9.0", RayVersion: "2.9.0", HeadCpu: "1", HeadMemory: "2Gi",
-		WorkerGroups: []core.WorkerGroup{{Name: "w", Cpu: "1", Memory: "1Gi", MinReplicas: 1, MaxReplicas: 2, Replicas: 1}},
+		WorkerGroups: []core.WorkerGroup{{Name: "w", Cpu: "1", Memory: "2Gi", MinReplicas: 1, MaxReplicas: 2, Replicas: 1}},
 		MaxWorkers:   u32(2),
 		Projects:     projects,
 	}
@@ -205,7 +205,7 @@ func TestUpdatePolicyProfilesAndAdmissionSections(t *testing.T) {
 	max := int32(2)
 	projects := []string{"team-a"}
 	good := ProfileSpec{Name: "small", Image: "rayproject/ray:2.9.0", RayVersion: "2.9.0", HeadCpu: "1", HeadMemory: "2Gi",
-		WorkerGroups: []WorkerGroup{{Name: "w", Cpu: "1", Memory: "1Gi", MinReplicas: 0, MaxReplicas: 2, Replicas: 1}},
+		WorkerGroups: []WorkerGroup{{Name: "w", Cpu: "1", Memory: "2Gi", MinReplicas: 0, MaxReplicas: 2, Replicas: 1}},
 		MaxWorkers:   &max, Projects: &projects}
 	images := []string{"registry.example/"}
 	adm := map[string]AdmissionRule{"team-b": {AllowedImages: &images}}
