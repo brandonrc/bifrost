@@ -126,7 +126,7 @@ func (r *JobReconciler) reconcileOne(ctx context.Context, j *StoredRayJob, now u
 	}
 	if quarantined {
 		if found {
-			if err := r.recordObserved(ctx, j, &obs); err != nil {
+			if err := r.recordObserved(ctx, j, &obs, now); err != nil {
 				return 0, err
 			}
 		}
@@ -195,7 +195,7 @@ func (r *JobReconciler) reconcileOne(ctx context.Context, j *StoredRayJob, now u
 	// Persist status reconstructed from reality, keep the gateway in step,
 	// and write the history record when the job just finished.
 	if found {
-		if err := r.recordObserved(ctx, j, &obs); err != nil {
+		if err := r.recordObserved(ctx, j, &obs, now); err != nil {
 			return 0, err
 		}
 	} else {
@@ -264,11 +264,24 @@ func historyStatus(obs *provision.ObservedJob) string {
 // recordObserved persists a found job's observation, side-writes the job
 // history the first time the job is seen terminal, and registers or
 // deregisters its cluster with the gateway.
-func (r *JobReconciler) recordObserved(ctx context.Context, j *StoredRayJob, obs *provision.ObservedJob) error {
+//
+// KubeRay reports Ray's job status terminal a reconcile (or more) before it
+// flips the deployment status and stamps status.endTime — the lag #31/#32
+// documented on the kind lane. The history record is written once, here, so
+// a terminal observation without a backend end time takes now as its end:
+// the job is over, the observation time is its finish, and the record's
+// duration must not stay null forever (kind lane runs 34105323715,
+// 34022426814). Same posture as recordGone, which stamps a finish the
+// backend never reported.
+func (r *JobReconciler) recordObserved(ctx context.Context, j *StoredRayJob, obs *provision.ObservedJob, now uint64) error {
+	end := obs.EndTime
+	if jobObservedTerminal(obs) && end == nil {
+		end = &now
+	}
 	if jobObservedTerminal(obs) && !jobIsTerminal(j.Status) && j.FinishedAt == nil {
 		// History first, observation second: a crash in between replays
 		// the side-write (RecordJob upserts by id), never loses it.
-		if err := r.store.RecordJob(ctx, jobHistoryRecord(j, historyStatus(obs), obs.ClusterName, obs.StartTime, obs.EndTime)); err != nil {
+		if err := r.store.RecordJob(ctx, jobHistoryRecord(j, historyStatus(obs), obs.ClusterName, obs.StartTime, end)); err != nil {
 			return wrapStoreErr(err)
 		}
 	}
@@ -279,7 +292,7 @@ func (r *JobReconciler) recordObserved(ctx context.Context, j *StoredRayJob, obs
 		DashboardURL:     obs.DashboardURL,
 		Message:          obs.Message,
 		StartedAt:        obs.StartTime,
-		FinishedAt:       obs.EndTime,
+		FinishedAt:       end,
 	}); err != nil {
 		return wrapStoreErr(err)
 	}

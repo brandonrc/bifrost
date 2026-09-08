@@ -215,6 +215,54 @@ func TestJobReconcileRegistersWhileRunningAndDeregistersWhenDone(t *testing.T) {
 	}
 }
 
+// The kind lane's failure (runs 34105323715, 34022426814): KubeRay reports
+// jobStatus SUCCEEDED while the deployment still reads Running and
+// status.endTime is not stamped yet (#31/#32). The history record is
+// written at that first terminal sighting, so it must take the observation
+// time as the job's end — a null duration would never be corrected.
+func TestJobReconcileTerminalWithoutEndTimeStampsTheObservationTime(t *testing.T) {
+	r, store, jobs, _ := newJobHarness(t)
+	ctx := context.Background()
+	owner := "alice"
+	if err := store.UpsertRayJob(ctx, "job-1", jobSpec(), &owner); err != nil {
+		t.Fatal(err)
+	}
+	mustOneOK(t, r.ReconcileAllAt(ctx, 1000))
+
+	cluster := "job-1-raycluster-x"
+	start := uint64(1100)
+	jobs.set("job-1", provision.ObservedJob{ID: "job-1", JobStatus: "SUCCEEDED", DeploymentStatus: "Running",
+		ClusterName: &cluster, StartTime: &start})
+	mustOneOK(t, r.ReconcileAllAt(ctx, 1150))
+
+	hist, err := store.ListJobs(ctx)
+	if err != nil || len(hist) != 1 {
+		t.Fatalf("history = %+v %v, want one record", hist, err)
+	}
+	h := hist[0]
+	if h.Id != "job-1" || h.Cluster != cluster || h.Submitter != "alice" || h.Status != "SUCCEEDED" ||
+		h.DurationSecs == nil || *h.DurationSecs != 50 {
+		t.Fatalf("history record = %+v, want a 50s duration from the observation time", h)
+	}
+	if j, _ := store.GetRayJob(ctx, "job-1"); j.FinishedAt == nil || *j.FinishedAt != 1150 {
+		t.Fatalf("finished_at = %v, want the observation time stamped", j.FinishedAt)
+	}
+
+	// KubeRay's endTime lands on a later reconcile: the row picks it up,
+	// but the write-once history record stands.
+	end := uint64(1190)
+	jobs.set("job-1", provision.ObservedJob{ID: "job-1", JobStatus: "SUCCEEDED", DeploymentStatus: "Complete",
+		ClusterName: &cluster, StartTime: &start, EndTime: &end})
+	mustOneOK(t, r.ReconcileAllAt(ctx, 1200))
+	hist, _ = store.ListJobs(ctx)
+	if len(hist) != 1 || hist[0].DurationSecs == nil || *hist[0].DurationSecs != 50 {
+		t.Fatalf("history = %+v, want the first record kept", hist)
+	}
+	if j, _ := store.GetRayJob(ctx, "job-1"); j.FinishedAt == nil || *j.FinishedAt != 1190 {
+		t.Fatalf("finished_at = %v, want the backend's end time once reported", j.FinishedAt)
+	}
+}
+
 func TestJobReconcileFinishedJobWhoseCRVanishedIsNotRerun(t *testing.T) {
 	r, store, jobs, _ := newJobHarness(t)
 	ctx := context.Background()
