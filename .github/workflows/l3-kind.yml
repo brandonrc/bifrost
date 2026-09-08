@@ -50,6 +50,10 @@ jobs:
           # path stays proven.
           - name: autoscaling
             pkgs: ./test/requirements/r06_self_serve/...
+            # Only the test that needs the flag: the rest of r06 already runs
+            # in rbac-selfserve, and a test that ran in two shards is what the
+            # matrix merger refuses.
+            run: TestAutoscaler
             target: kind-autoscaling
             autoscaling: "true"
     env:
@@ -141,7 +145,7 @@ jobs:
           # One run id for every package (-p 1 runs them one at a time), so
           # preflight's leaked-cluster check and postflight's sweep agree.
           export REQ_RUN_ID="t$(printf '%x' "$GITHUB_RUN_ID")"
-          CGO_ENABLED=1 go test -race -count=1 -p 1 -timeout 80m -json ${{ matrix.shard.pkgs }} > l3.json
+          CGO_ENABLED=1 go test -race -count=1 -p 1 -timeout 80m -json -run '${{ matrix.shard.run || '.' }}' ${{ matrix.shard.pkgs }} > l3.json
 
       - name: Cluster state on failure
         if: failure()
