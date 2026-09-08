@@ -158,6 +158,7 @@ func RayClusterFor(id core.ClusterId, spec *core.ClusterSpec, autoscaling bool, 
 		Spec: rayv1.RayClusterSpec{
 			RayVersion:              spec.RayVersion,
 			EnableInTreeAutoscaling: ptr.To(autoscaling),
+			AutoscalerOptions:       autoscalerOptions(autoscaling),
 			// Bifrost owns `suspend` (SSA field manager) so a force
 			// re-apply clears an out-of-band `suspend: true` and resumes
 			// the cluster. Without this, our field manager never owns
@@ -1001,6 +1002,32 @@ func ClusterAllowNetworkPolicy(id string, owner *string) *networkingv1.NetworkPo
 			Ingress:     ingress,
 			Egress: []networkingv1.NetworkPolicyEgressRule{
 				{To: []networkingv1.NetworkPolicyPeer{{PodSelector: sameCluster}}},
+			},
+		},
+	}
+}
+
+// autoscalerOptions sizes the autoscaler sidecar KubeRay adds to the head
+// when in-tree autoscaling is on. KubeRay's default reserves 500m CPU and
+// 512Mi for it — half a core held by a poller that reads a CR and patches a
+// replica count. On a small node that reservation is what stops the second
+// cluster from scheduling (the kind lane's autoscaling shard, 4 vCPU, two
+// heads). Requests are set to what the sidecar uses; limits stay at KubeRay's
+// defaults so it can burst when a scale decision is busy. nil when
+// autoscaling is off: no sidecar, nothing to size.
+func autoscalerOptions(autoscaling bool) *rayv1.AutoscalerOptions {
+	if !autoscaling {
+		return nil
+	}
+	return &rayv1.AutoscalerOptions{
+		Resources: &corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("100m"),
+				corev1.ResourceMemory: resource.MustParse("128Mi"),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("500m"),
+				corev1.ResourceMemory: resource.MustParse("512Mi"),
 			},
 		},
 	}

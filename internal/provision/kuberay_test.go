@@ -1442,3 +1442,35 @@ func TestAutoscalerPolicyIsSelectedByTheSameReaper(t *testing.T) {
 		t.Fatalf("both policies are named %q; one would overwrite the other", a.Name)
 	}
 }
+
+// TestAutoscalerSidecarIsSizedForWhatItDoes: KubeRay reserves 500m/512Mi for
+// the autoscaler by default, which on a small node is the difference between
+// a second cluster scheduling and sitting Pending (kind lane, 4 vCPU). With
+// autoscaling on the sidecar gets modest requests and KubeRay's limits; with
+// it off there is no sidecar and no options.
+func TestAutoscalerSidecarIsSizedForWhatItDoes(t *testing.T) {
+	spec := &core.ClusterSpec{Name: "c", Project: "p", RayVersion: "2.56.0", Image: "rayproject/ray:2.56.0", HeadCpu: "1", HeadMemory: "2Gi",
+		WorkerGroups: []core.WorkerGroup{{Name: "w", Cpu: "1", Memory: "2Gi", MinReplicas: 0, MaxReplicas: 2, Replicas: 1}}}
+	on, err := RayClusterFor("c", spec, true, 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if on.Spec.AutoscalerOptions == nil || on.Spec.AutoscalerOptions.Resources == nil {
+		t.Fatalf("autoscaling on: AutoscalerOptions.Resources unset; KubeRay would reserve 500m/512Mi")
+	}
+	req := on.Spec.AutoscalerOptions.Resources.Requests
+	if req.Cpu().MilliValue() != 100 || req.Memory().String() != "128Mi" {
+		t.Fatalf("autoscaler requests = %s cpu / %s mem, want 100m / 128Mi", req.Cpu(), req.Memory())
+	}
+	lim := on.Spec.AutoscalerOptions.Resources.Limits
+	if lim.Cpu().MilliValue() != 500 || lim.Memory().String() != "512Mi" {
+		t.Fatalf("autoscaler limits = %s cpu / %s mem, want KubeRay's 500m / 512Mi", lim.Cpu(), lim.Memory())
+	}
+	off, err := RayClusterFor("c", spec, false, 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if off.Spec.AutoscalerOptions != nil {
+		t.Fatalf("autoscaling off: AutoscalerOptions = %+v, want nil (no sidecar to size)", off.Spec.AutoscalerOptions)
+	}
+}

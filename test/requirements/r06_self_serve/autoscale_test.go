@@ -26,9 +26,9 @@ import (
 // RayCluster, and could not.
 //
 // The proof is the sidecar acting: a worker group with min_replicas 1 is
-// created with no workers (ADR-0007: under autoscaling Bifrost never writes
-// replicas), so the only thing that can bring the count to one is the
-// autoscaler talking to the API server. If the egress policy Bifrost now
+// created, and under autoscaling Bifrost never writes replicas (ADR-0007) —
+// the RayCluster starts with no workers, so the only thing that can bring
+// the count to one is the autoscaler talking to the API server. If the egress policy Bifrost now
 // writes is wrong, or missing, or the RBAC to build it is gone, this waits
 // out the convergence budget on zero and fails with the sidecar's restarts
 // in hand.
@@ -44,7 +44,7 @@ func TestAutoscalerReachesTheAPIServerAndAddsAWorker(t *testing.T) {
 	ttl := fixture.TTL(tgt)
 	raw := fmt.Sprintf(`{"id":%q,"spec":{"name":%q,"project":"team-a","ray_version":"2.56.0","image":%q,
 		"head_cpu":%q,"head_memory":%q,"ttl_seconds":%d,
-		"worker_groups":[{"name":"w","cpu":"1","memory":"2Gi","gpu":null,"min_replicas":1,"max_replicas":2,"replicas":0}]}}`,
+		"worker_groups":[{"name":"w","cpu":"1","memory":"2Gi","gpu":null,"min_replicas":1,"max_replicas":2,"replicas":1}]}}`,
 		id, id, fixture.RayImage(), fixture.HeadCPU(), fixture.HeadMemory(), ttl)
 	var body client.CreateClusterJSONRequestBody
 	if err := json.Unmarshal([]byte(raw), &body); err != nil {
