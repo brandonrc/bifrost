@@ -32,7 +32,14 @@ func TestListProfilesRequiresReadOnCluster(t *testing.T) {
 		{testIdentity("op", auth.RoleOperator), http.StatusOK},
 		{testIdentity("dev", auth.RoleDeveloper), http.StatusOK},
 		{testIdentity("viewer", auth.RoleViewer), http.StatusOK},
-		{testIdentity("auditor", auth.RoleAuditor), http.StatusForbidden},
+		// No global role, one project grant: the identity a Keycloak group
+		// mapped to a project role produces, and the one the notebook panel
+		// asks as. It was refused, and the panel had nothing to offer.
+		{projectMember("pam", auth.RoleOperator, "team-a"), http.StatusOK},
+		{testIdentity("nobody"), http.StatusForbidden},
+		// Same gate as the cluster list, same answer for the auditor: reads
+		// everything, mutates nothing. A catalog is not a secret.
+		{testIdentity("auditor", auth.RoleAuditor), http.StatusOK},
 	} {
 		resp, err := s.ListProfiles(ctxWithIdentity(tc.id), ListProfilesRequestObject{})
 		if tc.want == http.StatusOK {
@@ -77,6 +84,27 @@ func TestListProfilesIsNarrowedToTheCallersProjects(t *testing.T) {
 	}
 	if got := mustResponse[ListProfiles200JSONResponse](t, resp); len(got) != 3 {
 		t.Errorf("admin sees %d profiles, want all 3", len(got))
+	}
+}
+
+func TestListProfilesForAProjectOnlyMemberIsTheirProjectsCatalog(t *testing.T) {
+	// The self-service shape end to end: no global role, a project-scoped
+	// operator grant, and a catalog with a profile for their project, one for
+	// another, and one open to all. They see two, and never the third.
+	forA, forB, forAll := smallProfile("team-a"), smallProfile("team-b"), smallProfile()
+	forA.Name, forB.Name, forAll.Name = "for-a", "for-b", "for-all"
+	s := &Server{Store: newMemStore(t), PolicySeed: PolicyConfig{Profiles: []core.Profile{forA, forB, forAll}}}
+
+	resp, err := s.ListProfiles(ctxWithIdentity(projectMember("pam", auth.RoleOperator, "team-a")), ListProfilesRequestObject{})
+	if err != nil {
+		t.Fatalf("list_profiles as a project member: %v", err)
+	}
+	got := map[string]bool{}
+	for _, p := range mustResponse[ListProfiles200JSONResponse](t, resp) {
+		got[p.Name] = true
+	}
+	if !got["for-a"] || !got["for-all"] || got["for-b"] {
+		t.Errorf("project member of team-a sees %v; want for-a and for-all, not for-b", got)
 	}
 }
 

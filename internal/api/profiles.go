@@ -22,7 +22,14 @@ import (
 // roles see the whole catalog.
 func (s *Server) ListProfiles(ctx context.Context, _ ListProfilesRequestObject) (ListProfilesResponseObject, error) {
 	identity, _ := IdentityFromContext(ctx)
-	if err := Authorize(ctx, s.Store, identity, auth.Read, auth.TargetCluster); err != nil {
+	// The list gate, not the global one: the caller this catalog exists for
+	// is the self-service user whose only grant is a project-scoped operator
+	// role. They have no global role at all, and Authorize(Read, cluster)
+	// refused them — the notebook panel showed "forbidden" where the
+	// profiles should have been, for the one identity shape that would use
+	// it. readGate admits an effective assignment; the per-project filter
+	// below still decides what they see.
+	if err := readGate(ctx, s.Store, identity, auth.TargetCluster); err != nil {
 		return nil, err
 	}
 	p, err := effectivePolicy(ctx, s.Store, &s.PolicySeed)
