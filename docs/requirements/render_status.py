@@ -31,6 +31,10 @@ def lane_kind(cell: str) -> str:
         return "none"
     if "fail" in c:
         return "red"
+    # A lane whose recorded run predates tests that now exist is not a colour
+    # on the pass/fail scale; saying so beats quoting a stale number.
+    if c.startswith("stale"):
+        return "stale"
     if "pinned gap" in c:
         return "pinned"
     if "skip" in c:
@@ -46,6 +50,11 @@ def main() -> None:
         counts[label] = counts.get(label, 0) + 1
     tested = sum(1 for r in rows if (r["Automated tests"] or "0") != "0")
     total = sum(int(r["Automated tests"] or 0) for r in rows)
+    browser = sum(
+        int(r["browser lane"].split()[0])
+        for r in rows
+        if r["browser lane"][:1].isdigit()
+    )
     sha = subprocess.run(
         ["git", "rev-parse", "--short=7", "HEAD"], capture_output=True, text=True
     ).stdout.strip()
@@ -56,7 +65,7 @@ def main() -> None:
         where = html.escape(r["Where it lives"]).replace(", ", "<br>")
         lanes = "".join(
             f'<td class="lane {lane_kind(r[c])}">{html.escape(r[c])}</td>'
-            for c in ("L2 (no cluster)", "kind lane", "grace lane")
+            for c in ("L2 (no cluster)", "kind lane", "grace lane", "browser lane")
         )
         body.append(
             f'<tr><td class="num">{r["Req"]}</td>'
@@ -79,6 +88,7 @@ def main() -> None:
         .replace("__SHA__", sha)
         .replace("__TOTAL__", str(total))
         .replace("__TESTED__", str(tested))
+        .replace("__BROWSER__", str(browser))
     )
 
 
@@ -130,6 +140,7 @@ td.lane.green{color:var(--green)}
 td.lane.amber{color:var(--amber)}
 td.lane.red{color:var(--red);font-weight:700}
 td.lane.none,td.lane.pinned{color:var(--grey)}
+td.lane.stale{color:var(--amber);font-style:italic}
 td.hand,td.gap{max-width:24rem}
 td.gap{color:var(--muted)}
 .chip,.prio{font-family:Archivo,sans-serif;font-size:.66rem;letter-spacing:.06em;text-transform:uppercase;font-weight:700;padding:.1em .45em;border-radius:3px;white-space:nowrap}
@@ -147,7 +158,7 @@ td.gap{color:var(--muted)}
   <div class="eyebrow">Bifrost · Ray Software Pack</div>
   <h1>Requirement status</h1>
   <p class="lede">The eighteen rows, what is in the source, and what an automated test actually proves about each one. Two things are kept apart on purpose: a row can be built and still be untested, and a row can pass every lane and still be unproven where it matters.</p>
-  <div class="meta"><span>main <b>__SHA__</b></span><span>curated <b>2026-09-04</b></span><span>suite <b>__TOTAL__ tests</b></span><span>rows with tests <b>__TESTED__ of 18</b></span></div>
+  <div class="meta"><span>main <b>__SHA__</b></span><span>curated <b>2026-09-08</b></span><span>suite <b>__TOTAL__ tests</b></span><span>browser <b>__BROWSER__ specs</b></span><span>rows with tests <b>__TESTED__ of 18</b></span></div>
   <div class="tiles">__TILES__</div>
 </header>
 <div class="wrap">
@@ -155,14 +166,14 @@ td.gap{color:var(--muted)}
   <table>
     <thead><tr>
       <th>#</th><th>Requirement</th><th>Where it lives</th><th>Tests</th>
-      <th>L2 no cluster</th><th>kind lane</th><th>grace lane</th>
+      <th>L2 no cluster</th><th>kind lane</th><th>grace lane</th><th>browser</th>
       <th>Proven by hand</th><th>Gap / next step</th>
     </tr></thead>
     <tbody>__ROWS__</tbody>
   </table>
   </div>
   <div class="legend">
-    <p><b>Lanes.</b> L2 runs on every push with no cluster and its numbers come from the committed matrix on main. The kind lane runs four shards on a throwaway cluster, last green on run 33891270587. The grace figures are the last full run against the live deployment, which the in-cluster nightly reproduces. Skips are normal and recorded: a test skips when its target lacks the capability it needs, which is why a row can show more passes on a real cluster than on L2.</p>
+    <p><b>Lanes.</b> L2 runs on every push with no cluster and its numbers come from the committed matrix on main. The kind lane runs four shards on a throwaway cluster, last green on run 34228237429. The grace figures are the last full run against the live deployment, which the in-cluster nightly reproduces — today's 07:00Z nightly aborted partway when a helm upgrade restarted the control plane under it, so rows whose test set has grown since the last completed run are marked stale rather than given a number that predates the tests. The browser lane is <code>bifrost-ui/e2e</code>: nine Playwright specs against a Keycloak + Bifrost stack on every pull request, plus one that needs a real provisioner. It is counted apart from the Go suite because it proves a different thing — that a person holding these roles can actually use the page. Skips are normal and recorded: a test skips when its target lacks the capability it needs, which is why a row can show more passes on a real cluster than on L2.</p>
     <p><b>The rows no lane can speak for.</b> Nine and eleven live in the JupyterLab extension, a separate repository with its own suites; nine now has live evidence against grace, eleven has none. Sixteen is deferred by ruling and pinned by a test that fails on purpose. Seventeen has only a compile-time guard that the provisioner interface stays free of Kubernetes types.</p>
     <p>Generated from <code>docs/requirements/status.csv</code> by <code>docs/requirements/render_status.py</code>. Lane numbers regenerate with <code>make report</code> and the lane artifacts; the curated columns do not, so date any edit.</p>
   </div>
