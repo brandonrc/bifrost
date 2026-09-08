@@ -1,0 +1,57 @@
+# Scrape Bifrost and every Ray node Bifrost provisions; expose Grafana.
+#
+# Everything lives in the observability namespace with the `release:
+# kube-prom-stack` label, which is what the microk8s addon's Prometheus selects
+# on. The Bifrost endpoint needs a bearer: /api/v1/metrics is Read on the
+# cluster target, so the token belongs to a local `viewer` user made for this
+# and nothing else (Secret bifrost-metrics-token, 90-day PAT).
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: bifrost
+  namespace: observability
+  labels:
+    release: kube-prom-stack
+spec:
+  namespaceSelector:
+    matchNames: [bifrost]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: bifrost-pack
+      app.kubernetes.io/instance: bifrost
+  endpoints:
+    - port: http
+      path: /api/v1/metrics
+      interval: 30s
+      scheme: http
+      bearerTokenSecret:
+        name: bifrost-metrics-token
+        key: token
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: ray-nodes
+  namespace: observability
+  labels:
+    release: kube-prom-stack
+spec:
+  namespaceSelector:
+    matchNames: [bifrost]
+  selector:
+    matchLabels:
+      ray.io/is-ray-node: "yes"
+  podMetricsEndpoints:
+    - port: metrics
+      interval: 15s
+      # The labels Bifrost stamps become series labels, so a dashboard can
+      # slice by cluster, owner and node role without any relabel elsewhere.
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_label_bifrost_dev_cluster_id]
+          targetLabel: bifrost_cluster
+        - sourceLabels: [__meta_kubernetes_pod_label_bifrost_dev_owner]
+          targetLabel: bifrost_owner
+        - sourceLabels: [__meta_kubernetes_pod_label_ray_io_node_type]
+          targetLabel: ray_node_type
+---

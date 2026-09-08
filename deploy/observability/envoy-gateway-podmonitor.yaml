@@ -1,0 +1,38 @@
+# The gateway's view of Bifrost: request rate, status classes and latency per
+# HTTPRoute (bifrost-route = the API, bifrost-ui-route = the dashboard,
+# bifrost-gateway-wildcard = the per-cluster Ray Jobs gateway). Envoy exposes
+# ~6k series per pod; only the request-level ones for the platform's routes
+# are kept, so Mimir carries what the Bifrost dashboard reads and nothing else.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: envoy-gateway-routes
+  namespace: observability
+  labels:
+    release: kube-prom-stack
+spec:
+  namespaceSelector:
+    matchNames: [envoy-gateway-system]
+  selector:
+    matchLabels:
+      gateway.envoyproxy.io/owning-gateway-name: nebari-gateway
+  podMetricsEndpoints:
+    - port: metrics
+      path: /stats/prometheus
+      interval: 15s
+      metricRelabelings:
+        - sourceLabels: [__name__]
+          regex: envoy_cluster_upstream_rq_total|envoy_cluster_upstream_rq_xx|envoy_cluster_upstream_rq_time_bucket|envoy_cluster_upstream_rq_time_count|envoy_cluster_upstream_rq_time_sum|envoy_cluster_upstream_rq_active|envoy_cluster_upstream_rq_timeout|envoy_cluster_upstream_cx_active
+          action: keep
+        - sourceLabels: [envoy_cluster_name]
+          regex: httproute/(bifrost|jupyter|checkmaite|monitoring)/.*
+          action: keep
+        # httproute/<ns>/<route>/rule/<n> -> route=<route>, route_ns=<ns>
+        - sourceLabels: [envoy_cluster_name]
+          regex: httproute/([^/]+)/([^/]+)/.*
+          targetLabel: route_ns
+          replacement: $1
+        - sourceLabels: [envoy_cluster_name]
+          regex: httproute/([^/]+)/([^/]+)/.*
+          targetLabel: route
+          replacement: $2

@@ -1,0 +1,55 @@
+# nebari-lgtm-pack on grace: Grafana behind Keycloak SSO (client provisioned by
+# the nebari-operator), Loki, Tempo, monolithic Mimir.
+#
+# Metrics arrive by remote_write from the microk8s observability addon's
+# Prometheus (the scraper that owns the ServiceMonitor/PodMonitor CRDs and
+# already scrapes Bifrost and every Ray node). That addon also ships
+# kube-state-metrics and node-exporter, so the pack's copies are off; its
+# promtail stays on so logs land in *this* Loki, the one this Grafana reads.
+nebariapp:
+  enabled: true
+  hostname: grafana.100-89-230-107.sslip.io
+  keycloakHostname: grace.possum-fujita.ts.net:8443
+  keycloakBasePath: /auth
+  keycloakRealm: nebari
+  auth:
+    enabled: true
+    provider: keycloak
+    provisionClient: true
+    enforceAtGateway: false
+    redirectURI: /login/generic_oauth
+    scopes: [openid, profile, email, groups]
+    groups: [admin, viewer]
+    keycloakConfig:
+      groups:
+        - name: admin
+          members: [admin]
+        - name: viewer
+          members: [alice, bob]
+  landingPage:
+    enabled: true
+    displayName: Grafana
+    description: "Metrics, logs and traces for the platform: Bifrost gauges, every Ray node, the cluster itself"
+    category: Observability
+    priority: 60
+kube-state-metrics:
+  enabled: false
+prometheus-node-exporter:
+  enabled: false
+
+# grace has no NIC OpenTelemetry collector; the post-install Job that rolls it
+# waited five minutes for a DaemonSet that does not exist and left the release
+# "failed". Metrics come by remote_write instead.
+otelCollectorOverrides:
+  enabled: false
+
+# One Prometheus remote-writing a whole node's worth of series (cadvisor,
+# kubelet, node-exporter, kube-state-metrics, every Ray node) is more than the
+# default 150k series per tenant: the first push was refused with
+# err-mimir-max-series-per-user. Single tenant, single node — raise it.
+mimir:
+  extraConfig:
+    limits:
+      max_global_series_per_user: 2000000
+      ingestion_rate: 200000
+      ingestion_burst_size: 2000000

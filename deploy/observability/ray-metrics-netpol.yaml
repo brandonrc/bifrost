@@ -1,0 +1,26 @@
+# Prometheus (ns observability) may scrape every Ray node's :8080 metrics port.
+#
+# Bifrost's per-cluster policy admits the cluster's own pods and the owner's
+# notebook, and nothing else — which is right, and which is why the scraper
+# was timing out. NetworkPolicies are additive, so this one opens exactly one
+# port to exactly one namespace and leaves Bifrost's posture untouched.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: bifrost-metrics-scrape
+  namespace: bifrost
+  labels:
+    app.kubernetes.io/part-of: observability
+spec:
+  podSelector:
+    matchLabels:
+      ray.io/is-ray-node: "yes"
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+      ports:
+        - port: 8080
+          protocol: TCP
