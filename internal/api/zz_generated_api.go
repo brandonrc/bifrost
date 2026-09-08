@@ -1179,7 +1179,7 @@ type StorageEntry struct {
 	// HostType Kubernetes HostPathType for a `host_path` entry (`Directory`, `FileOrCreate`, ...); `null`/empty = no node-path type checking.
 	HostType *string `json:"host_type,omitempty"`
 
-	// Mode How the source reaches the pods: `env` injects every Secret key as an environment variable (secret source only); `file` mounts the source read-only at `mount_path`.
+	// Mode How the source reaches the pods: `env` injects every Secret key as an environment variable (secret source only); `file` mounts the source at `mount_path` — read-only for a Secret (credentials), read-write for the volume sources (data volumes).
 	Mode StorageEntryMode `json:"mode"`
 
 	// MountPath Mount point inside the pods (`file` mode only); `null` for `env` mode.
@@ -1198,7 +1198,7 @@ type StorageEntry struct {
 	Source *StorageEntrySource `json:"source,omitempty"`
 }
 
-// StorageEntryMode How the source reaches the pods: `env` injects every Secret key as an environment variable (secret source only); `file` mounts the source read-only at `mount_path`.
+// StorageEntryMode How the source reaches the pods: `env` injects every Secret key as an environment variable (secret source only); `file` mounts the source at `mount_path` — read-only for a Secret (credentials), read-write for the volume sources (data volumes).
 type StorageEntryMode string
 
 // StorageEntrySource What backs the entry: a Kubernetes Secret, a PersistentVolumeClaim, or a host path on the node. Absent = `secret`. The volume sources are `file` mode only.

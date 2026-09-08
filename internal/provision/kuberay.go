@@ -543,10 +543,10 @@ func rayProbe(head bool) *corev1.Probe {
 
 // storage is the spec's resolved private-storage catalog entries
 // (requirement 12): env entries become `envFrom.secretRef`, file entries a
-// read-only volume at their mount path backed by the entry's source
-// (Secret, PersistentVolumeClaim or hostPath). Only Secret NAMES are
-// written; the kubelet resolves them inside the pod, so the credentials
-// never pass through Bifrost.
+// volume at their mount path backed by the entry's source (a read-only
+// Secret volume, or a read-write PersistentVolumeClaim/hostPath). Only
+// Secret NAMES are written; the kubelet resolves them inside the pod, so
+// the credentials never pass through Bifrost.
 func podTemplate(clusterID, containerName, image, cpu, memory string, gpu *string, generation *uint64, owner *string, storage []core.ResolvedStorage) (corev1.PodTemplateSpec, error) {
 	cpuQ, err := resource.ParseQuantity(cpu)
 	if err != nil {
@@ -617,11 +617,12 @@ func podTemplate(clusterID, containerName, image, cpu, memory string, gpu *strin
 func StorageVolumeName(entry string) string { return "storage-" + entry }
 
 // projectStorage adds the storage entries to container (envFrom for env
-// mode, a read-only mount for file mode) and returns the volumes the pod
-// needs for the mounts: a Secret volume, a PersistentVolumeClaim or a
-// hostPath, per the entry's source. Env entries carry only Secret names —
-// the kubelet resolves them inside the pod, so the credentials never pass
-// through Bifrost.
+// mode, a volume mount for file mode) and returns the volumes the pod
+// needs for the mounts: a Secret volume (read-only), a
+// PersistentVolumeClaim or a hostPath (read-write — data volumes, not
+// credentials), per the entry's source. Env entries carry only Secret
+// names — the kubelet resolves them inside the pod, so the credentials
+// never pass through Bifrost.
 func projectStorage(container *corev1.Container, storage []core.ResolvedStorage) []corev1.Volume {
 	var volumes []corev1.Volume
 	for _, st := range storage {
@@ -635,11 +636,17 @@ func projectStorage(container *corev1.Container, storage []core.ResolvedStorage)
 				continue // validated away at the catalog edit; never mount at ""
 			}
 			name := StorageVolumeName(st.Name)
+			mount := corev1.VolumeMount{Name: name, MountPath: *st.MountPath}
 			var src corev1.VolumeSource
 			switch st.Source.OrDefault() {
 			case core.StorageSourcePersistentVolumeClaim:
+				// Volume sources are data volumes, not credentials: they
+				// mount read-write (the Kubernetes default), matching the
+				// pre-catalog deployments that ran against the same claims
+				// and node paths. The catalog's projects scoping is the
+				// access boundary.
 				src = corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-					ClaimName: st.ClaimName, ReadOnly: true,
+					ClaimName: st.ClaimName,
 				}}
 			case core.StorageSourceHostPath:
 				hp := &corev1.HostPathVolumeSource{Path: st.HostPath}
@@ -650,11 +657,10 @@ func projectStorage(container *corev1.Container, storage []core.ResolvedStorage)
 				src = corev1.VolumeSource{HostPath: hp}
 			default:
 				src = corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: st.SecretName}}
+				mount.ReadOnly = true
 			}
 			volumes = append(volumes, corev1.Volume{Name: name, VolumeSource: src})
-			container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
-				Name: name, MountPath: *st.MountPath, ReadOnly: true,
-			})
+			container.VolumeMounts = append(container.VolumeMounts, mount)
 		}
 	}
 	return volumes

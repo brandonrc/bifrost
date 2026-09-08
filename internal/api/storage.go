@@ -1,11 +1,11 @@
 // Private storage catalog (requirement 12, plan ruling D7): administrators
 // catalog storage sources as named entries in the policy row; a spec names
 // entries; the provisioner projects them onto the pods as
-// `envFrom.secretRef` (env, secret source), a read-only volume at the
-// entry's mount path (file) backed by a Secret, a PersistentVolumeClaim or
-// a hostPath. A Secret's contents never cross Bifrost: the API carries
-// names and paths only, and the resolution persisted on a spec is delivery
-// instructions, not data.
+// `envFrom.secretRef` (env, secret source), or a volume at the entry's
+// mount path (file): read-only for a Secret (credentials), read-write for
+// a PersistentVolumeClaim or hostPath (data volumes). A Secret's contents
+// never cross Bifrost: the API carries names and paths only, and the
+// resolution persisted on a spec is delivery instructions, not data.
 //
 // The predecessor's pod-shaping rule applies: the catalog is validated as
 // a unit at the edit, a spec is resolved once at admission, and a later

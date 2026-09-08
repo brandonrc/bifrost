@@ -1277,7 +1277,8 @@ func testVolumeStorage() []core.ResolvedStorage {
 }
 
 // assertVolumeStorageProjected checks one pod template carries the claim
-// and the host path as read-only volume mounts at their catalogued paths.
+// and the host path as read-write volume mounts at their catalogued paths
+// (data volumes, unlike the read-only Secret mounts).
 func assertVolumeStorageProjected(t *testing.T, what string, tmpl *corev1.PodTemplateSpec) {
 	t.Helper()
 	c := tmpl.Spec.Containers[0]
@@ -1291,8 +1292,8 @@ func assertVolumeStorageProjected(t *testing.T, what string, tmpl *corev1.PodTem
 		switch v.Name {
 		case claimVol:
 			seen[claimVol] = true
-			if v.PersistentVolumeClaim == nil || v.PersistentVolumeClaim.ClaimName != "checkmaite-analytics" || !v.PersistentVolumeClaim.ReadOnly {
-				t.Errorf("%s: claim volume = %+v, want read-only claim checkmaite-analytics", what, v)
+			if v.PersistentVolumeClaim == nil || v.PersistentVolumeClaim.ClaimName != "checkmaite-analytics" || v.PersistentVolumeClaim.ReadOnly {
+				t.Errorf("%s: claim volume = %+v, want claim checkmaite-analytics, read-write", what, v)
 			}
 		case hostVol:
 			seen[hostVol] = true
@@ -1312,8 +1313,8 @@ func assertVolumeStorageProjected(t *testing.T, what string, tmpl *corev1.PodTem
 	}
 	for name, path := range map[string]string{claimVol: "/app/data/analytics", hostVol: "/srv/node-data"} {
 		m, ok := mounts[name]
-		if !ok || m.MountPath != path || !m.ReadOnly {
-			t.Errorf("%s: mount for %s = %+v, want read-only at %s", what, name, m, path)
+		if !ok || m.MountPath != path || m.ReadOnly {
+			t.Errorf("%s: mount for %s = %+v, want read-write at %s", what, name, m, path)
 		}
 	}
 }

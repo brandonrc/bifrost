@@ -2223,7 +2223,7 @@
             ]
           },
           "mode": {
-            "description": "How the source reaches the pods: `env` injects every Secret key as an environment variable (secret source only); `file` mounts the source read-only at `mount_path`.",
+            "description": "How the source reaches the pods: `env` injects every Secret key as an environment variable (secret source only); `file` mounts the source at `mount_path` — read-only for a Secret (credentials), read-write for the volume sources (data volumes).",
             "enum": [
               "env",
               "file"

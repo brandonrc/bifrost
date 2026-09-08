@@ -66,9 +66,10 @@ func (p *PoolPurpose) UnmarshalJSON(data []byte) error {
 
 // --- Private storage catalog (#12) ---
 
-// StorageMode is how a storage entry's Secret reaches the pods: env
-// injects every key as an environment variable; file mounts the Secret
-// at the entry's MountPath.
+// StorageMode is how a storage entry's source reaches the pods: env
+// injects every Secret key as an environment variable; file mounts the
+// source at the entry's MountPath (read-only for a Secret, read-write for
+// the volume sources).
 type StorageMode string
 
 const (

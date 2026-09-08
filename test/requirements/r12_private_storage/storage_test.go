@@ -382,7 +382,7 @@ func TestVolumeSourceCatalogValidationAndResolution(t *testing.T) {
 
 func TestHostPathSourceMountsAtPath(t *testing.T) {
 	tgt := target.Get(t)
-	req.Covers(t, 12, "a host_path storage entry mounts the node path read-only at the catalogued path on the head pod")
+	req.Covers(t, 12, "a host_path storage entry mounts the node path read-write at the catalogued path on the head pod (a data volume, unlike the read-only Secret mounts)")
 	req.NeedK8s(t, tgt)
 	name := req.Name("node-data")
 	hostPath := "/var/lib/" + req.Name("r12-hostpath")
@@ -413,8 +413,8 @@ func TestHostPathSourceMountsAtPath(t *testing.T) {
 	for _, m := range head.Spec.Containers[0].VolumeMounts {
 		if m.Name == volume.Name {
 			mounted = true
-			if m.MountPath != mount || !m.ReadOnly {
-				t.Errorf("mount = %+v, want read-only at %s", m, mount)
+			if m.MountPath != mount || m.ReadOnly {
+				t.Errorf("mount = %+v, want read-write at %s", m, mount)
 			}
 		}
 	}
