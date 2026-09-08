@@ -57,11 +57,21 @@ func setStorageCatalog(t *testing.T, tgt req.Target, entries []client.StorageEnt
 }
 
 func envEntry(name, secret string, projects ...string) client.StorageEntry {
-	return client.StorageEntry{Name: name, SecretName: secret, Mode: client.Env, Projects: &projects}
+	return client.StorageEntry{Name: name, SecretName: &secret, Mode: client.Env, Projects: &projects}
 }
 
 func fileEntry(name, secret, mount string, projects ...string) client.StorageEntry {
-	return client.StorageEntry{Name: name, SecretName: secret, Mode: client.File, MountPath: &mount, Projects: &projects}
+	return client.StorageEntry{Name: name, SecretName: &secret, Mode: client.File, MountPath: &mount, Projects: &projects}
+}
+
+// hostPathEntry catalogs a node path as a volume-source storage entry.
+func hostPathEntry(name, path, hostType, mount string, projects ...string) client.StorageEntry {
+	src := client.HostPath
+	e := client.StorageEntry{Name: name, Source: &src, HostPath: &path, Mode: client.File, MountPath: &mount, Projects: &projects}
+	if hostType != "" {
+		e.HostType = &hostType
+	}
+	return e
 }
 
 // createWithStorage posts the canonical cluster body with storage names
@@ -131,7 +141,7 @@ func TestSecretValuesNeverAppearInResponses(t *testing.T) {
 	if err := json.Unmarshal(put, &view); err != nil {
 		t.Fatal(err)
 	}
-	allowed := map[string]bool{"name": true, "secret_name": true, "mode": true, "mount_path": true, "projects": true}
+	allowed := map[string]bool{"name": true, "source": true, "secret_name": true, "claim_name": true, "host_path": true, "host_type": true, "mode": true, "mount_path": true, "projects": true}
 	found := false
 	for _, e := range view.Storage {
 		if e["name"] == name {
@@ -316,4 +326,99 @@ func TestFileModeMountsAtPath(t *testing.T) {
 		t.Fatalf("head container does not mount volume %s: %+v", volume, head.Spec.Containers[0].VolumeMounts)
 	}
 	scanForValue(t, tgt, value, bodies)
+}
+
+// pvcEntry catalogs a PersistentVolumeClaim as a volume-source storage
+// entry. Claims are namespace-local: the claim must live where the pods
+// run.
+func pvcEntry(name, claim, mount string, projects ...string) client.StorageEntry {
+	src := client.PersistentVolumeClaim
+	return client.StorageEntry{Name: name, Source: &src, ClaimName: &claim, Mode: client.File, MountPath: &mount, Projects: &projects}
+}
+
+func TestVolumeSourceCatalogValidationAndResolution(t *testing.T) {
+	tgt := target.Get(t)
+	req.Covers(t, 12, "a storage entry may name a PersistentVolumeClaim or a host path as its source; the catalog edit validates the source's own fields and a spec resolves to the volume's delivery instructions")
+	ctx := context.Background()
+	admin := tgt.As("admin").API()
+
+	// A volume entry missing its source's own field is refused at the edit.
+	claim := req.Name("claim")
+	bad := pvcEntry(req.Name("bad"), claim, "/opt/data")
+	bad.ClaimName = nil
+	r, err := admin.UpdatePolicyWithResponse(ctx, client.UpdatePolicyJSONRequestBody{Storage: &[]client.StorageEntry{bad}})
+	if err != nil || r.StatusCode() != http.StatusBadRequest {
+		t.Fatalf("pvc entry without claim_name = %v/%d, want 400", err, r.StatusCode())
+	}
+
+	name := req.Name("pvc-data")
+	mount := "/opt/bifrost-r12-vol"
+	put := setStorageCatalog(t, tgt, []client.StorageEntry{pvcEntry(name, claim, mount, "team-a")})
+	var view struct {
+		Storage []map[string]any `json:"storage"`
+	}
+	if err := json.Unmarshal(put, &view); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, e := range view.Storage {
+		if e["name"] == name {
+			found = true
+			if e["source"] != "persistent_volume_claim" || e["claim_name"] != claim || e["mount_path"] != mount {
+				t.Errorf("policy view entry = %v, want the claim source and mount path", e)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("PUT response does not list %s: %s", name, put)
+	}
+
+	id := req.Name("storv")
+	st, body := createWithStorage(t, tgt, "dev-a", id, "team-a", name)
+	if st != http.StatusCreated {
+		t.Fatalf("create with a pvc storage entry = %d %s, want 201", st, body)
+	}
+}
+
+func TestHostPathSourceMountsAtPath(t *testing.T) {
+	tgt := target.Get(t)
+	req.Covers(t, 12, "a host_path storage entry mounts the node path read-only at the catalogued path on the head pod")
+	req.NeedK8s(t, tgt)
+	name := req.Name("node-data")
+	hostPath := "/var/lib/" + req.Name("r12-hostpath")
+	mount := "/opt/bifrost-r12-host"
+	setStorageCatalog(t, tgt, []client.StorageEntry{hostPathEntry(name, hostPath, "DirectoryOrCreate", mount, "team-a")})
+
+	id := req.Name("storh")
+	st, created := createWithStorage(t, tgt, "dev-a", id, "team-a", name)
+	if st != http.StatusCreated {
+		t.Fatalf("create = %d %s, want 201", st, created)
+	}
+	fixture.WaitObserved(t, tgt, "dev-a", id, "running")
+
+	head := headPod(t, tgt, id)
+	var volume *corev1.Volume
+	for i, v := range head.Spec.Volumes {
+		if v.HostPath != nil && v.HostPath.Path == hostPath {
+			volume = &head.Spec.Volumes[i]
+		}
+	}
+	if volume == nil {
+		t.Fatalf("head pod has no hostPath volume for %s: %+v", hostPath, head.Spec.Volumes)
+	}
+	if volume.HostPath.Type == nil || *volume.HostPath.Type != corev1.HostPathDirectoryOrCreate {
+		t.Errorf("hostPath type = %v, want DirectoryOrCreate", volume.HostPath.Type)
+	}
+	mounted := false
+	for _, m := range head.Spec.Containers[0].VolumeMounts {
+		if m.Name == volume.Name {
+			mounted = true
+			if m.MountPath != mount || !m.ReadOnly {
+				t.Errorf("mount = %+v, want read-only at %s", m, mount)
+			}
+		}
+	}
+	if !mounted {
+		t.Fatalf("head container does not mount volume %s: %+v", volume.Name, head.Spec.Containers[0].VolumeMounts)
+	}
 }

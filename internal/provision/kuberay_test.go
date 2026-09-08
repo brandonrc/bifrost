@@ -1266,3 +1266,145 @@ func TestOwnedFingerprintCoversStorage(t *testing.T) {
 		t.Fatal("a non-Secret volume must not change the fingerprint")
 	}
 }
+
+// testVolumeStorage is a resolved catalog with one PersistentVolumeClaim
+// entry and one host_path entry: the volume sources (requirement 12).
+func testVolumeStorage() []core.ResolvedStorage {
+	return []core.ResolvedStorage{
+		{Name: "analytics", Source: core.StorageSourcePersistentVolumeClaim, ClaimName: "checkmaite-analytics", Mode: core.StorageModeFile, MountPath: ptr.To("/app/data/analytics")},
+		{Name: "node-data", Source: core.StorageSourceHostPath, HostPath: "/srv/data", HostType: "Directory", Mode: core.StorageModeFile, MountPath: ptr.To("/srv/node-data")},
+	}
+}
+
+// assertVolumeStorageProjected checks one pod template carries the claim
+// and the host path as read-only volume mounts at their catalogued paths.
+func assertVolumeStorageProjected(t *testing.T, what string, tmpl *corev1.PodTemplateSpec) {
+	t.Helper()
+	c := tmpl.Spec.Containers[0]
+	if len(tmpl.Spec.Volumes) != 2 {
+		t.Fatalf("%s: volumes = %+v, want the claim and hostPath volumes", what, tmpl.Spec.Volumes)
+	}
+	claimVol := StorageVolumeName("analytics")
+	hostVol := StorageVolumeName("node-data")
+	seen := map[string]bool{}
+	for _, v := range tmpl.Spec.Volumes {
+		switch v.Name {
+		case claimVol:
+			seen[claimVol] = true
+			if v.PersistentVolumeClaim == nil || v.PersistentVolumeClaim.ClaimName != "checkmaite-analytics" || !v.PersistentVolumeClaim.ReadOnly {
+				t.Errorf("%s: claim volume = %+v, want read-only claim checkmaite-analytics", what, v)
+			}
+		case hostVol:
+			seen[hostVol] = true
+			if v.HostPath == nil || v.HostPath.Path != "/srv/data" || v.HostPath.Type == nil || *v.HostPath.Type != corev1.HostPathDirectory {
+				t.Errorf("%s: hostPath volume = %+v, want /srv/data type Directory", what, v)
+			}
+		default:
+			t.Errorf("%s: unexpected volume %+v", what, v)
+		}
+	}
+	if !seen[claimVol] || !seen[hostVol] {
+		t.Fatalf("%s: volumes = %+v, want %s and %s", what, tmpl.Spec.Volumes, claimVol, hostVol)
+	}
+	mounts := map[string]corev1.VolumeMount{}
+	for _, m := range c.VolumeMounts {
+		mounts[m.Name] = m
+	}
+	for name, path := range map[string]string{claimVol: "/app/data/analytics", hostVol: "/srv/node-data"} {
+		m, ok := mounts[name]
+		if !ok || m.MountPath != path || !m.ReadOnly {
+			t.Errorf("%s: mount for %s = %+v, want read-only at %s", what, name, m, path)
+		}
+	}
+}
+
+func TestVolumeSourcesAreProjectedOntoEveryPodTemplate(t *testing.T) {
+	spec := testSpec(t, wg("cpu", 0, 4, 2), wg("gpu", 0, 1, 1))
+	spec.StorageResolved = testVolumeStorage()
+	rc, err := RayClusterFor("demo", spec, false, 1, nil)
+	if err != nil {
+		t.Fatalf("RayClusterFor: %v", err)
+	}
+	assertVolumeStorageProjected(t, "head", &rc.Spec.HeadGroupSpec.Template)
+	for i := range rc.Spec.WorkerGroupSpecs {
+		assertVolumeStorageProjected(t, "worker "+rc.Spec.WorkerGroupSpecs[i].GroupName, &rc.Spec.WorkerGroupSpecs[i].Template)
+	}
+
+	svc := testServiceSpec(core.UpgradeStrategyCanary)
+	svc.StorageResolved = testVolumeStorage()
+	rs, err := RayServiceFor("svc", svc, 1, nil)
+	if err != nil {
+		t.Fatalf("RayServiceFor: %v", err)
+	}
+	assertVolumeStorageProjected(t, "service head", &rs.Spec.RayClusterSpec.HeadGroupSpec.Template)
+	assertVolumeStorageProjected(t, "service worker", &rs.Spec.RayClusterSpec.WorkerGroupSpecs[0].Template)
+}
+
+// The owned fingerprint covers the volume sources: it round-trips through
+// the manifest, and a re-pointed claim, a re-typed host path or a stripped
+// volume is drift.
+func TestOwnedFingerprintCoversVolumeSources(t *testing.T) {
+	spec := testSpec(t, wg("cpu", 0, 4, 2))
+	spec.StorageResolved = testVolumeStorage()
+	want := OwnedSpecFingerprint(spec)
+	rc, err := RayClusterFor("demo", spec, false, 1, nil)
+	if err != nil {
+		t.Fatalf("RayClusterFor: %v", err)
+	}
+	got, ok := FingerprintFromRayCluster(&rc.Spec)
+	if !ok || got != want {
+		t.Fatalf("fingerprint mismatch (ok=%v):\nwant %s\ngot  %s", ok, want, got)
+	}
+
+	// A spec re-pointed at another claim fingerprints differently.
+	repointed := testSpec(t, wg("cpu", 0, 4, 2))
+	repointed.StorageResolved = testVolumeStorage()
+	repointed.StorageResolved[0].ClaimName = "other-claim"
+	if OwnedSpecFingerprint(repointed) == want {
+		t.Fatal("a changed claim name must change the fingerprint")
+	}
+
+	// Strip the claim volume from the live manifest: drift.
+	stripped := rc.DeepCopy()
+	vols := stripped.Spec.HeadGroupSpec.Template.Spec.Volumes
+	for i, v := range vols {
+		if v.PersistentVolumeClaim != nil {
+			stripped.Spec.HeadGroupSpec.Template.Spec.Volumes = append(vols[:i], vols[i+1:]...)
+		}
+	}
+	if fp, _ := FingerprintFromRayCluster(&stripped.Spec); fp == want {
+		t.Fatal("a removed claim volume must change the fingerprint")
+	}
+	// Re-type the host path on the live manifest: drift.
+	retyped := rc.DeepCopy()
+	for i, v := range retyped.Spec.HeadGroupSpec.Template.Spec.Volumes {
+		if v.HostPath != nil {
+			t := corev1.HostPathFileOrCreate
+			retyped.Spec.HeadGroupSpec.Template.Spec.Volumes[i].HostPath.Type = &t
+		}
+	}
+	if fp, _ := FingerprintFromRayCluster(&retyped.Spec); fp == want {
+		t.Fatal("a re-typed host path must change the fingerprint")
+	}
+}
+
+// A host_path entry with no declared type projects a nil Type (Kubernetes
+// then performs no node-path checking) and still round-trips the
+// fingerprint.
+func TestHostPathWithoutTypeProjectsNilType(t *testing.T) {
+	spec := testSpec(t, wg("cpu", 0, 4, 2))
+	spec.StorageResolved = []core.ResolvedStorage{
+		{Name: "any", Source: core.StorageSourceHostPath, HostPath: "/srv/anything", Mode: core.StorageModeFile, MountPath: ptr.To("/opt/any")},
+	}
+	rc, err := RayClusterFor("demo", spec, false, 1, nil)
+	if err != nil {
+		t.Fatalf("RayClusterFor: %v", err)
+	}
+	v := rc.Spec.HeadGroupSpec.Template.Spec.Volumes[0]
+	if v.HostPath == nil || v.HostPath.Type != nil {
+		t.Fatalf("volume = %+v, want a hostPath with nil Type", v)
+	}
+	if fp, ok := FingerprintFromRayCluster(&rc.Spec); !ok || fp != OwnedSpecFingerprint(spec) {
+		t.Fatalf("fingerprint did not round-trip for a typeless host path")
+	}
+}

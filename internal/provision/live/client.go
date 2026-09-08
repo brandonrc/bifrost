@@ -224,24 +224,37 @@ func (c *Client) ensureClusterAllow(ctx context.Context, id string, owner *strin
 	return c.applyNetworkPolicy(ctx, c.namespace, provision.ClusterAllowNetworkPolicy(id, owner))
 }
 
-// ensureSecretsExist fails fast when a Secret the spec's storage entries
-// (requirement 12) name is missing from the workload namespace, so the
-// cluster surfaces a condition the user can read instead of pods stuck in
-// CreateContainerConfigError. The check is METADATA ONLY: the Get asks for
-// a PartialObjectMetadata, so the Secret's data never reaches Bifrost's
+// ensureStorageSourcesExist fails fast when an object the spec's storage
+// entries (requirement 12) name is missing from the workload namespace, so
+// the cluster surfaces a condition the user can read instead of pods stuck
+// in CreateContainerConfigError (a missing Secret) or Pending (a missing
+// claim). The check is METADATA ONLY: the Get asks for a
+// PartialObjectMetadata, so a Secret's data never reaches Bifrost's
 // process (RBAC grants `secrets: get`, and this is the only use of it).
-func (c *Client) ensureSecretsExist(ctx context.Context, storage []core.ResolvedStorage) error {
-	return ensureSecretsExist(ctx, c.c, c.namespace, storage)
+// host_path entries name no API-server object — a wrong node path surfaces
+// as the kubelet's own FailedMount event.
+func (c *Client) ensureStorageSourcesExist(ctx context.Context, storage []core.ResolvedStorage) error {
+	return ensureStorageSourcesExist(ctx, c.c, c.namespace, storage)
 }
 
-func ensureSecretsExist(ctx context.Context, c client.Client, namespace string, storage []core.ResolvedStorage) error {
+func ensureStorageSourcesExist(ctx context.Context, c client.Client, namespace string, storage []core.ResolvedStorage) error {
 	for _, st := range storage {
 		meta := &metav1.PartialObjectMetadata{}
-		meta.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Secret"))
-		if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: st.SecretName}, meta); err != nil {
+		var name string
+		switch st.Source.OrDefault() {
+		case core.StorageSourcePersistentVolumeClaim:
+			meta.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("PersistentVolumeClaim"))
+			name = st.ClaimName
+		case core.StorageSourceHostPath:
+			continue // node-local; no API-server object to check
+		default:
+			meta.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Secret"))
+			name = st.SecretName
+		}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, meta); err != nil {
 			if apierrors.IsNotFound(err) {
 				return provision.ProvisionError{Kind: provision.ProvisionErrBackend,
-					Message: fmt.Sprintf("secret %q not found in namespace %s (storage entry %q)", st.SecretName, namespace, st.Name)}
+					Message: fmt.Sprintf("%s %q not found in namespace %s (storage entry %q)", meta.GetObjectKind().GroupVersionKind().Kind, name, namespace, st.Name)}
 			}
 			return wrapErr(err)
 		}
@@ -331,7 +344,7 @@ func (c *Client) Apply(ctx context.Context, id core.ClusterId, spec *core.Cluste
 	if err := c.ensureClusterAllow(ctx, string(id), spec.Owner); err != nil {
 		return provision.ApplyResponse{}, err
 	}
-	if err := c.ensureSecretsExist(ctx, spec.StorageResolved); err != nil {
+	if err := c.ensureStorageSourcesExist(ctx, spec.StorageResolved); err != nil {
 		return provision.ApplyResponse{}, err
 	}
 	manifest, err := provision.RayClusterFor(id, spec, c.autoscaling, generation, queue)
@@ -551,7 +564,7 @@ func (s *ServiceClient) Deploy(ctx context.Context, name string, spec *core.Serv
 	if err := s.ensureClusterAllow(ctx, name, nil); err != nil {
 		return err
 	}
-	if err := s.ensureSecretsExist(ctx, spec.StorageResolved); err != nil {
+	if err := s.ensureStorageSourcesExist(ctx, spec.StorageResolved); err != nil {
 		return err
 	}
 	// queue is the project's serving LocalQueue (requirement 4), resolved

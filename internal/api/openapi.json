@@ -2199,10 +2199,31 @@
         "type": "object"
       },
       "StorageEntry": {
-        "description": "A catalog entry for private storage credentials (#12): a Kubernetes Secret Bifrost delivers to the pods of any cluster, job or service that names this entry in its `storage` list. The API only ever sees the name; the secret's contents never cross it.",
+        "description": "A catalog entry for private storage (#12): a Secret, PersistentVolumeClaim or host path Bifrost delivers to the pods of any cluster, job or service that names this entry in its `storage` list. The API only ever sees names and paths; a Secret's contents never cross it.",
         "properties": {
+          "claim_name": {
+            "description": "Name of the PersistentVolumeClaim in the workload namespace (`persistent_volume_claim` source only). Claims are namespace-local: the claim must live where the pods run.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "host_path": {
+            "description": "Node path a `host_path` entry mounts (`host_path` source only).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "host_type": {
+            "description": "Kubernetes HostPathType for a `host_path` entry (`Directory`, `FileOrCreate`, ...); `null`/empty = no node-path type checking.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "mode": {
-            "description": "How the secret reaches the pods: `env` injects every key as an environment variable; `file` mounts the secret at `mount_path`.",
+            "description": "How the source reaches the pods: `env` injects every Secret key as an environment variable (secret source only); `file` mounts the source read-only at `mount_path`.",
             "enum": [
               "env",
               "file"
@@ -2228,13 +2249,24 @@
             "type": "array"
           },
           "secret_name": {
-            "description": "Name of the Kubernetes Secret in the workload namespace.",
+            "description": "Name of the Kubernetes Secret in the workload namespace (`secret` source only).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "description": "What backs the entry: a Kubernetes Secret, a PersistentVolumeClaim, or a host path on the node. Absent = `secret`. The volume sources are `file` mode only.",
+            "enum": [
+              "secret",
+              "persistent_volume_claim",
+              "host_path"
+            ],
             "type": "string"
           }
         },
         "required": [
           "name",
-          "secret_name",
           "mode"
         ],
         "type": "object"

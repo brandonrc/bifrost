@@ -269,7 +269,9 @@ func resolvedStorageEqual(a, b []core.ResolvedStorage) bool {
 		return false
 	}
 	for i := range a {
-		if a[i].Name != b[i].Name || a[i].SecretName != b[i].SecretName || a[i].Mode != b[i].Mode ||
+		if a[i].Name != b[i].Name || a[i].Source.OrDefault() != b[i].Source.OrDefault() ||
+			a[i].SecretName != b[i].SecretName || a[i].ClaimName != b[i].ClaimName ||
+			a[i].HostPath != b[i].HostPath || a[i].HostType != b[i].HostType || a[i].Mode != b[i].Mode ||
 			!stringPtrEqual(a[i].MountPath, b[i].MountPath) {
 			return false
 		}

@@ -87,12 +87,12 @@ func TestEnsureSecretsExistIsMetadataOnlyAndFailsFast(t *testing.T) {
 		{Name: "s3-a", SecretName: "s3-a-creds", Mode: core.StorageModeEnv},
 		{Name: "gcs", SecretName: "gcs-key", Mode: core.StorageModeFile},
 	}
-	err := ensureSecretsExist(context.Background(), fake, "tenants", storage)
+	err := ensureStorageSourcesExist(context.Background(), fake, "tenants", storage)
 	if err == nil {
 		t.Fatal("a missing Secret must fail the apply")
 	}
 	var perr provision.ProvisionError
-	if !errors.As(err, &perr) || perr.Kind != provision.ProvisionErrBackend || !strings.Contains(perr.Message, `secret "gcs-key" not found`) {
+	if !errors.As(err, &perr) || perr.Kind != provision.ProvisionErrBackend || !strings.Contains(perr.Message, `Secret "gcs-key" not found`) {
 		t.Fatalf("err = %v, want a backend ProvisionError naming gcs-key", err)
 	}
 	if len(fake.asked) != 2 {
@@ -107,10 +107,45 @@ func TestEnsureSecretsExistIsMetadataOnlyAndFailsFast(t *testing.T) {
 			t.Fatalf("Get asked for %s, want core/v1 Secret metadata", gvk)
 		}
 	}
-	if err := ensureSecretsExist(context.Background(), fake, "tenants", storage[:1]); err != nil {
+	if err := ensureStorageSourcesExist(context.Background(), fake, "tenants", storage[:1]); err != nil {
 		t.Fatalf("all present: %v", err)
 	}
-	if err := ensureSecretsExist(context.Background(), fake, "tenants", nil); err != nil {
+	if err := ensureStorageSourcesExist(context.Background(), fake, "tenants", nil); err != nil {
 		t.Fatalf("no storage: %v", err)
+	}
+}
+
+func TestEnsureStorageSourcesExistVolumes(t *testing.T) {
+	fake := &fakeGetClient{present: map[string]bool{"analytics": true}}
+	mount := "/app/data"
+	storage := []core.ResolvedStorage{
+		{Name: "data", Source: core.StorageSourcePersistentVolumeClaim, ClaimName: "analytics", Mode: core.StorageModeFile, MountPath: &mount},
+		{Name: "node-data", Source: core.StorageSourceHostPath, HostPath: "/srv/data", HostType: "Directory", Mode: core.StorageModeFile, MountPath: &mount},
+		{Name: "missing", Source: core.StorageSourcePersistentVolumeClaim, ClaimName: "gone", Mode: core.StorageModeFile, MountPath: &mount},
+	}
+	err := ensureStorageSourcesExist(context.Background(), fake, "tenants", storage)
+	if err == nil {
+		t.Fatal("a missing claim must fail the apply")
+	}
+	var perr provision.ProvisionError
+	if !errors.As(err, &perr) || perr.Kind != provision.ProvisionErrBackend || !strings.Contains(perr.Message, `PersistentVolumeClaim "gone" not found`) {
+		t.Fatalf("err = %v, want a backend ProvisionError naming the claim", err)
+	}
+	// The host_path entry names no API-server object: only the two claims
+	// were looked up, as metadata.
+	if len(fake.asked) != 2 {
+		t.Fatalf("Get calls = %d, want 2 (claims only; host_path is node-local)", len(fake.asked))
+	}
+	for _, obj := range fake.asked {
+		meta, ok := obj.(*metav1.PartialObjectMetadata)
+		if !ok {
+			t.Fatalf("Get asked for %T; only PartialObjectMetadata may be requested", obj)
+		}
+		if gvk := meta.GroupVersionKind(); gvk.Kind != "PersistentVolumeClaim" || gvk.Version != "v1" {
+			t.Fatalf("Get asked for %s, want core/v1 PersistentVolumeClaim metadata", gvk)
+		}
+	}
+	if err := ensureStorageSourcesExist(context.Background(), fake, "tenants", storage[:2]); err != nil {
+		t.Fatalf("claim present + host_path skipped: %v", err)
 	}
 }

@@ -102,16 +102,84 @@ func (m *StorageMode) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// StorageEntry is a catalog entry for private storage credentials: a
-// Kubernetes Secret Bifrost delivers to the pods of any cluster, job or
-// service whose spec names this entry in its `storage` list. The API only
-// ever sees the name; the Secret's contents never cross it.
+// StorageSource is what backs a storage entry: a Kubernetes Secret in the
+// workload namespace (the original #12 source, delivered as env vars or a
+// file mount), a PersistentVolumeClaim in the workload namespace, or a
+// hostPath on the node (single-node clusters; nothing to catalog at all).
+// The volume sources are file-mode only — a volume has no keys to inject
+// as environment variables.
+type StorageSource string
+
+const (
+	StorageSourceSecret                StorageSource = "secret"
+	StorageSourcePersistentVolumeClaim StorageSource = "persistent_volume_claim"
+	StorageSourceHostPath              StorageSource = "host_path"
+)
+
+// DefaultStorageSource is the source a StorageEntry has when its `source`
+// key is absent from JSON input: every pre-volume entry is a Secret entry.
+const DefaultStorageSource = StorageSourceSecret
+
+func (s StorageSource) isValid() bool {
+	switch s {
+	case StorageSourceSecret, StorageSourcePersistentVolumeClaim, StorageSourceHostPath:
+		return true
+	}
+	return false
+}
+
+// String returns the wire value ("secret" | "persistent_volume_claim" |
+// "host_path").
+func (s StorageSource) String() string { return string(s) }
+
+// OrDefault maps the zero value onto DefaultStorageSource so an entry
+// written before volume sources existed and one written with
+// "source":"secret" compare equal.
+func (s StorageSource) OrDefault() StorageSource {
+	if s == "" {
+		return DefaultStorageSource
+	}
+	return s
+}
+
+// UnmarshalJSON rejects any value other than the known StorageSource
+// variants, mirroring the other strict catalog enums.
+func (s *StorageSource) UnmarshalJSON(data []byte) error {
+	var v string
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	src := StorageSource(v)
+	if !src.isValid() {
+		return fmt.Errorf("core: invalid StorageSource %q", v)
+	}
+	*s = src
+	return nil
+}
+
+// StorageEntry is a catalog entry for private storage: a Secret,
+// PersistentVolumeClaim or host path Bifrost delivers to the pods of any
+// cluster, job or service whose spec names this entry in its `storage`
+// list. The API only ever sees names and paths; a Secret's contents never
+// cross it.
 type StorageEntry struct {
 	// Name is the catalog name a spec refers to.
 	Name string `json:"name"`
-	// SecretName is the Kubernetes Secret in the workload namespace.
-	SecretName string      `json:"secret_name"`
-	Mode       StorageMode `json:"mode"`
+	// Source is what backs the entry; absent in JSON = secret.
+	Source StorageSource `json:"source,omitempty"`
+	// SecretName is the Kubernetes Secret in the workload namespace
+	// (secret source only).
+	SecretName string `json:"secret_name,omitempty"`
+	// ClaimName is the PersistentVolumeClaim in the workload namespace
+	// (persistent_volume_claim source only). Claims are namespace-local:
+	// the claim must live where the pods run.
+	ClaimName string `json:"claim_name,omitempty"`
+	// HostPath is the node path a host_path entry mounts.
+	HostPath string `json:"host_path,omitempty"`
+	// HostType is the Kubernetes HostPathType ("Directory", ...); "" = no
+	// node-path type checking.
+	HostType string      `json:"host_type,omitempty"`
+	Mode     StorageMode `json:"mode"`
 	// MountPath is the mount point inside the pods (StorageModeFile
 	// only); nil for env mode.
 	MountPath *string `json:"mount_path"`
@@ -136,12 +204,18 @@ func (e StorageEntry) MarshalJSON() ([]byte, error) {
 // ResolvedStorage is one Storage name resolved against the catalog at
 // admission time: the delivery instructions the provisioner needs, and
 // nothing the API should echo. Persisted on the spec so a later catalog
-// edit is never retroactive (the predecessor's pod-shaping rule).
+// edit is never retroactive (the predecessor's pod-shaping rule). The
+// source fields are omitempty so a resolution persisted before volume
+// sources existed keeps its exact shape.
 type ResolvedStorage struct {
-	Name       string      `json:"name"`
-	SecretName string      `json:"secret_name"`
-	Mode       StorageMode `json:"mode"`
-	MountPath  *string     `json:"mount_path"`
+	Name       string        `json:"name"`
+	Source     StorageSource `json:"source,omitempty"`
+	SecretName string        `json:"secret_name"`
+	ClaimName  string        `json:"claim_name,omitempty"`
+	HostPath   string        `json:"host_path,omitempty"`
+	HostType   string        `json:"host_type,omitempty"`
+	Mode       StorageMode   `json:"mode"`
+	MountPath  *string       `json:"mount_path"`
 }
 
 // --- Profile catalog and admission (#7) ---

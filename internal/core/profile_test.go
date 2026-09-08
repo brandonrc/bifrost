@@ -51,6 +51,35 @@ func TestStorageModeStrict(t *testing.T) {
 	}
 }
 
+func TestStorageSourceStrictAndDefault(t *testing.T) {
+	var s StorageSource
+	if err := json.Unmarshal([]byte(`"persistent_volume_claim"`), &s); err != nil || s != StorageSourcePersistentVolumeClaim {
+		t.Fatalf("unmarshal persistent_volume_claim: %v %v", s, err)
+	}
+	if err := json.Unmarshal([]byte(`"nfs"`), &s); err == nil || !strings.Contains(err.Error(), "invalid StorageSource") {
+		t.Fatalf("unknown source must be rejected: %v", err)
+	}
+	if StorageSource("").OrDefault() != StorageSourceSecret {
+		t.Fatal("the zero source must default to secret")
+	}
+	// An entry serialized before volume sources existed deserializes with
+	// the default source and round-trips to the same shape (omitempty).
+	var e StorageEntry
+	if err := json.Unmarshal([]byte(`{"name":"a","secret_name":"s","mode":"env","projects":[]}`), &e); err != nil {
+		t.Fatal(err)
+	}
+	if e.Source != "" || e.Source.OrDefault() != StorageSourceSecret {
+		t.Fatalf("absent source must stay zero-valued, got %q", e.Source)
+	}
+	b, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "source") {
+		t.Fatalf("a secret entry must not grow a source key on re-serialize: %s", b)
+	}
+}
+
 func TestCatalogTypesMarshalNilSlicesAsEmpty(t *testing.T) {
 	check := func(t *testing.T, v any, keys ...string) {
 		t.Helper()

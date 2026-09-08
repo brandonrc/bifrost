@@ -1,9 +1,11 @@
 // Private storage catalog (requirement 12, plan ruling D7): administrators
-// catalog Kubernetes Secrets as named storage entries in the policy row;
-// a spec names entries; the provisioner projects them onto the pods as
-// `envFrom.secretRef` (env) or a read-only Secret volume (file). The
-// Secret's contents never cross Bifrost: the API carries names only, and
-// the resolution persisted on a spec is delivery instructions, not data.
+// catalog storage sources as named entries in the policy row; a spec names
+// entries; the provisioner projects them onto the pods as
+// `envFrom.secretRef` (env, secret source), a read-only volume at the
+// entry's mount path (file) backed by a Secret, a PersistentVolumeClaim or
+// a hostPath. A Secret's contents never cross Bifrost: the API carries
+// names and paths only, and the resolution persisted on a spec is delivery
+// instructions, not data.
 //
 // The predecessor's pod-shaping rule applies: the catalog is validated as
 // a unit at the edit, a spec is resolved once at admission, and a later
@@ -54,19 +56,42 @@ func mountPathReserved(p string) bool {
 	return false
 }
 
+// hostPathTypes are the Kubernetes HostPathType values a host_path entry
+// may declare ("" = no node-path type checking). Mirrored here rather than
+// imported from k8s.io/api so the API edge does not depend on the
+// provisioner's dependency set.
+var hostPathTypes = map[string]bool{
+	"": true, "DirectoryOrCreate": true, "Directory": true, "FileOrCreate": true,
+	"File": true, "Socket": true, "CharDevice": true, "BlockDevice": true,
+}
+
 // storageEntryToWire converts one catalog entry for PolicyView. Only the
-// name, the Secret's name and the delivery mode are ever on the wire — the
-// Secret's data is not a thing Bifrost can read, let alone echo.
+// name, the source's names/paths and the delivery mode are ever on the
+// wire — a Secret's data is not a thing Bifrost can read, let alone echo.
 func storageEntryToWire(e *core.StorageEntry) StorageEntry {
 	projects := make([]string, len(e.Projects))
 	copy(projects, e.Projects)
+	source := StorageEntrySource(e.Source.OrDefault())
 	return StorageEntry{
 		Name:       e.Name,
-		SecretName: e.SecretName,
+		Source:     &source,
+		SecretName: strPtrOrNil(e.SecretName),
+		ClaimName:  strPtrOrNil(e.ClaimName),
+		HostPath:   strPtrOrNil(e.HostPath),
+		HostType:   strPtrOrNil(e.HostType),
 		Mode:       StorageEntryMode(e.Mode),
 		MountPath:  e.MountPath,
 		Projects:   &projects,
 	}
+}
+
+// strPtrOrNil maps an empty optional field onto nil so the wire carries
+// `null`, never `""`, for a field the entry's source does not use.
+func strPtrOrNil(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 // storageToWire never returns nil: the contract's catalog is `[]`, not
@@ -82,10 +107,13 @@ func storageToWire(in []core.StorageEntry) []StorageEntry {
 // storageFromWire converts an incoming catalog and validates it as a
 // unit, refusing the edit with a precise 400 rather than letting every
 // later create fail (the Rust predecessor's rule: validate at the edit). Checks: unique
-// RFC 1123 names; an RFC 1123 secret_name; a known mode; for file mode a
-// mount_path that is absolute, unique across the catalog and neither a
-// reserved path nor under one; no mount_path for env mode; non-empty
-// project names.
+// RFC 1123 names; a known source; the source's own required name/path
+// (secret_name / claim_name RFC 1123, host_path absolute, host_type a
+// known HostPathType) with no other source's fields set; a known mode —
+// `file` for the volume sources, which have no keys to inject; for file
+// mode a mount_path that is absolute, unique across the catalog and
+// neither a reserved path nor under one; no mount_path for env mode;
+// non-empty project names.
 func storageFromWire(in []StorageEntry) ([]core.StorageEntry, error) {
 	out := make([]core.StorageEntry, 0, len(in))
 	seen := make(map[string]bool, len(in))
@@ -103,10 +131,82 @@ func storageFromWire(in []StorageEntry) ([]core.StorageEntry, error) {
 			return nil, badRequest(what + "duplicate name")
 		}
 		seen[w.Name] = true
-		if !core.IsK8sName(w.SecretName) {
-			return nil, badRequest(what + "secret_name must be a valid Kubernetes Secret name (RFC 1123)")
+		e := core.StorageEntry{Name: w.Name, Mode: core.StorageMode(w.Mode)}
+		src := core.DefaultStorageSource
+		if w.Source != nil {
+			src = core.StorageSource(*w.Source)
 		}
-		e := core.StorageEntry{Name: w.Name, SecretName: w.SecretName, Mode: core.StorageMode(w.Mode)}
+		// fieldForSource rejects a set field that belongs to another
+		// source, so a catalog cannot carry a Secret name a volume entry
+		// would silently ignore.
+		fieldForSource := func(p *string, field, source string) error {
+			if p != nil && *p != "" {
+				return badRequest(fmt.Sprintf("%s%s is only valid for source %q", what, field, source))
+			}
+			return nil
+		}
+		switch src {
+		case core.StorageSourceSecret:
+			if w.SecretName == nil || *w.SecretName == "" {
+				return nil, badRequest(what + "secret_name is required for source \"secret\"")
+			}
+			if !core.IsK8sName(*w.SecretName) {
+				return nil, badRequest(what + "secret_name must be a valid Kubernetes Secret name (RFC 1123)")
+			}
+			e.SecretName = *w.SecretName
+			for _, f := range []struct {
+				p    *string
+				name string
+			}{{w.ClaimName, "claim_name"}, {w.HostPath, "host_path"}, {w.HostType, "host_type"}} {
+				if err := fieldForSource(f.p, f.name, "persistent_volume_claim/host_path"); err != nil {
+					return nil, err
+				}
+			}
+		case core.StorageSourcePersistentVolumeClaim:
+			if w.ClaimName == nil || *w.ClaimName == "" {
+				return nil, badRequest(what + "claim_name is required for source \"persistent_volume_claim\"")
+			}
+			if !core.IsK8sName(*w.ClaimName) {
+				return nil, badRequest(what + "claim_name must be a valid PersistentVolumeClaim name (RFC 1123)")
+			}
+			e.ClaimName = *w.ClaimName
+			for _, f := range []struct {
+				p    *string
+				name string
+			}{{w.SecretName, "secret_name"}, {w.HostPath, "host_path"}, {w.HostType, "host_type"}} {
+				if err := fieldForSource(f.p, f.name, "secret/host_path"); err != nil {
+					return nil, err
+				}
+			}
+		case core.StorageSourceHostPath:
+			if w.HostPath == nil || *w.HostPath == "" {
+				return nil, badRequest(what + "host_path is required for source \"host_path\"")
+			}
+			if !strings.HasPrefix(*w.HostPath, "/") {
+				return nil, badRequest(what + "host_path must be absolute")
+			}
+			e.HostPath = *w.HostPath
+			if w.HostType != nil {
+				if !hostPathTypes[*w.HostType] {
+					return nil, badRequest(fmt.Sprintf("%shost_type %q is not a Kubernetes HostPathType", what, *w.HostType))
+				}
+				e.HostType = *w.HostType
+			}
+			for _, f := range []struct {
+				p    *string
+				name string
+			}{{w.SecretName, "secret_name"}, {w.ClaimName, "claim_name"}} {
+				if err := fieldForSource(f.p, f.name, "secret/persistent_volume_claim"); err != nil {
+					return nil, err
+				}
+			}
+		default:
+			return nil, badRequest(fmt.Sprintf("%ssource must be \"secret\", \"persistent_volume_claim\" or \"host_path\"", what))
+		}
+		e.Source = src
+		if src != core.StorageSourceSecret && e.Mode == core.StorageModeEnv {
+			return nil, badRequest(what + "mode \"env\" is only valid for source \"secret\" (a volume has no keys to inject)")
+		}
 		switch e.Mode {
 		case core.StorageModeEnv:
 			if w.MountPath != nil && *w.MountPath != "" {
@@ -199,7 +299,10 @@ func (s *Server) resolveStorage(ctx context.Context, project string, names []str
 		if !storageAvailableTo(entry, project) {
 			return nil, badRequest(fmt.Sprintf("storage %q is not available to project %q", name, project))
 		}
-		r := core.ResolvedStorage{Name: entry.Name, SecretName: entry.SecretName, Mode: entry.Mode}
+		r := core.ResolvedStorage{
+			Name: entry.Name, Source: entry.Source.OrDefault(), SecretName: entry.SecretName,
+			ClaimName: entry.ClaimName, HostPath: entry.HostPath, HostType: entry.HostType, Mode: entry.Mode,
+		}
 		if entry.MountPath != nil {
 			mp := *entry.MountPath
 			r.MountPath = &mp
