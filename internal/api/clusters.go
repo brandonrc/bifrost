@@ -584,12 +584,18 @@ func (s *Server) denyCreate(ctx context.Context, identity *auth.Identity, idStr,
 // DeleteCluster marks a cluster for termination (default) or, with
 // ?purge=true, hard-deletes an already-terminated/gone tombstone row
 // (Truthful Console). Scoped RBAC (#49): fetch first (the check needs the
-// cluster's project), then require Write on Cluster scoped to it.
+// cluster's project), then require Write on Cluster scoped to it. A row
+// whose spec_json the current binary can no longer decode fails that
+// fetch — see deleteUndecodableCluster for the escape hatch.
 func (s *Server) DeleteCluster(ctx context.Context, req DeleteClusterRequestObject) (DeleteClusterResponseObject, error) {
 	identity, _ := IdentityFromContext(ctx)
 	id := core.ClusterId(req.Id)
+	purge := req.Params.Purge != nil && *req.Params.Purge
 	stored, err := s.Store.Get(ctx, id)
 	if err != nil {
+		if controller.IsSerializationError(err) {
+			return s.deleteUndecodableCluster(ctx, identity, id, purge)
+		}
 		return nil, wrapStoreErr(err)
 	}
 	if stored == nil {
@@ -599,10 +605,45 @@ func (s *Server) DeleteCluster(ctx context.Context, req DeleteClusterRequestObje
 		return nil, err
 	}
 
-	if req.Params.Purge != nil && *req.Params.Purge {
+	if purge {
 		return s.purgeCluster(ctx, identity, id, stored)
 	}
+	return s.terminateCluster(ctx, identity, id)
+}
 
+// deleteUndecodableCluster is the escape hatch for a cluster row whose
+// spec_json the current binary can no longer decode (e.g. written before
+// an enum value was retired): Store.Get fails on it, so without this path
+// the row could never be removed through the API — and its presence must
+// not 500 DELETE for everyone. The row's project is unknowable, so only
+// GLOBAL (unscoped) Write on Cluster authorizes the call; every operation
+// below is keyed on id alone and decodes no spec.
+func (s *Server) deleteUndecodableCluster(ctx context.Context, identity *auth.Identity, id core.ClusterId, purge bool) (DeleteClusterResponseObject, error) {
+	if err := Authorize(ctx, s.Store, identity, auth.Write, auth.TargetCluster); err != nil {
+		return nil, err
+	}
+	if !purge {
+		return s.terminateCluster(ctx, identity, id)
+	}
+	// The same refuse-if-not-tombstone rule purgeCluster applies, via a
+	// check that reads no spec_json.
+	desired, observedGone, found, err := s.Store.TombstoneByID(ctx, id)
+	if err != nil {
+		return nil, wrapStoreErr(err)
+	}
+	if !found {
+		return nil, notFound("no such cluster")
+	}
+	if desired != controller.DesiredTerminated || !observedGone {
+		return nil, conflict("cannot purge a live cluster: it must be terminated and observed gone first")
+	}
+	return s.removeClusterRow(ctx, identity, id)
+}
+
+// terminateCluster flips id to desired=terminated and audits the 202 —
+// DeleteCluster's plain-delete tail, shared with the undecodable-row
+// escape hatch (SetDesired is an UPDATE by id, no spec decode).
+func (s *Server) terminateCluster(ctx context.Context, identity *auth.Identity, id core.ClusterId) (DeleteClusterResponseObject, error) {
 	if err := s.Store.SetDesired(ctx, id, controller.DesiredTerminated); err != nil {
 		if storeErrContains(err, "no such cluster") {
 			return nil, notFound("no such cluster")
@@ -629,6 +670,13 @@ func (s *Server) purgeCluster(ctx context.Context, identity *auth.Identity, id c
 	if !isTombstone {
 		return nil, conflict("cannot purge a live cluster: it must be terminated and observed gone first")
 	}
+	return s.removeClusterRow(ctx, identity, id)
+}
+
+// removeClusterRow hard-deletes id's row and audits the 200 — the purge
+// tail, shared with the undecodable-row escape hatch (whose tombstone
+// check runs on TombstoneByID instead of a decoded StoredCluster).
+func (s *Server) removeClusterRow(ctx context.Context, identity *auth.Identity, id core.ClusterId) (DeleteClusterResponseObject, error) {
 	removed, err := s.Store.RemoveCluster(ctx, id)
 	if err != nil {
 		return nil, wrapStoreErr(err)

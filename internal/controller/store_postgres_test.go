@@ -64,6 +64,15 @@ func postgresTestURL(t *testing.T) string {
 // (one fresh Store per t.Run section).
 func newTestPostgresStore(t *testing.T, url string) *controller.PostgresStore {
 	t.Helper()
+	store, _ := newTestPostgresStorePool(t, url)
+	return store
+}
+
+// newTestPostgresStorePool is newTestPostgresStore with the pool returned
+// too, for tests that seed below the Store interface with raw SQL (the
+// undecodable-row case).
+func newTestPostgresStorePool(t *testing.T, url string) (*controller.PostgresStore, *pgxpool.Pool) {
+	t.Helper()
 	ctx := context.Background()
 	schema := fmt.Sprintf("conf_%d_%d", os.Getpid(), nextPgSchema.Add(1))
 
@@ -92,7 +101,7 @@ func newTestPostgresStore(t *testing.T, url string) *controller.PostgresStore {
 		_, _ = pool.Exec(context.Background(), "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
 		pool.Close()
 	})
-	return store
+	return store, pool
 }
 
 // TestPostgresStoreConformance is the acceptance gate for Task 4: the full
@@ -105,6 +114,21 @@ func TestPostgresStoreConformance(t *testing.T) {
 	url := postgresTestURL(t)
 	storetest.RunConformance(t, func() controller.Store {
 		return newTestPostgresStore(t, url)
+	})
+}
+
+// TestPostgresUndecodableRow wires storetest's poisoned-row assertions:
+// the row no Store method could have written (a retired storage source in
+// spec_json) goes in with raw SQL on the same schema-pinned pool.
+func TestPostgresUndecodableRow(t *testing.T) {
+	url := postgresTestURL(t)
+	store, pool := newTestPostgresStorePool(t, url)
+	storetest.RunUndecodableRowConformance(t, store, func(t *testing.T, id core.ClusterId) {
+		t.Helper()
+		if _, err := pool.Exec(context.Background(), `INSERT INTO clusters (id, spec_json, generation, desired)
+			VALUES ($1, $2, 1, 'terminated')`, string(id), storetest.PoisonedSpecJSON); err != nil {
+			t.Fatalf("insert poisoned row: %v", err)
+		}
 	})
 }
 

@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"strings"
 	"sync"
@@ -169,6 +170,15 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
+// rowsIter is the row-iteration half of the SQL backends' result sets,
+// implemented by both database/sql's *sql.Rows and pgx's Rows, letting
+// listClusterRows serve SqliteStore and PostgresStore alike.
+type rowsIter interface {
+	Next() bool
+	Scan(dest ...any) error
+	Err() error
+}
+
 func intPtrToU64Ptr(p *int64) *uint64 {
 	if p == nil {
 		return nil
@@ -187,63 +197,136 @@ func intPtrToU16Ptr(p *int64) *uint16 {
 
 // --- Clusters ---
 
-func scanCluster(row rowScanner) (StoredCluster, error) {
-	var (
-		id                 string
-		specJSON           string
-		generation         int64
-		desiredStr         string
-		observedJSON       *string
-		observedGeneration int64
-		conditionJSON      *string
-		failureCount       int64
-		nextAttemptAt      int64
-		createdAt          int64
-		terminatedAt       *int64
-	)
-	if err := row.Scan(&id, &specJSON, &generation, &desiredStr, &observedJSON,
-		&observedGeneration, &conditionJSON, &failureCount, &nextAttemptAt,
-		&createdAt, &terminatedAt); err != nil {
-		return StoredCluster{}, err
-	}
+// rawCluster is one clusters row exactly as the driver returns it, before
+// any JSON or enum decode. The split lets List tell a SQL-level scan
+// failure (fatal) from row content the current binary can no longer decode
+// (skippable).
+type rawCluster struct {
+	id                 string
+	specJSON           string
+	generation         int64
+	desiredStr         string
+	observedJSON       *string
+	observedGeneration int64
+	conditionJSON      *string
+	failureCount       int64
+	nextAttemptAt      int64
+	createdAt          int64
+	terminatedAt       *int64
+}
 
+func (r *rawCluster) scan(row rowScanner) error {
+	return row.Scan(&r.id, &r.specJSON, &r.generation, &r.desiredStr, &r.observedJSON,
+		&r.observedGeneration, &r.conditionJSON, &r.failureCount, &r.nextAttemptAt,
+		&r.createdAt, &r.terminatedAt)
+}
+
+func (r *rawCluster) decode() (StoredCluster, error) {
 	var spec core.ClusterSpec
-	if err := json.Unmarshal([]byte(specJSON), &spec); err != nil {
+	if err := json.Unmarshal([]byte(r.specJSON), &spec); err != nil {
 		return StoredCluster{}, jsonErr(err)
 	}
-	desired, err := ParseDesiredState(desiredStr)
+	desired, err := ParseDesiredState(r.desiredStr)
 	if err != nil {
 		return StoredCluster{}, err
 	}
 	var observedState *core.ClusterState
-	if observedJSON != nil {
+	if r.observedJSON != nil {
 		var st core.ClusterState
-		if err := json.Unmarshal([]byte(*observedJSON), &st); err != nil {
+		if err := json.Unmarshal([]byte(*r.observedJSON), &st); err != nil {
 			return StoredCluster{}, jsonErr(err)
 		}
 		observedState = &st
 	}
 	var condition *core.DriftCondition
-	if conditionJSON != nil {
+	if r.conditionJSON != nil {
 		var dc core.DriftCondition
-		if err := json.Unmarshal([]byte(*conditionJSON), &dc); err != nil {
+		if err := json.Unmarshal([]byte(*r.conditionJSON), &dc); err != nil {
 			return StoredCluster{}, jsonErr(err)
 		}
 		condition = &dc
 	}
 	return StoredCluster{
-		ID:                 core.ClusterId(id),
+		ID:                 core.ClusterId(r.id),
 		Spec:               spec,
-		Generation:         uint64(generation),
+		Generation:         uint64(r.generation),
 		Desired:            desired,
 		ObservedState:      observedState,
-		ObservedGeneration: uint64(observedGeneration),
+		ObservedGeneration: uint64(r.observedGeneration),
 		Condition:          condition,
-		FailureCount:       uint32(failureCount),
-		NextAttemptAt:      uint64(nextAttemptAt),
-		CreatedAt:          uint64(createdAt),
-		TerminatedAt:       intPtrToU64Ptr(terminatedAt),
+		FailureCount:       uint32(r.failureCount),
+		NextAttemptAt:      uint64(r.nextAttemptAt),
+		CreatedAt:          uint64(r.createdAt),
+		TerminatedAt:       intPtrToU64Ptr(r.terminatedAt),
 	}, nil
+}
+
+func scanCluster(row rowScanner) (StoredCluster, error) {
+	var r rawCluster
+	if err := r.scan(row); err != nil {
+		return StoredCluster{}, err
+	}
+	return r.decode()
+}
+
+// listClusterRows is both SQL backends' shared List body (part of the
+// "same helper functions" set the Postgres port reuses). A SQL-level scan
+// failure fails the List; a row whose JSON text the current binary can no
+// longer decode (a spec written before an enum value was retired) is
+// logged and SKIPPED so one poisoned row cannot stall listing, reconcile,
+// metering and reap for every other cluster. Skipping is safe: no code
+// path deletes K8s resources for clusters missing from List and
+// reconcile/meter/reap iterate store rows only, so the skipped cluster is
+// orphaned, never actuated against.
+func listClusterRows(rows rowsIter) ([]StoredCluster, error) {
+	out := make([]StoredCluster, 0)
+	for rows.Next() {
+		var r rawCluster
+		if err := r.scan(rows); err != nil {
+			return nil, err
+		}
+		c, err := r.decode()
+		if err != nil {
+			slog.Warn("skipping undecodable cluster row", "cluster", r.id, "error", err)
+			continue
+		}
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, storeErrorf("list clusters: %v", err)
+	}
+	return out, nil
+}
+
+// tombstoneFromRow is both SQL backends' shared TombstoneByID body: a
+// desired/observed_state read that never touches spec_json. The observed
+// side fails closed — observed_state that will not decode reports
+// not-gone rather than letting purge race a live cluster.
+func tombstoneFromRow(row rowScanner, noRows error) (DesiredState, bool, bool, error) {
+	var (
+		desiredStr   string
+		observedJSON *string
+	)
+	err := row.Scan(&desiredStr, &observedJSON)
+	if errors.Is(err, noRows) {
+		return "", false, false, nil
+	}
+	if err != nil {
+		return "", false, false, storeErrorf("tombstone check: %v", err)
+	}
+	desired, err := ParseDesiredState(desiredStr)
+	if err != nil {
+		return "", false, false, err
+	}
+	var observed *core.ClusterState
+	if observedJSON != nil {
+		var st core.ClusterState
+		if uerr := json.Unmarshal([]byte(*observedJSON), &st); uerr != nil {
+			return desired, false, true, nil
+		}
+		observed = &st
+	}
+	return desired, ObservedGone(observed), true, nil
 }
 
 const clusterColumns = "id, spec_json, generation, desired, observed_state, " +
@@ -343,19 +426,7 @@ func (s *SqliteStore) List(ctx context.Context) ([]StoredCluster, error) {
 		return nil, storeErrorf("list clusters: %v", err)
 	}
 	defer func() { _ = rows.Close() }()
-
-	out := make([]StoredCluster, 0)
-	for rows.Next() {
-		c, err := scanCluster(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, c)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, storeErrorf("list clusters: %v", err)
-	}
-	return out, nil
+	return listClusterRows(rows)
 }
 
 func (s *SqliteStore) SetDesired(ctx context.Context, id core.ClusterId, desired DesiredState) error {
@@ -391,6 +462,11 @@ func (s *SqliteStore) RemoveCluster(ctx context.Context, id core.ClusterId) (boo
 		return false, storeErrorf("remove cluster: %v", err)
 	}
 	return n > 0, nil
+}
+
+func (s *SqliteStore) TombstoneByID(ctx context.Context, id core.ClusterId) (DesiredState, bool, bool, error) {
+	row := s.db.QueryRowContext(ctx, "SELECT desired, observed_state FROM clusters WHERE id = ?", string(id))
+	return tombstoneFromRow(row, sql.ErrNoRows)
 }
 
 func (s *SqliteStore) RecordObservation(ctx context.Context, id core.ClusterId, observed *core.ClusterState, observedGeneration uint64) error {

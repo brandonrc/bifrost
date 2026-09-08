@@ -2,12 +2,15 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/brandonrc/bifrost/internal/auth"
 	"github.com/brandonrc/bifrost/internal/controller"
+	"github.com/brandonrc/bifrost/internal/controller/storetest"
 	"github.com/brandonrc/bifrost/internal/core"
 	"github.com/brandonrc/bifrost/internal/policy"
 	"github.com/brandonrc/bifrost/internal/provision"
@@ -437,6 +440,78 @@ func TestDeleteCluster_NotFound(t *testing.T) {
 	s := &Server{Store: controller.NewMemoryStore()}
 	_, err := s.DeleteCluster(ctxWithIdentity(testIdentity("op", auth.RoleOperator)), DeleteClusterRequestObject{Id: "nope"})
 	mustHTTPError(t, err, 404)
+}
+
+// TestDeleteCluster_UndecodableRow is the grace incident's regression test
+// at the API layer: a cluster row whose spec_json names the retired
+// host_path storage source fails Store.Get, and DELETE must still be able
+// to remove the row — for a GLOBAL writer only, since the row's project is
+// unknowable. Needs a SQL-backed store: the in-memory store cannot hold an
+// undecodable row.
+func TestDeleteCluster_UndecodableRow(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "state.db")
+	store, err := controller.NewSqliteStore(ctx, path)
+	if err != nil {
+		t.Fatalf("open sqlite store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	s := &Server{Store: store}
+
+	// One healthy row, one terminated tombstone with an undecodable spec,
+	// one LIVE (desired=running) row with an undecodable spec.
+	if _, err := store.UpsertDesired(ctx, "ok", core.ClusterSpec{Name: "ok", Project: "p1", RayVersion: "x", Image: "x", HeadCpu: "1", HeadMemory: "1Gi"}); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	for id, desired := range map[string]string{"poisoned": "terminated", "poisoned-live": "running"} {
+		if _, err := db.Exec(`INSERT INTO clusters (id, spec_json, generation, desired)
+			VALUES (?, ?, 1, ?)`, id, storetest.PoisonedSpecJSON, desired); err != nil {
+			t.Fatalf("insert poisoned row: %v", err)
+		}
+	}
+
+	// A project-scoped operator is refused: the row's project is
+	// unknowable, so only a global writer may touch it.
+	scoped := &auth.Identity{Subject: "op", ProjectRoles: []auth.RoleScope{{Role: auth.RoleOperator, Scope: "project:p1"}}}
+	_, err = s.DeleteCluster(ctxWithIdentity(scoped), DeleteClusterRequestObject{Id: "poisoned"})
+	mustHTTPError(t, err, 403)
+
+	// Purge of the LIVE undecodable row is refused like any live cluster.
+	purgeTrue := true
+	_, err = s.DeleteCluster(ctxWithIdentity(admin()), DeleteClusterRequestObject{Id: "poisoned-live", Params: DeleteClusterParams{Purge: &purgeTrue}})
+	mustHTTPError(t, err, 409)
+
+	// Global admin, plain delete: terminates by id, no spec decode.
+	resp, err := s.DeleteCluster(ctxWithIdentity(admin()), DeleteClusterRequestObject{Id: "poisoned"})
+	if err != nil {
+		t.Fatalf("delete of undecodable row: %v", err)
+	}
+	if _, ok := resp.(DeleteCluster202Response); !ok {
+		t.Fatalf("response = %#v, want 202", resp)
+	}
+
+	// Purge then hard-deletes it (desired terminated, never observed = gone).
+	resp, err = s.DeleteCluster(ctxWithIdentity(admin()), DeleteClusterRequestObject{Id: "poisoned", Params: DeleteClusterParams{Purge: &purgeTrue}})
+	if err != nil {
+		t.Fatalf("purge of undecodable row: %v", err)
+	}
+	if _, ok := resp.(DeleteCluster200Response); !ok {
+		t.Fatalf("response = %#v, want 200", resp)
+	}
+
+	// And listing no longer fails on the remaining poisoned row.
+	lresp, err := s.ListClusters(ctxWithIdentity(admin()), ListClustersRequestObject{})
+	if err != nil {
+		t.Fatalf("list with a poisoned row present: %v", err)
+	}
+	if views := mustResponse[ListClusters200JSONResponse](t, lresp); len(views) != 1 || views[0].Id != "ok" {
+		t.Fatalf("list = %+v, want only the healthy cluster", views)
+	}
 }
 
 // --- Suspend / Resume ---

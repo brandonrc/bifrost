@@ -402,19 +402,7 @@ func (s *PostgresStore) List(ctx context.Context) ([]StoredCluster, error) {
 		return nil, storeErrorf("list clusters: %v", err)
 	}
 	defer rows.Close()
-
-	out := make([]StoredCluster, 0)
-	for rows.Next() {
-		c, err := scanCluster(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, c)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, storeErrorf("list clusters: %v", err)
-	}
-	return out, nil
+	return listClusterRows(rows)
 }
 
 func (s *PostgresStore) SetDesired(ctx context.Context, id core.ClusterId, desired DesiredState) error {
@@ -442,6 +430,11 @@ func (s *PostgresStore) RemoveCluster(ctx context.Context, id core.ClusterId) (b
 		return false, storeErrorf("remove cluster: %v", err)
 	}
 	return tag.RowsAffected() > 0, nil
+}
+
+func (s *PostgresStore) TombstoneByID(ctx context.Context, id core.ClusterId) (DesiredState, bool, bool, error) {
+	row := s.pool.QueryRow(ctx, "SELECT desired, observed_state FROM clusters WHERE id = $1", string(id))
+	return tombstoneFromRow(row, pgx.ErrNoRows)
 }
 
 func (s *PostgresStore) RecordObservation(ctx context.Context, id core.ClusterId, observed *core.ClusterState, observedGeneration uint64) error {

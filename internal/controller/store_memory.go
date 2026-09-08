@@ -205,6 +205,16 @@ func (s *MemoryStore) RemoveCluster(_ context.Context, id core.ClusterId) (bool,
 	return ok, nil
 }
 
+func (s *MemoryStore) TombstoneByID(_ context.Context, id core.ClusterId) (DesiredState, bool, bool, error) {
+	s.clustersMu.Lock()
+	defer s.clustersMu.Unlock()
+	c, ok := s.clusters[id]
+	if !ok {
+		return "", false, false, nil
+	}
+	return c.Desired, ObservedGone(c.ObservedState), true, nil
+}
+
 func (s *MemoryStore) RecordObservation(_ context.Context, id core.ClusterId, observed *core.ClusterState, observedGeneration uint64) error {
 	s.clustersMu.Lock()
 	defer s.clustersMu.Unlock()

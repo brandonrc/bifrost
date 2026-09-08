@@ -84,6 +84,13 @@ func (s *FailingStore) RemoveCluster(ctx context.Context, id core.ClusterId) (bo
 	return s.inner.RemoveCluster(ctx, id)
 }
 
+func (s *FailingStore) TombstoneByID(ctx context.Context, id core.ClusterId) (DesiredState, bool, bool, error) {
+	if err := s.check("TombstoneByID"); err != nil {
+		return "", false, false, err
+	}
+	return s.inner.TombstoneByID(ctx, id)
+}
+
 func (s *FailingStore) RecordObservation(ctx context.Context, id core.ClusterId, observed *core.ClusterState, observedGeneration uint64) error {
 	if err := s.check("RecordObservation"); err != nil {
 		return err

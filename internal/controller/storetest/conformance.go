@@ -96,6 +96,77 @@ func RunConformance(t *testing.T, newStore func() controller.Store) {
 	})
 }
 
+// PoisonedSpecJSON is a spec_json no Store method could have written: a
+// resolved storage entry naming the retired host_path source, which
+// core.StorageSource.UnmarshalJSON rejects — the exact row shape that
+// bricked grace's control plane (every List failed on the one undecodable
+// row). RunUndecodableRowConformance's per-backend poison hook inserts it
+// with raw SQL, below the Store interface.
+const PoisonedSpecJSON = `{"name":"poisoned","project":"p1","ray_version":"2.57.0","image":"rayproject/ray:2.57.0","head_cpu":"1","head_memory":"2Gi","worker_groups":[],"storage_resolved":[{"name":"d","source":"host_path","host_path":"/srv/d","mode":"file","mount_path":"/srv/d"}]}`
+
+// RunUndecodableRowConformance is the shared assertion set for a cluster
+// row whose spec_json the current binary can no longer decode (another
+// addition, not ported from store.rs): List must skip it and still return
+// the healthy rows, Get must keep failing on it, and the id-keyed
+// operations (TombstoneByID, SetDesired, RemoveCluster) must work so an
+// operator can dispose of the row through the API. Seeding needs a raw
+// INSERT below the Store interface, so the backend's own test supplies
+// poison; the in-memory store cannot express an undecodable row and never
+// calls this. The poisoned row is expected desired='terminated' with
+// observed_state NULL (a purgeable tombstone).
+func RunUndecodableRowConformance(t *testing.T, store controller.Store, poison func(t *testing.T, id core.ClusterId)) {
+	t.Helper()
+	ctx := context.Background()
+	good := core.ClusterId("healthy")
+	if _, err := store.UpsertDesired(ctx, good, clusterSpecFixture("healthy", 1)); err != nil {
+		t.Fatalf("seed healthy cluster: %v", err)
+	}
+	bad := core.ClusterId("poisoned")
+	poison(t, bad)
+
+	t.Run("ListSkipsIt", func(t *testing.T) {
+		list, err := store.List(ctx)
+		if err != nil {
+			t.Fatalf("List with a poisoned row present: %v", err)
+		}
+		if len(list) != 1 || list[0].ID != good {
+			t.Fatalf("List = %+v, want only the healthy row", list)
+		}
+	})
+	t.Run("GetStillFails", func(t *testing.T) {
+		if _, err := store.Get(ctx, bad); err == nil {
+			t.Fatal("Get on the poisoned row must fail")
+		}
+	})
+	t.Run("TombstoneByIDReadsThrough", func(t *testing.T) {
+		desired, gone, found, err := store.TombstoneByID(ctx, bad)
+		if err != nil || !found || desired != controller.DesiredTerminated || !gone {
+			t.Fatalf("TombstoneByID(poisoned) = %v, %v, %v, %v; want terminated/gone/found", desired, gone, found, err)
+		}
+		if _, _, found, err := store.TombstoneByID(ctx, "missing"); err != nil || found {
+			t.Fatalf("TombstoneByID(missing) = found=%v err=%v, want not-found", found, err)
+		}
+	})
+	t.Run("SetDesiredWorks", func(t *testing.T) {
+		if err := store.SetDesired(ctx, bad, controller.DesiredTerminated); err != nil {
+			t.Fatalf("SetDesired on the poisoned row: %v", err)
+		}
+	})
+	t.Run("RemoveClusterWorks", func(t *testing.T) {
+		removed, err := store.RemoveCluster(ctx, bad)
+		if err != nil || !removed {
+			t.Fatalf("RemoveCluster(poisoned) = %v, %v; want removed", removed, err)
+		}
+		if got, err := store.Get(ctx, bad); err != nil || got != nil {
+			t.Fatalf("Get after removal = %v, %v; want gone", got, err)
+		}
+		list, err := store.List(ctx)
+		if err != nil || len(list) != 1 || list[0].ID != good {
+			t.Fatalf("List after removal = %+v, %v; want only the healthy row", list, err)
+		}
+	})
+}
+
 // --- Fixtures (store.rs:13-35, 223-251) ---
 
 func clusterSpecFixture(name string, replicas uint32) core.ClusterSpec {

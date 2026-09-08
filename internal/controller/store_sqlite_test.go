@@ -52,6 +52,26 @@ func TestSqliteStoreConformance(t *testing.T) {
 	})
 }
 
+// TestSqliteUndecodableRow wires storetest's poisoned-row assertions: the
+// row no Store method could have written (a retired storage source in
+// spec_json) goes in with raw SQL on a second handle to the same file.
+func TestSqliteUndecodableRow(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "poison.db")
+	store := newTestSqliteStore(t, path)
+	storetest.RunUndecodableRowConformance(t, store, func(t *testing.T, id core.ClusterId) {
+		t.Helper()
+		db, err := sql.Open("sqlite", "file:"+path)
+		if err != nil {
+			t.Fatalf("open raw handle: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+		if _, err := db.Exec(`INSERT INTO clusters (id, spec_json, generation, desired)
+			VALUES (?, ?, 1, 'terminated')`, string(id), storetest.PoisonedSpecJSON); err != nil {
+			t.Fatalf("insert poisoned row: %v", err)
+		}
+	})
+}
+
 // TestSqlitePersistsAcrossReopen ports store_sqlite.rs's
 // sqlite_persists_across_reopen (tests/store.rs:1171-1195): desired state,
 // observations, and the audit chain written before a close must be

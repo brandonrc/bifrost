@@ -16,7 +16,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/brandonrc/bifrost/internal/core"
@@ -43,6 +45,17 @@ func (e StoreError) Error() string {
 // scattered through store.rs.
 func storeErrorf(format string, args ...any) StoreError {
 	return StoreError{Msg: fmt.Sprintf(format, args...)}
+}
+
+// IsSerializationError reports whether err is a StoreError carrying a JSON
+// (de)serialization failure on a row's JSON-text columns (the jsonErr
+// wrapper's "serialization: ..." message), as opposed to a backend/SQL
+// failure. The delete/purge escape hatch keys on it: a row whose spec_json
+// the current binary can no longer decode must not 500 the only API calls
+// that can remove it.
+func IsSerializationError(err error) bool {
+	var se StoreError
+	return errors.As(err, &se) && strings.HasPrefix(se.Msg, "serialization:")
 }
 
 // --- Desired state (carried Wave-0 pointer: lives here, not internal/core) ---
@@ -801,6 +814,12 @@ type Store interface {
 	UpsertDesired(ctx context.Context, id core.ClusterId, spec core.ClusterSpec) (uint64, error)
 
 	Get(ctx context.Context, id core.ClusterId) (*StoredCluster, error)
+	// List returns every decodable cluster row. A row whose JSON columns
+	// the current binary can no longer decode (e.g. a spec written before
+	// an enum value was retired) is logged and SKIPPED rather than failing
+	// the whole List: no code path actuates on clusters absent from List,
+	// so skipping orphans that one row instead of stalling reconcile,
+	// metering and reap for all of them. Get keeps failing on such a row.
 	List(ctx context.Context) ([]StoredCluster, error)
 
 	// SetDesired flips desired state (e.g. request termination).
@@ -812,6 +831,14 @@ type Store interface {
 	// the cluster is already terminated/gone before removing it. Returns
 	// true if a row was removed, false if none existed.
 	RemoveCluster(ctx context.Context, id core.ClusterId) (bool, error)
+
+	// TombstoneByID is the purge guard's tombstone check keyed on id alone:
+	// it never decodes spec_json, so it answers for a row Get fails on (a
+	// spec the current binary can no longer decode, where the row's project
+	// — and thus scoped authorization — is unknowable). observedGone is
+	// fail-closed: an undecodable observed_state reports not-gone. found is
+	// false when no row exists.
+	TombstoneByID(ctx context.Context, id core.ClusterId) (desired DesiredState, observedGone bool, found bool, err error)
 
 	// RecordObservation records the reconstructed observation and the
 	// generation it reflects. The stored observed generation is monotonic
