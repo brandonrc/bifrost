@@ -1,0 +1,2650 @@
+{
+ "uid": "bifrost-platform",
+ "title": "Bifrost platform",
+ "tags": [
+  "bifrost",
+  "ray"
+ ],
+ "timezone": "browser",
+ "schemaVersion": 39,
+ "version": 2,
+ "refresh": "15s",
+ "editable": true,
+ "graphTooltip": 1,
+ "time": {
+  "from": "now-1h",
+  "to": "now"
+ },
+ "description": "The Ray platform Bifrost runs: what is up, who is using it, what each cluster is doing, what the gateway sees, and the control plane and machine underneath. Every series carries the labels Bifrost stamps on pods (cluster, owner), so everything here slices by tenant.",
+ "templating": {
+  "list": [
+   {
+    "name": "cluster",
+    "label": "Cluster",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "mimir"
+    },
+    "query": {
+     "query": "label_values(ray_node_cpu_utilization, bifrost_cluster)",
+     "refId": "v"
+    },
+    "includeAll": true,
+    "multi": true,
+    "current": {
+     "text": [
+      "All"
+     ],
+     "value": [
+      "$__all"
+     ]
+    },
+    "refresh": 2,
+    "sort": 1
+   },
+   {
+    "name": "owner",
+    "label": "Owner",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "mimir"
+    },
+    "query": {
+     "query": "label_values(ray_node_cpu_utilization, bifrost_owner)",
+     "refId": "v"
+    },
+    "includeAll": true,
+    "multi": true,
+    "current": {
+     "text": [
+      "All"
+     ],
+     "value": [
+      "$__all"
+     ]
+    },
+    "refresh": 2,
+    "sort": 1
+   }
+  ]
+ },
+ "annotations": {
+  "list": [
+   {
+    "builtIn": 1,
+    "datasource": {
+     "type": "grafana",
+     "uid": "-- Grafana --"
+    },
+    "enable": true,
+    "hide": true,
+    "name": "Annotations & Alerts",
+    "type": "dashboard"
+   }
+  ]
+ },
+ "links": [
+  {
+   "title": "Bifrost dashboard",
+   "type": "link",
+   "url": "https://bifrost.100-89-230-107.sslip.io",
+   "targetBlank": true
+  },
+  {
+   "title": "Ray Serve",
+   "type": "dashboards",
+   "tags": [
+    "ray"
+   ],
+   "asDropdown": true
+  }
+ ],
+ "panels": [
+  {
+   "id": 1,
+   "type": "row",
+   "title": "Right now",
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 24,
+    "h": 1
+   },
+   "collapsed": false,
+   "panels": []
+  },
+  {
+   "id": 2,
+   "type": "stat",
+   "title": "Clusters running",
+   "description": "Clusters the control plane currently observes as running.",
+   "gridPos": {
+    "x": 0,
+    "y": 1,
+    "w": 4,
+    "h": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mimir"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#898781",
+        "value": null
+       },
+       {
+        "color": "#0ca30c",
+        "value": 1
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "expr": "sum(bifrost_clusters_total{state=\"running\"}) or vector(0)",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "A"
+    }
+   ],
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value",
+    "orientation": "auto",
+    "justifyMode": "center"
+   }
+  },
+  {
+   "id": 3,
+   "type": "stat",
+   "title": "Ray nodes up",
+   "description": "Head and worker pods answering their metrics scrape, across every cluster Bifrost provisions.",
+   "gridPos": {
+    "x": 4,
+    "y": 1,
+    "w": 4,
+    "h": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mimir"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     }
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "expr": "count(up{job=~\".*ray-nodes.*\"} == 1) or vector(0)",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "A"
+    }
+   ]
+  },
+  {
+   "id": 4,
+   "type": "stat",
+   "title": "Jobs running",
+   "description": "Ray jobs in flight, summed over every cluster's GCS.",
+   "gridPos": {
+    "x": 8,
+    "y": 1,
+    "w": 4,
+    "h": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mimir"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     }
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "expr": "sum(ray_running_jobs) or vector(0)",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "A"
+    }
+   ]
+  },
+  {
+   "id": 5,
+   "type": "stat",
+   "title": "CPUs in use",
+   "description": "Logical CPUs Ray has handed to tasks and actors right now, all clusters.",
+   "gridPos": {
+    "x": 12,
+    "y": 1,
+    "w": 4,
+    "h": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mimir"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "decimals": 0
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "expr": "sum(ray_resources{Name=\"CPU\",State=\"USED\"}) or vector(0)",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "A"
+    }
+   ]
+  },
+  {
+   "id": 6,
+   "type": "stat",
+   "title": "API requests / s",
+   "description": "Requests reaching the Bifrost API through the platform gateway (5-minute rate).",
+   "gridPos": {
+    "x": 16,
+    "y": 1,
+    "w": 4,
+    "h": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mimir"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "unit": "reqps",
+     "decimals": 2
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "expr": "sum(rate(envoy_cluster_upstream_rq_total{route=\"bifrost-route\"}[5m])) or vector(0)",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "A"
+    }
+   ]
+  },
+  {
+   "id": 7,
+   "type": "stat",
+   "title": "API 5xx ratio",
+   "description": "Share of API responses that were 5xx at the gateway. Green under 1%, serious above 5%.",
+   "gridPos": {
+    "x": 20,
+    "y": 1,
+    "w": 4,
+    "h": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mimir"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "unit": "percentunit",
+     "decimals": 2,
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#0ca30c",
+        "value": null
+       },
+       {
+        "color": "#fab219",
+        "value": 0.01
+       },
+       {
+        "color": "#d03b3b",
+        "value": 0.05
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "expr": "(sum(rate(envoy_cluster_upstream_rq_xx{route=\"bifrost-route\",envoy_response_code_class=\"5\"}[5m])) or vector(0)) / clamp_min(sum(rate(envoy_cluster_upstream_rq_total{route=\"bifrost-route\"}[5m])), 1e-9)",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "A"
+    }
+   ],
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value",
+    "orientation": "auto",
+    "justifyMode": "center"
+   }
+  },
+  {
+   "id": 8,
+   "type": "bargauge",
+   "title": "Clusters by project",
+   "description": "Where the clusters are. Includes records that have not been purged yet.",
+   "gridPos": {
+    "x": 0,
+    "y": 5,
+    "w": 8,
+    "h": 6
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mimir"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "fixed"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#2a78d6",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "team-a"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#2a78d6"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "team-b"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#eb6834"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "checkmaite"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#1baf7a"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "targets": [
+    {
+     "expr": "bifrost_clusters_by_project",
+     "legendFormat": "{{project}}",
+     "instant": true,
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "A"
+    }
+   ],
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "orientation": "horizontal",
+    "displayMode": "basic",
+    "showUnfilled": true,
+    "valueMode": "color",
+    "namePlacement": "left"
+   }
+  },
+  {
+   "id": 9,
+   "type": "timeseries",
+   "title": "Cluster records by state",
+   "description": "What the control plane says about every record it holds. \"unknown\" is a record with no observed state \u2014 mostly stopped clusters awaiting purge, so a large number here is bookkeeping, not trouble.",
+   "gridPos": {
+    "x": 8,
+    "y": 5,
+    "w": 8,
+    "h": 6
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mimir"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "min": 0,
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 8,
+      "pointSize": 5,
+      "showPoints": "never",
+      "spanNulls": true,
+      "lineInterpolation": "stepAfter"
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "running"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#0ca30c"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "provisioning"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#fab219"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "pending"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#eda100"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "degraded"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#ec835a"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "failed"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#d03b3b"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "unknown"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#898781"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "suspended"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#4a3aa7"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "targets": [
+    {
+     "expr": "sum by (state) (bifrost_clusters_total)",
+     "legendFormat": "{{state}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "A"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "id": 10,
+   "type": "timeseries",
+   "title": "Ray nodes per cluster",
+   "description": "Heads and workers over time \u2014 the shape a scale-up and scale-down would draw. With Bifrost run without --ray-autoscaling this is flat by design.",
+   "gridPos": {
+    "x": 16,
+    "y": 5,
+    "w": 8,
+    "h": 6
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mimir"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "min": 0,
+     "decimals": 0,
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 8,
+      "pointSize": 5,
+      "showPoints": "never",
+      "spanNulls": true,
+      "lineInterpolation": "stepAfter"
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byRegexp",
+       "options": ".*head$"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#2a78d6"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byRegexp",
+       "options": ".*worker$"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#eb6834"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "targets": [
+    {
+     "expr": "count by (bifrost_cluster, ray_node_type) (up{job=~\".*ray-nodes.*\", bifrost_cluster=~\"$cluster\", bifrost_owner=~\"$owner\"} == 1)",
+     "legendFormat": "{{bifrost_cluster}} \u00b7 {{ray_node_type}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "A"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "id": 11,
+   "type": "row",
+   "title": "Who is using what",
+   "gridPos": {
+    "x": 0,
+    "y": 11,
+    "w": 24,
+    "h": 1
+   },
+   "collapsed": false,
+   "panels": []
+  },
+  {
+   "id": 12,
+   "type": "timeseries",
+   "title": "CPUs in use, by owner",
+   "description": "Logical CPUs Ray reports as used, attributed to the cluster owner Bifrost stamped on the pods.",
+   "gridPos": {
+    "x": 0,
+    "y": 12,
+    "w": 8,
+    "h": 7
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mimir"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "min": 0,
+     "decimals": 1,
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "fillOpacity": 35,
+      "pointSize": 5,
+      "showPoints": "never",
+      "spanNulls": true,
+      "lineInterpolation": "linear",
+      "stacking": {
+       "mode": "normal",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "expr": "sum by (bifrost_owner) (ray_resources{Name=\"CPU\",State=\"USED\", bifrost_cluster=~\"$cluster\", bifrost_owner=~\"$owner\"})",
+     "legendFormat": "{{bifrost_owner}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "A"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "id": 13,
+   "type": "timeseries",
+   "title": "Memory in use, by owner",
+   "description": "Ray's memory resource in use, per owner.",
+   "gridPos": {
+    "x": 8,
+    "y": 12,
+    "w": 8,
+    "h": 7
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mimir"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "unit": "bytes",
+     "min": 0,
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "fillOpacity": 35,
+      "pointSize": 5,
+      "showPoints": "never",
+      "spanNulls": true,
+      "lineInterpolation": "linear",
+      "stacking": {
+       "mode": "normal",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "expr": "sum by (bifrost_owner) (ray_resources{Name=\"memory\",State=\"USED\", bifrost_cluster=~\"$cluster\", bifrost_owner=~\"$owner\"})",
+     "legendFormat": "{{bifrost_owner}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "A"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "id": 14,
+   "type": "timeseries",
+   "title": "Metered usage, by project",
+   "description": "Bifrost's own meter \u2014 what the usage report and cost estimates are built from (sampled every --metering-interval).",
+   "gridPos": {
+    "x": 16,
+    "y": 12,
+    "w": 8,
+    "h": 7
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mimir"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "min": 0,
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "pointSize": 5,
+      "showPoints": "never",
+      "spanNulls": true,
+      "lineInterpolation": "linear"
+     }
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "expr": "sum by (project, resource) (bifrost_pool_resource_usage)",
+     "legendFormat": "{{project}} \u00b7 {{resource}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "A"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "id": 15,
+   "type": "row",
+   "title": "Inside each cluster",
+   "gridPos": {
+    "x": 0,
+    "y": 19,
+    "w": 24,
+    "h": 1
+   },
+   "collapsed": false,
+   "panels": []
+  },
+  {
+   "id": 16,
+   "type": "timeseries",
+   "title": "CPU utilisation \u2014 $cluster",
+   "description": "Per-node CPU utilisation as Ray measures it. A head pinned at 100% under a job ramp is the driver-per-job ceiling.",
+   "gridPos": {
+    "x": 0,
+    "y": 20,
+    "w": 8,
+    "h": 7
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mimir"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "unit": "percent",
+     "min": 0,
+     "max": 100,
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "pointSize": 5,
+      "showPoints": "never",
+      "spanNulls": true,
+      "lineInterpolation": "linear"
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byRegexp",
+       "options": "^head.*"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#2a78d6"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byRegexp",
+       "options": "^worker.*"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#eb6834"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "targets": [
+    {
+     "expr": "ray_node_cpu_utilization{bifrost_cluster=\"$cluster\"}",
+     "legendFormat": "{{ray_node_type}} {{ip}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "A"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "repeat": "cluster",
+   "repeatDirection": "h",
+   "maxPerRow": 3
+  },
+  {
+   "id": 17,
+   "type": "timeseries",
+   "title": "Memory used \u2014 $cluster",
+   "description": "Per-node memory used, with the node total for scale. Heads that approach the total under load are heads about to be OOM-killed.",
+   "gridPos": {
+    "x": 8,
+    "y": 20,
+    "w": 8,
+    "h": 7
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mimir"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "unit": "bytes",
+     "min": 0,
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "pointSize": 5,
+      "showPoints": "never",
+      "spanNulls": true,
+      "lineInterpolation": "linear"
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byRegexp",
+       "options": "^head.*"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#2a78d6"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byRegexp",
+       "options": "^worker.*"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#eb6834"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byRegexp",
+       "options": "node total"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#898781"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "targets": [
+    {
+     "expr": "ray_node_mem_used{bifrost_cluster=\"$cluster\"}",
+     "legendFormat": "{{ray_node_type}} {{ip}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "A"
+    },
+    {
+     "expr": "max(ray_node_mem_total{bifrost_cluster=\"$cluster\"})",
+     "legendFormat": "node total",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "B"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "repeat": "cluster",
+   "repeatDirection": "h",
+   "maxPerRow": 3
+  },
+  {
+   "id": 18,
+   "type": "timeseries",
+   "title": "Tasks by state \u2014 $cluster",
+   "description": "Ray scheduler task states. Waiting climbing while Executing stays flat means the cluster is out of capacity for this load.",
+   "gridPos": {
+    "x": 16,
+    "y": 20,
+    "w": 8,
+    "h": 7
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mimir"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "min": 0,
+     "decimals": 0,
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "fillOpacity": 35,
+      "pointSize": 5,
+      "showPoints": "never",
+      "spanNulls": true,
+      "lineInterpolation": "linear",
+      "stacking": {
+       "mode": "normal",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Executing"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#2a78d6"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Dispatched"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#1baf7a"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Waiting"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#eda100"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Received"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#4a3aa7"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "SpilledWaiting"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#ec835a"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "SpilledUnschedulable"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#d03b3b"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Cancelled"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#898781"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "targets": [
+    {
+     "expr": "sum by (State) (ray_scheduler_tasks{bifrost_cluster=\"$cluster\"})",
+     "legendFormat": "{{State}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "A"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "repeat": "cluster",
+   "repeatDirection": "h",
+   "maxPerRow": 3
+  },
+  {
+   "id": 19,
+   "type": "timeseries",
+   "title": "Jobs \u2014 $cluster",
+   "description": "Jobs in flight and the rate they finish at.",
+   "gridPos": {
+    "x": 0,
+    "y": 27,
+    "w": 8,
+    "h": 6
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mimir"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "min": 0,
+     "decimals": 1,
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "pointSize": 5,
+      "showPoints": "never",
+      "spanNulls": true,
+      "lineInterpolation": "linear"
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "running"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#2a78d6"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "finished / min"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#1baf7a"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "targets": [
+    {
+     "expr": "sum(ray_running_jobs{bifrost_cluster=\"$cluster\"})",
+     "legendFormat": "running",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "A"
+    },
+    {
+     "expr": "sum(rate(ray_finished_jobs_total{bifrost_cluster=\"$cluster\"}[5m])) * 60",
+     "legendFormat": "finished / min",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "B"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "repeat": "cluster",
+   "repeatDirection": "h",
+   "maxPerRow": 3
+  },
+  {
+   "id": 20,
+   "type": "timeseries",
+   "title": "Object store \u2014 $cluster",
+   "description": "Plasma object store in use against its capacity; spilling begins when used meets capacity.",
+   "gridPos": {
+    "x": 8,
+    "y": 27,
+    "w": 8,
+    "h": 6
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mimir"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "unit": "bytes",
+     "min": 0,
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "pointSize": 5,
+      "showPoints": "never",
+      "spanNulls": true,
+      "lineInterpolation": "linear"
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "used"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#2a78d6"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "capacity"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#898781"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "targets": [
+    {
+     "expr": "sum(ray_object_store_used_memory{bifrost_cluster=\"$cluster\"})",
+     "legendFormat": "used",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "A"
+    },
+    {
+     "expr": "sum(ray_object_store_memory{bifrost_cluster=\"$cluster\"})",
+     "legendFormat": "capacity",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "B"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "repeat": "cluster",
+   "repeatDirection": "h",
+   "maxPerRow": 3
+  },
+  {
+   "id": 21,
+   "type": "timeseries",
+   "title": "Actors \u2014 $cluster",
+   "description": "Actor lifecycle counts from GCS.",
+   "gridPos": {
+    "x": 16,
+    "y": 27,
+    "w": 8,
+    "h": 6
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mimir"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "min": 0,
+     "decimals": 0,
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "pointSize": 5,
+      "showPoints": "never",
+      "spanNulls": true,
+      "lineInterpolation": "linear"
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Created"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#2a78d6"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Registered"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#1baf7a"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Pending"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#eda100"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Unresolved"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#ec835a"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Destroyed"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#898781"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "targets": [
+    {
+     "expr": "sum by (State) (ray_gcs_actors_count{bifrost_cluster=\"$cluster\"})",
+     "legendFormat": "{{State}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "A"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "repeat": "cluster",
+   "repeatDirection": "h",
+   "maxPerRow": 3
+  },
+  {
+   "id": 22,
+   "type": "row",
+   "title": "Through the gateway",
+   "gridPos": {
+    "x": 0,
+    "y": 33,
+    "w": 24,
+    "h": 1
+   },
+   "collapsed": false,
+   "panels": []
+  },
+  {
+   "id": 23,
+   "type": "timeseries",
+   "title": "Requests / s by route",
+   "description": "bifrost-route is the API, bifrost-ui-route the dashboard, bifrost-gateway-wildcard the per-cluster Ray Jobs gateway.",
+   "gridPos": {
+    "x": 0,
+    "y": 34,
+    "w": 8,
+    "h": 7
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mimir"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "unit": "reqps",
+     "min": 0,
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "pointSize": 5,
+      "showPoints": "never",
+      "spanNulls": true,
+      "lineInterpolation": "linear"
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "bifrost-route"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#2a78d6"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "bifrost-ui-route"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#1baf7a"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "bifrost-gateway-wildcard"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#eb6834"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "targets": [
+    {
+     "expr": "sum by (route) (rate(envoy_cluster_upstream_rq_total{route_ns=\"bifrost\"}[5m]))",
+     "legendFormat": "{{route}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "A"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "id": 24,
+   "type": "timeseries",
+   "title": "Responses by class \u2014 API",
+   "description": "Status classes the API answered with, as the gateway saw them.",
+   "gridPos": {
+    "x": 8,
+    "y": 34,
+    "w": 8,
+    "h": 7
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mimir"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "unit": "reqps",
+     "min": 0,
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "fillOpacity": 35,
+      "pointSize": 5,
+      "showPoints": "never",
+      "spanNulls": true,
+      "lineInterpolation": "linear",
+      "stacking": {
+       "mode": "normal",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "2xx"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#0ca30c"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "3xx"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#2a78d6"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "4xx"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#fab219"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "5xx"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#d03b3b"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "targets": [
+    {
+     "expr": "sum by (envoy_response_code_class) (rate(envoy_cluster_upstream_rq_xx{route=\"bifrost-route\"}[5m]))",
+     "legendFormat": "{{envoy_response_code_class}}xx",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "A"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "id": 25,
+   "type": "timeseries",
+   "title": "API latency (p50 / p95 / p99)",
+   "description": "Upstream request time at the gateway, in milliseconds.",
+   "gridPos": {
+    "x": 16,
+    "y": 34,
+    "w": 8,
+    "h": 7
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mimir"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "unit": "ms",
+     "min": 0,
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "pointSize": 5,
+      "showPoints": "never",
+      "spanNulls": true,
+      "lineInterpolation": "linear"
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "p50"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#1baf7a"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "p95"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#2a78d6"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "p99"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#4a3aa7"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "targets": [
+    {
+     "expr": "histogram_quantile(0.50, sum by (le) (rate(envoy_cluster_upstream_rq_time_bucket{route=\"bifrost-route\"}[5m])))",
+     "legendFormat": "p50",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "A"
+    },
+    {
+     "expr": "histogram_quantile(0.95, sum by (le) (rate(envoy_cluster_upstream_rq_time_bucket{route=\"bifrost-route\"}[5m])))",
+     "legendFormat": "p95",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "B"
+    },
+    {
+     "expr": "histogram_quantile(0.99, sum by (le) (rate(envoy_cluster_upstream_rq_time_bucket{route=\"bifrost-route\"}[5m])))",
+     "legendFormat": "p99",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "C"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "id": 26,
+   "type": "row",
+   "title": "The control plane itself",
+   "gridPos": {
+    "x": 0,
+    "y": 41,
+    "w": 24,
+    "h": 1
+   },
+   "collapsed": false,
+   "panels": []
+  },
+  {
+   "id": 27,
+   "type": "timeseries",
+   "title": "Bifrost CPU",
+   "description": "The API + reconciler process, in millicores.",
+   "gridPos": {
+    "x": 0,
+    "y": 42,
+    "w": 6,
+    "h": 6
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mimir"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "unit": "none",
+     "min": 0,
+     "decimals": 0,
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "pointSize": 5,
+      "showPoints": "never",
+      "spanNulls": true,
+      "lineInterpolation": "linear"
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "bifrost"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#2a78d6"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "targets": [
+    {
+     "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"bifrost\",container=\"bifrost\"}[5m])) * 1000",
+     "legendFormat": "bifrost",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "A"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "id": 28,
+   "type": "timeseries",
+   "title": "Bifrost memory",
+   "description": "Working set of the control-plane container.",
+   "gridPos": {
+    "x": 6,
+    "y": 42,
+    "w": 6,
+    "h": 6
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mimir"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "unit": "bytes",
+     "min": 0,
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "pointSize": 5,
+      "showPoints": "never",
+      "spanNulls": true,
+      "lineInterpolation": "linear"
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "bifrost"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#2a78d6"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "targets": [
+    {
+     "expr": "sum(container_memory_working_set_bytes{namespace=\"bifrost\",container=\"bifrost\"})",
+     "legendFormat": "bifrost",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "A"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "id": 29,
+   "type": "timeseries",
+   "title": "Container restarts in the bifrost namespace",
+   "description": "Restarts per hour, per container. A Ray head that restarts under a job ramp shows here first.",
+   "gridPos": {
+    "x": 12,
+    "y": 42,
+    "w": 6,
+    "h": 6
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mimir"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "min": 0,
+     "decimals": 0,
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 8,
+      "pointSize": 5,
+      "showPoints": "never",
+      "spanNulls": true,
+      "lineInterpolation": "stepAfter"
+     }
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "expr": "sum by (container) (increase(kube_pod_container_status_restarts_total{namespace=\"bifrost\"}[1h]))",
+     "legendFormat": "{{container}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "A"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "id": 30,
+   "type": "stat",
+   "title": "Pods in bifrost by phase",
+   "description": "Every pod in the namespace \u2014 clusters, jobs, the control plane, the requirements runner.",
+   "gridPos": {
+    "x": 18,
+    "y": 42,
+    "w": 6,
+    "h": 6
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mimir"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "fixed"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#898781",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Running"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#0ca30c"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Pending"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#fab219"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Failed"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#d03b3b"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Succeeded"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#898781"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Unknown"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#898781"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "targets": [
+    {
+     "expr": "sum by (phase) (kube_pod_status_phase{namespace=\"bifrost\"}) > 0",
+     "legendFormat": "{{phase}}",
+     "instant": true,
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "A"
+    }
+   ],
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value_and_name",
+    "orientation": "horizontal",
+    "justifyMode": "center"
+   }
+  },
+  {
+   "id": 31,
+   "type": "row",
+   "title": "The machine underneath",
+   "gridPos": {
+    "x": 0,
+    "y": 48,
+    "w": 24,
+    "h": 1
+   },
+   "collapsed": false,
+   "panels": []
+  },
+  {
+   "id": 32,
+   "type": "timeseries",
+   "title": "Node CPU",
+   "description": "Whole-node CPU busy fraction (node-exporter).",
+   "gridPos": {
+    "x": 0,
+    "y": 49,
+    "w": 8,
+    "h": 6
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mimir"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "unit": "percentunit",
+     "min": 0,
+     "max": 1,
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "pointSize": 5,
+      "showPoints": "never",
+      "spanNulls": true,
+      "lineInterpolation": "linear"
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "busy"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#2a78d6"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "targets": [
+    {
+     "expr": "1 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m]))",
+     "legendFormat": "busy",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "A"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "id": 33,
+   "type": "timeseries",
+   "title": "Node memory",
+   "description": "Memory used against the node total.",
+   "gridPos": {
+    "x": 8,
+    "y": 49,
+    "w": 8,
+    "h": 6
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mimir"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "unit": "bytes",
+     "min": 0,
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "pointSize": 5,
+      "showPoints": "never",
+      "spanNulls": true,
+      "lineInterpolation": "linear"
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "used"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#2a78d6"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "total"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#898781"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "targets": [
+    {
+     "expr": "node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes",
+     "legendFormat": "used",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "A"
+    },
+    {
+     "expr": "node_memory_MemTotal_bytes",
+     "legendFormat": "total",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "B"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "id": 34,
+   "type": "timeseries",
+   "title": "CPU requested in the bifrost namespace",
+   "description": "What the namespace has reserved from the scheduler, against what the node can give. The gap is the room clusters can still grow into.",
+   "gridPos": {
+    "x": 16,
+    "y": 49,
+    "w": 8,
+    "h": 6
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mimir"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "min": 0,
+     "decimals": 1,
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "pointSize": 5,
+      "showPoints": "never",
+      "spanNulls": true,
+      "lineInterpolation": "linear"
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "requested"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#2a78d6"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "allocatable"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#898781"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "targets": [
+    {
+     "expr": "sum(kube_pod_container_resource_requests{namespace=\"bifrost\",resource=\"cpu\"})",
+     "legendFormat": "requested",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "A"
+    },
+    {
+     "expr": "sum(kube_node_status_allocatable{resource=\"cpu\"})",
+     "legendFormat": "allocatable",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     },
+     "refId": "B"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  }
+ ]
+}
