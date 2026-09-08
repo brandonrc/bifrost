@@ -76,9 +76,9 @@ rules:
     resourceNames: ["bifrost"]
     verbs: ["get", "patch"]
   # --ray-autoscaling: the autoscaler egress policy names the API server's
-  # endpoint addresses, read from endpoints/kubernetes in default.
-  - apiGroups: [""]
-    resources: ["endpoints"]
+  # endpoint addresses, read from the kubernetes EndpointSlice in default.
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
     resourceNames: ["kubernetes"]
     verbs: ["get"]
   - apiGroups: ["kueue.x-k8s.io"]

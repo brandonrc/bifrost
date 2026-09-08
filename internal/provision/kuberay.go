@@ -1007,7 +1007,7 @@ func ClusterAllowNetworkPolicy(id string, owner *string) *networkingv1.NetworkPo
 }
 
 // APIServerEndpoint is where the Kubernetes API server actually answers:
-// the addresses and port of the `kubernetes` Endpoints in `default`, not the
+// the addresses and port of the `kubernetes` EndpointSlice in `default`, not the
 // Service VIP. Egress NetworkPolicy is evaluated after the kube-proxy DNAT,
 // so a rule written against the ClusterIP (10.x.x.1:443) matches nothing;
 // the rule has to name the endpoint IPs and the real port (6443, 16443…).

@@ -289,7 +289,7 @@ func (c *Client) deleteClusterAllow(ctx context.Context, id string) error {
 // under an admin-managed default-deny, like every policy Bifrost writes.
 //
 // The endpoint is not optional: a control plane started with
-// --ray-autoscaling that cannot read the `kubernetes` Endpoints (RBAC) would
+// --ray-autoscaling that cannot read the `kubernetes` EndpointSlice (RBAC) would
 // otherwise provision clusters whose autoscaler dies quietly, which is the
 // failure this exists to end. So the cluster gets a readable error instead.
 func (c *Client) ensureAutoscalerEgress(ctx context.Context, id string) error {
@@ -307,35 +307,36 @@ func (c *Client) ensureAutoscalerEgress(ctx context.Context, id string) error {
 	return c.applyNetworkPolicy(ctx, c.namespace, provision.AutoscalerEgressNetworkPolicy(id, api))
 }
 
-// apiServerEndpoint reads (and caches) the `kubernetes` Endpoints in
+// apiServerEndpoint reads (and caches) the `kubernetes` EndpointSlice in
 // `default`: the addresses and port the API server answers on, which is what
 // an egress NetworkPolicy has to name (the Service VIP is DNAT'd away before
-// policy is evaluated). Needs `get` on endpoints/kubernetes in default.
+// policy is evaluated). Needs `get` on endpointslices/kubernetes in default.
 func (c *Client) apiServerEndpoint(ctx context.Context) (provision.APIServerEndpoint, error) {
 	c.apiServerMu.Lock()
 	defer c.apiServerMu.Unlock()
 	if c.apiServer != nil && time.Since(c.apiServerRead) < apiServerTTL {
 		return *c.apiServer, nil
 	}
-	ep, err := c.clientset.CoreV1().Endpoints("default").Get(ctx, "kubernetes", metav1.GetOptions{})
+	slice, err := c.clientset.DiscoveryV1().EndpointSlices("default").Get(ctx, "kubernetes", metav1.GetOptions{})
 	if err != nil {
 		return provision.APIServerEndpoint{}, provision.ProvisionError{Kind: provision.ProvisionErrBackend,
-			Message: fmt.Sprintf("autoscaling needs the API server endpoint (get endpoints/kubernetes in default): %v", err)}
+			Message: fmt.Sprintf("autoscaling needs the API server endpoint (get endpointslices/kubernetes in default, discovery.k8s.io): %v", err)}
 	}
 	out := provision.APIServerEndpoint{}
-	for _, sub := range ep.Subsets {
-		for _, a := range sub.Addresses {
-			out.Addresses = append(out.Addresses, a.IP)
+	for _, ep := range slice.Endpoints {
+		out.Addresses = append(out.Addresses, ep.Addresses...)
+	}
+	for _, p := range slice.Ports {
+		if p.Port == nil {
+			continue
 		}
-		for _, p := range sub.Ports {
-			if p.Name == "https" || out.Port == 0 {
-				out.Port = p.Port
-			}
+		if (p.Name != nil && *p.Name == "https") || out.Port == 0 {
+			out.Port = *p.Port
 		}
 	}
 	if len(out.Addresses) == 0 || out.Port == 0 {
 		return provision.APIServerEndpoint{}, provision.ProvisionError{Kind: provision.ProvisionErrBackend,
-			Message: "autoscaling needs the API server endpoint: endpoints/kubernetes in default has no addresses"}
+			Message: "autoscaling needs the API server endpoint: endpointslices/kubernetes in default has no addresses"}
 	}
 	c.apiServer, c.apiServerRead = &out, time.Now()
 	return out, nil
