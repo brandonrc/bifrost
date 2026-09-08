@@ -29,6 +29,8 @@ def lane_kind(cell: str) -> str:
     c = cell.lower()
     if c in ("no tests", "n/a"):
         return "none"
+    if c.startswith("sim"):
+        return "green"
     if "fail" in c:
         return "red"
     # A lane whose recorded run predates tests that now exist is not a colour
@@ -54,6 +56,13 @@ def main() -> None:
         int(r["browser lane"].split()[0])
         for r in rows
         if r["browser lane"][:1].isdigit()
+    )
+    # The sim lane counts as automated evidence for the rows it drives, even
+    # though it is neither a Go test nor a bifrost-ui spec.
+    tested = sum(
+        1
+        for r in rows
+        if (r["Automated tests"] or "0") != "0" or r["browser lane"].startswith("sim")
     )
     sha = subprocess.run(
         ["git", "rev-parse", "--short=7", "HEAD"], capture_output=True, text=True
@@ -173,7 +182,7 @@ td.gap{color:var(--muted)}
   </table>
   </div>
   <div class="legend">
-    <p><b>Lanes.</b> L2 runs on every push with no cluster and its numbers come from the committed matrix on main. The kind lane runs four shards on a throwaway cluster, last green on run 34228237429. The grace figures are the in-cluster run of 2026-09-08 against the live deployment (89 minutes, every package passed) — the same job the nightly runs; that day's 07:00Z nightly had aborted when a helm upgrade restarted the control plane under it, which is why the lane and the deploys now keep out of each other's way. The browser lane is <code>bifrost-ui/e2e</code>: nine Playwright specs against a Keycloak + Bifrost stack on every pull request, plus one that needs a real provisioner. It is counted apart from the Go suite because it proves a different thing — that a person holding these roles can actually use the page. Skips are normal and recorded: a test skips when its target lacks the capability it needs, which is why a row can show more passes on a real cluster than on L2.</p>
+    <p><b>Lanes.</b> L2 runs on every push with no cluster and its numbers come from the committed matrix on main. The kind lane runs four shards on a throwaway cluster, last green on run 34228237429. The grace figures are the in-cluster run of 2026-09-08 against the live deployment (89 minutes, every package passed) — the same job the nightly runs; that day's 07:00Z nightly had aborted when a helm upgrade restarted the control plane under it, which is why the lane and the deploys now keep out of each other's way. The browser lane is <code>bifrost-ui/e2e</code> — nine Playwright specs against a Keycloak + Bifrost stack on every pull request, plus one that needs a real provisioner — and the <code>grace-e2e</code> sim lane: alice and bob as real JupyterHub sessions driving the extension, the checkmaite UI and the dashboard against grace, with the platform sampled underneath. Both are counted apart from the Go suite because they prove a different thing — that a person holding these roles can actually use the platform. Skips are normal and recorded: a test skips when its target lacks the capability it needs, which is why a row can show more passes on a real cluster than on L2.</p>
     <p><b>The rows no lane can speak for.</b> Nine and eleven live in the JupyterLab extension, a separate repository with its own suites; nine now has live evidence against grace, eleven has none. Sixteen is deferred by ruling and pinned by a test that fails on purpose. Seventeen has only a compile-time guard that the provisioner interface stays free of Kubernetes types.</p>
     <p>Generated from <code>docs/requirements/status.csv</code> by <code>docs/requirements/render_status.py</code>. Lane numbers regenerate with <code>make report</code> and the lane artifacts; the curated columns do not, so date any edit.</p>
   </div>
