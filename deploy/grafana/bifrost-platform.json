@@ -7,7 +7,7 @@
  ],
  "timezone": "browser",
  "schemaVersion": 39,
- "version": 2,
+ "version": 3,
  "refresh": "15s",
  "editable": true,
  "graphTooltip": 1,
@@ -385,8 +385,8 @@
   {
    "id": 8,
    "type": "bargauge",
-   "title": "Clusters by project",
-   "description": "Where the clusters are. Includes records that have not been purged yet.",
+   "title": "Cluster records by project",
+   "description": "Every record Bifrost holds, by project \u2014 including stopped clusters that have not been purged yet, so a big number is history as much as it is load. (bifrost_clusters_by_project carries no state label; when it does, this becomes live clusters only.)",
    "gridPos": {
     "x": 0,
     "y": 5,
@@ -490,12 +490,12 @@
   {
    "id": 9,
    "type": "timeseries",
-   "title": "Cluster records by state",
-   "description": "What the control plane says about every record it holds. \"unknown\" is a record with no observed state \u2014 mostly stopped clusters awaiting purge, so a large number here is bookkeeping, not trouble.",
+   "title": "Live clusters by state",
+   "description": "Clusters with an observed state, over time. Stopped records that await purge report no state and are counted in the tile to the right, not here \u2014 there are enough of them to flatten this chart into its axis otherwise.",
    "gridPos": {
     "x": 8,
     "y": 5,
-    "w": 8,
+    "w": 5,
     "h": 6
    },
    "datasource": {
@@ -628,7 +628,7 @@
    },
    "targets": [
     {
-     "expr": "sum by (state) (bifrost_clusters_total)",
+     "expr": "sum by (state) (bifrost_clusters_total{state!=\"unknown\"})",
      "legendFormat": "{{state}}",
      "datasource": {
       "type": "prometheus",
@@ -1161,7 +1161,7 @@
    "id": 18,
    "type": "timeseries",
    "title": "Tasks by state \u2014 $cluster",
-   "description": "Ray scheduler task states. Waiting climbing while Executing stays flat means the cluster is out of capacity for this load.",
+   "description": "Live Ray scheduler task states. Cancelled is a lifetime count and is left out \u2014 it drew a wall over everything else. Waiting climbing while Executing stays flat means the cluster is out of capacity for this load.",
    "gridPos": {
     "x": 16,
     "y": 20,
@@ -1303,7 +1303,7 @@
    },
    "targets": [
     {
-     "expr": "sum by (State) (ray_scheduler_tasks{bifrost_cluster=\"$cluster\"})",
+     "expr": "sum by (State) (ray_scheduler_tasks{bifrost_cluster=\"$cluster\", State!=\"Cancelled\"})",
      "legendFormat": "{{State}}",
      "datasource": {
       "type": "prometheus",
@@ -2645,6 +2645,56 @@
      "sort": "desc"
     }
    }
+  },
+  {
+   "id": 35,
+   "type": "stat",
+   "title": "Unpurged records",
+   "description": "Stopped clusters Bifrost still holds a record for (observed state none). Bookkeeping, not load; a purge clears them.",
+   "gridPos": {
+    "x": 13,
+    "y": 5,
+    "w": 3,
+    "h": 6
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "mimir"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "#898781"
+     },
+     "decimals": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value",
+    "orientation": "auto",
+    "justifyMode": "center"
+   },
+   "targets": [
+    {
+     "expr": "sum(bifrost_clusters_total{state=\"unknown\"}) or vector(0)",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "mimir"
+     }
+    }
+   ]
   }
  ]
 }
