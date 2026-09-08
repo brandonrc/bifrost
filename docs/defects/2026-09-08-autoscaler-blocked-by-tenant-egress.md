@@ -39,3 +39,14 @@ after the cluster exists). Add a kind-lane job that runs the shards with
 **Until then:** grace runs with the flag off again. The `sim` lane asserts the
 fixed-replica shape when the flag is off and the up-then-down shape when it is
 on, and records which in its manifest.
+
+**Fixed (bifrost #36):** with autoscaling on for a cluster, the live client
+applies `bifrost-cluster-<id>-autoscaler` — an egress-only policy selecting
+that cluster's head, allowing the `kubernetes` Endpoints' addresses on their
+port (read from `endpoints/kubernetes` in `default`, cached five minutes; RBAC
+`get` added to the pack chart and the kind manifests). Deleted with the
+cluster. A control plane that cannot read the endpoints refuses the cluster
+with a message naming the grant. The kind lane gained an `autoscaling` shard
+(`REQ_TARGET=kind-autoscaling`, `--ray-autoscaling` patched onto the
+Deployment) running r06, whose `TestAutoscalerReachesTheAPIServerAndAddsAWorker`
+watches the sidecar bring a min-1 worker group from zero to one.

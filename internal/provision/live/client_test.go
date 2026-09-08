@@ -5,6 +5,10 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
 
 	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -145,5 +149,60 @@ func TestEnsureStorageSourcesExistVolumes(t *testing.T) {
 	}
 	if err := ensureStorageSourcesExist(context.Background(), fake, "tenants", storage[:1]); err != nil {
 		t.Fatalf("claim present: %v", err)
+	}
+}
+
+// TestAPIServerEndpointReadsTheKubernetesEndpoints: the autoscaler egress
+// policy is only as good as the addresses it names. They come from
+// endpoints/kubernetes in default — the real listeners, not the Service VIP —
+// and are cached so a cluster create costs no extra round trip.
+func TestAPIServerEndpointReadsTheKubernetesEndpoints(t *testing.T) {
+	cs := k8sfake.NewSimpleClientset(&corev1.Endpoints{
+		ObjectMeta: metav1.ObjectMeta{Name: "kubernetes", Namespace: "default"},
+		Subsets: []corev1.EndpointSubset{{
+			Addresses: []corev1.EndpointAddress{{IP: "192.168.42.150"}, {IP: "192.168.42.151"}},
+			Ports:     []corev1.EndpointPort{{Name: "https", Port: 16443}},
+		}},
+	})
+	c := &Client{clientset: cs, namespace: "bifrost"}
+	got, err := c.apiServerEndpoint(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got.Addresses, ",") != "192.168.42.150,192.168.42.151" || got.Port != 16443 {
+		t.Fatalf("endpoint = %+v", got)
+	}
+	// Cached: a second read within the TTL does not hit the API.
+	before := len(cs.Actions())
+	if _, err := c.apiServerEndpoint(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(cs.Actions()) != before {
+		t.Fatalf("second read hit the API (%d actions, was %d)", len(cs.Actions()), before)
+	}
+	// Stale: past the TTL it reads again.
+	c.apiServerRead = time.Now().Add(-2 * apiServerTTL)
+	if _, err := c.apiServerEndpoint(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(cs.Actions()) == before {
+		t.Fatalf("stale cache was not refreshed")
+	}
+}
+
+// TestAPIServerEndpointIsAReadableErrorWhenForbidden: a control plane run
+// with --ray-autoscaling but without `get` on endpoints/kubernetes must
+// refuse the cluster with a message that names the fix — not provision a
+// cluster whose autoscaler dies quietly, which is the failure this replaces.
+func TestAPIServerEndpointIsAReadableErrorWhenForbidden(t *testing.T) {
+	cs := k8sfake.NewSimpleClientset() // no Endpoints object at all
+	c := &Client{clientset: cs, namespace: "bifrost"}
+	_, err := c.apiServerEndpoint(context.Background())
+	var pe provision.ProvisionError
+	if !errors.As(err, &pe) || pe.Kind != provision.ProvisionErrBackend {
+		t.Fatalf("err = %v, want a backend ProvisionError", err)
+	}
+	if !strings.Contains(pe.Message, "endpoints/kubernetes") {
+		t.Fatalf("message %q does not name what to grant", pe.Message)
 	}
 }

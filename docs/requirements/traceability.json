@@ -124,13 +124,14 @@
       "n": 6,
       "title": "Self-serve private clusters (dask-gateway UX)",
       "priority": "CRITICAL",
-      "tests": 12,
+      "tests": 13,
       "passed": 9,
       "failed": 0,
-      "skipped": 3,
+      "skipped": 4,
       "not_yet_built": 0,
       "status": "partial",
       "test_names": [
+        "TestAutoscalerReachesTheAPIServerAndAddsAWorker",
         "TestClusterViewCarriesGatewayAddress",
         "TestCreateConvergesAndDeleteRemovesEverything",
         "TestDashboardNginxResolvesUpstreamAtRequestTime",
@@ -146,6 +147,7 @@
       ],
       "skip_reasons": [
         "bifrost-pack chart not checked out (set PACK_CHART)",
+        "target inproc lacks capability autoscaling",
         "target inproc lacks capability probes",
         "target inproc has no Kubernetes"
       ]

@@ -43,6 +43,15 @@ jobs:
             pkgs: ./test/requirements/r01_serve_from_jupyter/... ./test/requirements/r02_group_serving/... ./test/requirements/r04_serving_pool/... ./test/requirements/r13_pools/...
           - name: governance
             pkgs: ./test/requirements/contract/... ./test/requirements/r07_admin_controls/... ./test/requirements/r12_private_storage/... ./test/requirements/r14_usage/... ./test/requirements/r15_health/... ./test/requirements/r16_dask/... ./test/requirements/r18_baseline/... ./test/requirements/pack/...
+          # The control plane with --ray-autoscaling: the one configuration
+          # nothing ran before 2026-09-08, when it turned out the autoscaler
+          # sidecar could not reach the API server through the tenant
+          # posture. Runs r06 — its autoscale test needs this target — so the
+          # path stays proven.
+          - name: autoscaling
+            pkgs: ./test/requirements/r06_self_serve/...
+            target: kind-autoscaling
+            autoscaling: "true"
     env:
       KIND_CLUSTER: bifrost-l3
       BIFROST_URL: http://127.0.0.1:8484
@@ -101,6 +110,10 @@ jobs:
             kubectl apply -f test/requirements/target/cluster/kind/manifests.yaml && break
             echo "apply failed (attempt $i), retrying"; sleep 5
           done
+          if [ "${{ matrix.shard.autoscaling }}" = "true" ]; then
+            kubectl -n bifrost patch deploy bifrost --type=json \
+              -p '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--ray-autoscaling"}]'
+          fi
           kubectl -n bifrost rollout status deploy/bifrost --timeout=180s
           for i in $(seq 1 30); do curl -sf "$BIFROST_URL/healthz" && break; sleep 2; done
           curl -sf "$BIFROST_URL/api/v1/version"
@@ -108,7 +121,7 @@ jobs:
       - name: L3 requirement suite
         id: suite
         env:
-          REQ_TARGET: kind
+          REQ_TARGET: ${{ matrix.shard.target || 'kind' }}
           REQ_CONTROL_PLANE_SELECTOR: app.kubernetes.io/name=bifrost-pack
           # Head-only clusters: see fixture.WorkerReplicas.
           REQ_WORKER_REPLICAS: "0"

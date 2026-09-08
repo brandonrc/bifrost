@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -1001,6 +1002,69 @@ func ClusterAllowNetworkPolicy(id string, owner *string) *networkingv1.NetworkPo
 			Egress: []networkingv1.NetworkPolicyEgressRule{
 				{To: []networkingv1.NetworkPolicyPeer{{PodSelector: sameCluster}}},
 			},
+		},
+	}
+}
+
+// APIServerEndpoint is where the Kubernetes API server actually answers:
+// the addresses and port of the `kubernetes` Endpoints in `default`, not the
+// Service VIP. Egress NetworkPolicy is evaluated after the kube-proxy DNAT,
+// so a rule written against the ClusterIP (10.x.x.1:443) matches nothing;
+// the rule has to name the endpoint IPs and the real port (6443, 16443…).
+type APIServerEndpoint struct {
+	Addresses []string
+	Port      int32
+}
+
+// AutoscalerPolicyName is the name of a cluster's autoscaler egress policy.
+func AutoscalerPolicyName(id string) string {
+	return ClusterAllowPolicyName(id) + "-autoscaler"
+}
+
+// AutoscalerEgressNetworkPolicy lets an autoscaled cluster's head reach the
+// Kubernetes API server, and nothing else it could not already reach.
+//
+// With EnableInTreeAutoscaling KubeRay adds an `autoscaler` container to the
+// head pod, and that container reads and patches its own RayCluster through
+// the API server. Bifrost's tenant posture — default-deny plus a tenant-allow
+// whose only egress is kube-dns — closed that path: the sidecar died on a
+// connect timeout to the Service VIP, restarted until the head restarted
+// with it, and no cluster run with --ray-autoscaling ever gained a worker.
+// Found on grace by the grace-e2e sim lane, 2026-09-08 (defect
+// docs/defects/2026-09-08-autoscaler-blocked-by-tenant-egress.md).
+//
+// Scoped as narrowly as the fault: the head pod of this cluster only
+// (workers run no autoscaler), the endpoint addresses only, the API port
+// only. Policies are additive, so nothing in the tenant posture changes.
+// Applied with the cluster and deleted with it, like the cluster allow.
+func AutoscalerEgressNetworkPolicy(id string, api APIServerEndpoint) *networkingv1.NetworkPolicy {
+	peers := make([]networkingv1.NetworkPolicyPeer, 0, len(api.Addresses))
+	for _, ip := range api.Addresses {
+		cidr := ip + "/32"
+		if strings.Contains(ip, ":") {
+			cidr = ip + "/128"
+		}
+		peers = append(peers, networkingv1.NetworkPolicyPeer{IPBlock: &networkingv1.IPBlock{CIDR: cidr}})
+	}
+	return &networkingv1.NetworkPolicy{
+		TypeMeta: metav1.TypeMeta{APIVersion: NetworkPolicyAPIVersion, Kind: NetworkPolicyKind},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: AutoscalerPolicyName(id),
+			Labels: map[string]string{
+				ManagedByLabel: FieldManager,
+				ClusterIDLabel: id,
+			},
+		},
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{
+				ClusterIDLabel:     id,
+				"ray.io/node-type": "head",
+			}},
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
+			Egress: []networkingv1.NetworkPolicyEgressRule{{
+				To:    peers,
+				Ports: []networkingv1.NetworkPolicyPort{tcpPort(int(api.Port))},
+			}},
 		},
 	}
 }

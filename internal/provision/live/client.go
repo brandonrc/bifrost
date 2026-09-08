@@ -30,6 +30,8 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"sync"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -62,7 +64,18 @@ type Client struct {
 	clientset   kubernetes.Interface
 	namespace   string
 	autoscaling bool
+
+	// apiServer caches where the API server answers (see
+	// provision.APIServerEndpoint): read from the `kubernetes` Endpoints
+	// once per apiServerTTL, so a cluster create does not add a round trip
+	// and a control-plane endpoint change is picked up within minutes.
+	apiServerMu   sync.Mutex
+	apiServer     *provision.APIServerEndpoint
+	apiServerRead time.Time
 }
+
+// apiServerTTL bounds how stale the cached API server endpoint may be.
+const apiServerTTL = 5 * time.Minute
 
 var (
 	_ provision.Provisioner     = (*Client)(nil)
@@ -258,15 +271,74 @@ func ensureStorageSourcesExist(ctx context.Context, c client.Client, namespace s
 	return nil
 }
 
-// deleteClusterAllow deletes the per-cluster allow policy for id.
-// Idempotent: already-gone is success. Ported from
-// kuberay_client.rs:239-256.
+// deleteClusterAllow deletes the per-cluster allow policy for id, and the
+// autoscaler egress policy if the cluster had one. Idempotent: already-gone
+// is success. Ported from kuberay_client.rs:239-256.
 func (c *Client) deleteClusterAllow(ctx context.Context, id string) error {
-	np := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: provision.ClusterAllowPolicyName(id), Namespace: c.namespace}}
-	if err := c.c.Delete(ctx, np); err != nil && !apierrors.IsNotFound(err) {
-		return wrapErr(err)
+	for _, name := range []string{provision.ClusterAllowPolicyName(id), provision.AutoscalerPolicyName(id)} {
+		np := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: c.namespace}}
+		if err := c.c.Delete(ctx, np); err != nil && !apierrors.IsNotFound(err) {
+			return wrapErr(err)
+		}
 	}
 	return nil
+}
+
+// ensureAutoscalerEgress applies the policy that lets this cluster's head —
+// where KubeRay runs the autoscaler sidecar — reach the API server. Skipped
+// under an admin-managed default-deny, like every policy Bifrost writes.
+//
+// The endpoint is not optional: a control plane started with
+// --ray-autoscaling that cannot read the `kubernetes` Endpoints (RBAC) would
+// otherwise provision clusters whose autoscaler dies quietly, which is the
+// failure this exists to end. So the cluster gets a readable error instead.
+func (c *Client) ensureAutoscalerEgress(ctx context.Context, id string) error {
+	deny, err := c.adminManagedDeny(ctx, c.namespace)
+	if err != nil {
+		return err
+	}
+	if deny {
+		return nil
+	}
+	api, err := c.apiServerEndpoint(ctx)
+	if err != nil {
+		return err
+	}
+	return c.applyNetworkPolicy(ctx, c.namespace, provision.AutoscalerEgressNetworkPolicy(id, api))
+}
+
+// apiServerEndpoint reads (and caches) the `kubernetes` Endpoints in
+// `default`: the addresses and port the API server answers on, which is what
+// an egress NetworkPolicy has to name (the Service VIP is DNAT'd away before
+// policy is evaluated). Needs `get` on endpoints/kubernetes in default.
+func (c *Client) apiServerEndpoint(ctx context.Context) (provision.APIServerEndpoint, error) {
+	c.apiServerMu.Lock()
+	defer c.apiServerMu.Unlock()
+	if c.apiServer != nil && time.Since(c.apiServerRead) < apiServerTTL {
+		return *c.apiServer, nil
+	}
+	ep, err := c.clientset.CoreV1().Endpoints("default").Get(ctx, "kubernetes", metav1.GetOptions{})
+	if err != nil {
+		return provision.APIServerEndpoint{}, provision.ProvisionError{Kind: provision.ProvisionErrBackend,
+			Message: fmt.Sprintf("autoscaling needs the API server endpoint (get endpoints/kubernetes in default): %v", err)}
+	}
+	out := provision.APIServerEndpoint{}
+	for _, sub := range ep.Subsets {
+		for _, a := range sub.Addresses {
+			out.Addresses = append(out.Addresses, a.IP)
+		}
+		for _, p := range sub.Ports {
+			if p.Name == "https" || out.Port == 0 {
+				out.Port = p.Port
+			}
+		}
+	}
+	if len(out.Addresses) == 0 || out.Port == 0 {
+		return provision.APIServerEndpoint{}, provision.ProvisionError{Kind: provision.ProvisionErrBackend,
+			Message: "autoscaling needs the API server endpoint: endpoints/kubernetes in default has no addresses"}
+	}
+	c.apiServer, c.apiServerRead = &out, time.Now()
+	return out, nil
 }
 
 // EnsureNamespacePosture ensures the namespace-level security posture:
@@ -342,6 +414,14 @@ func (c *Client) Apply(ctx context.Context, id core.ClusterId, spec *core.Cluste
 	}
 	if err := c.ensureStorageSourcesExist(ctx, spec.StorageResolved); err != nil {
 		return provision.ApplyResponse{}, err
+	}
+	// Mirrors RayClusterFor's rule: an elastic queue forces the autoscaler
+	// on. Whenever the sidecar will run, it must be able to reach the API
+	// server, or it dies on a connect timeout and the cluster never scales.
+	if c.autoscaling || (queue != nil && queue.Elastic) {
+		if err := c.ensureAutoscalerEgress(ctx, string(id)); err != nil {
+			return provision.ApplyResponse{}, err
+		}
 	}
 	manifest, err := provision.RayClusterFor(id, spec, c.autoscaling, generation, queue)
 	if err != nil {

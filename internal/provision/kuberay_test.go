@@ -1386,3 +1386,59 @@ func TestOwnedFingerprintCoversVolumeSources(t *testing.T) {
 		t.Fatal("a re-pointed claim must change the fingerprint")
 	}
 }
+
+// TestAutoscalerEgressPolicyShape pins the policy that lets an autoscaled
+// cluster's head reach the API server — and only that. The grace sim lane
+// found the sidecar dying on a connect timeout to the Service VIP behind the
+// tenant posture (docs/defects/2026-09-08-autoscaler-blocked-by-tenant-egress.md);
+// the rule that ends it must name the endpoint IPs and the real port, select
+// the head alone, and touch no ingress.
+func TestAutoscalerEgressPolicyShape(t *testing.T) {
+	p := AutoscalerEgressNetworkPolicy("tenant-a", APIServerEndpoint{Addresses: []string{"192.168.42.150", "fd00::1"}, Port: 16443})
+	if p.Name != "bifrost-cluster-tenant-a-autoscaler" {
+		t.Fatalf("name = %q", p.Name)
+	}
+	if p.Labels[ManagedByLabel] != "bifrost" || p.Labels[ClusterIDLabel] != "tenant-a" {
+		t.Fatalf("labels = %#v (postflight reaps by cluster id; the reaper must find this)", p.Labels)
+	}
+	m := marshal(t, p)
+	spec := mp(t, m["spec"])
+	if !jsonEqual(t, spec["podSelector"], map[string]any{"matchLabels": map[string]any{ClusterIDLabel: "tenant-a", "ray.io/node-type": "head"}}) {
+		t.Fatalf("podSelector = %#v, want this cluster's head only (workers run no autoscaler)", spec["podSelector"])
+	}
+	if !jsonEqual(t, spec["policyTypes"], []any{"Egress"}) {
+		t.Fatalf("policyTypes = %#v, want Egress only: this policy must not touch what may reach the head", spec["policyTypes"])
+	}
+	if _, ok := spec["ingress"]; ok {
+		t.Fatalf("ingress present: %#v", spec["ingress"])
+	}
+	egress := arr(t, spec["egress"])
+	if len(egress) != 1 {
+		t.Fatalf("egress rules = %d, want 1", len(egress))
+	}
+	rule := mp(t, egress[0])
+	wantTo := []any{
+		map[string]any{"ipBlock": map[string]any{"cidr": "192.168.42.150/32"}},
+		map[string]any{"ipBlock": map[string]any{"cidr": "fd00::1/128"}},
+	}
+	if !jsonEqual(t, rule["to"], wantTo) {
+		t.Fatalf("egress.to = %#v, want the endpoint addresses as host routes (the Service VIP is DNAT'd before policy)", rule["to"])
+	}
+	if !jsonEqual(t, rule["ports"], []any{map[string]any{"protocol": "TCP", "port": float64(16443)}}) {
+		t.Fatalf("egress.ports = %#v, want the endpoint port only", rule["ports"])
+	}
+}
+
+// TestAutoscalerPolicyIsSelectedByTheSameReaper: anything Bifrost writes per
+// cluster must carry the cluster id, or the postflight sweep and Terminate
+// leave it behind when the cluster goes.
+func TestAutoscalerPolicyIsSelectedByTheSameReaper(t *testing.T) {
+	a := ClusterAllowNetworkPolicy("c1", nil)
+	b := AutoscalerEgressNetworkPolicy("c1", APIServerEndpoint{Addresses: []string{"10.0.0.1"}, Port: 6443})
+	if a.Labels[ClusterIDLabel] != b.Labels[ClusterIDLabel] {
+		t.Fatalf("cluster-id labels differ: %q vs %q", a.Labels[ClusterIDLabel], b.Labels[ClusterIDLabel])
+	}
+	if a.Name == b.Name {
+		t.Fatalf("both policies are named %q; one would overwrite the other", a.Name)
+	}
+}
