@@ -33,9 +33,10 @@ spec:
       # No retry. A failed suite is a result to read, not a flake to paper
       # over, and a second run would report the first one's leftovers.
       backoffLimit: 0
-      # Longer than the sum of the per-package timeouts is pointless; this is
-      # the outer bound that stops a wedged run holding the schedule.
-      activeDeadlineSeconds: 5400
+      # The full grace lane converges in ~75-90 min (r06 alone is ~20 min of
+      # real cluster churn); 3h leaves headroom for a slow night while still
+      # stopping a wedged run from holding the schedule.
+      activeDeadlineSeconds: 10800
       ttlSecondsAfterFinished: 172800
       template:
         metadata:
