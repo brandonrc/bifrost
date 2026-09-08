@@ -7,7 +7,7 @@
  ],
  "timezone": "browser",
  "schemaVersion": 39,
- "version": 3,
+ "version": 4,
  "refresh": "15s",
  "editable": true,
  "graphTooltip": 1,
@@ -2649,7 +2649,7 @@
   {
    "id": 35,
    "type": "stat",
-   "title": "Unpurged records",
+   "title": "Unpurged",
    "description": "Stopped clusters Bifrost still holds a record for (observed state none). Bookkeeping, not load; a purge clears them.",
    "gridPos": {
     "x": 13,
