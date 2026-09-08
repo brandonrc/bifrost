@@ -174,7 +174,6 @@ func (e StorageEntryMode) Valid() bool {
 
 // Defines values for StorageEntrySource.
 const (
-	HostPath              StorageEntrySource = "host_path"
 	PersistentVolumeClaim StorageEntrySource = "persistent_volume_claim"
 	Secret                StorageEntrySource = "secret"
 )
@@ -182,8 +181,6 @@ const (
 // Valid indicates whether the value is a known member of the StorageEntrySource enum.
 func (e StorageEntrySource) Valid() bool {
 	switch e {
-	case HostPath:
-		return true
 	case PersistentVolumeClaim:
 		return true
 	case Secret:
@@ -1168,18 +1165,12 @@ type ServiceView struct {
 	Url *string `json:"url,omitempty"`
 }
 
-// StorageEntry A catalog entry for private storage (#12): a Secret, PersistentVolumeClaim or host path Bifrost delivers to the pods of any cluster, job or service that names this entry in its `storage` list. The API only ever sees names and paths; a Secret's contents never cross it.
+// StorageEntry A catalog entry for private storage (#12): a Secret or PersistentVolumeClaim Bifrost delivers to the pods of any cluster, job or service that names this entry in its `storage` list. The API only ever sees names and paths; a Secret's contents never cross it.
 type StorageEntry struct {
 	// ClaimName Name of the PersistentVolumeClaim in the workload namespace (`persistent_volume_claim` source only). Claims are namespace-local: the claim must live where the pods run.
 	ClaimName *string `json:"claim_name,omitempty"`
 
-	// HostPath Node path a `host_path` entry mounts (`host_path` source only).
-	HostPath *string `json:"host_path,omitempty"`
-
-	// HostType Kubernetes HostPathType for a `host_path` entry (`Directory`, `FileOrCreate`, ...); `null`/empty = no node-path type checking.
-	HostType *string `json:"host_type,omitempty"`
-
-	// Mode How the source reaches the pods: `env` injects every Secret key as an environment variable (secret source only); `file` mounts the source at `mount_path` — read-only for a Secret (credentials), read-write for the volume sources (data volumes).
+	// Mode How the source reaches the pods: `env` injects every Secret key as an environment variable (secret source only); `file` mounts the source at `mount_path` — read-only for a Secret (credentials), read-write for a PersistentVolumeClaim (a data volume).
 	Mode StorageEntryMode `json:"mode"`
 
 	// MountPath Mount point inside the pods (`file` mode only); `null` for `env` mode.
@@ -1194,14 +1185,14 @@ type StorageEntry struct {
 	// SecretName Name of the Kubernetes Secret in the workload namespace (`secret` source only).
 	SecretName *string `json:"secret_name,omitempty"`
 
-	// Source What backs the entry: a Kubernetes Secret, a PersistentVolumeClaim, or a host path on the node. Absent = `secret`. The volume sources are `file` mode only.
+	// Source What backs the entry: a Kubernetes Secret or a PersistentVolumeClaim. Absent = `secret`. A volume source is `file` mode only.
 	Source *StorageEntrySource `json:"source,omitempty"`
 }
 
-// StorageEntryMode How the source reaches the pods: `env` injects every Secret key as an environment variable (secret source only); `file` mounts the source at `mount_path` — read-only for a Secret (credentials), read-write for the volume sources (data volumes).
+// StorageEntryMode How the source reaches the pods: `env` injects every Secret key as an environment variable (secret source only); `file` mounts the source at `mount_path` — read-only for a Secret (credentials), read-write for a PersistentVolumeClaim (a data volume).
 type StorageEntryMode string
 
-// StorageEntrySource What backs the entry: a Kubernetes Secret, a PersistentVolumeClaim, or a host path on the node. Absent = `secret`. The volume sources are `file` mode only.
+// StorageEntrySource What backs the entry: a Kubernetes Secret or a PersistentVolumeClaim. Absent = `secret`. A volume source is `file` mode only.
 type StorageEntrySource string
 
 // SubmitJob Request body for `POST /api/v1/jobs`.

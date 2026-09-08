@@ -64,16 +64,6 @@ func fileEntry(name, secret, mount string, projects ...string) client.StorageEnt
 	return client.StorageEntry{Name: name, SecretName: &secret, Mode: client.File, MountPath: &mount, Projects: &projects}
 }
 
-// hostPathEntry catalogs a node path as a volume-source storage entry.
-func hostPathEntry(name, path, hostType, mount string, projects ...string) client.StorageEntry {
-	src := client.HostPath
-	e := client.StorageEntry{Name: name, Source: &src, HostPath: &path, Mode: client.File, MountPath: &mount, Projects: &projects}
-	if hostType != "" {
-		e.HostType = &hostType
-	}
-	return e
-}
-
 // createWithStorage posts the canonical cluster body with storage names
 // and returns (status, body).
 func createWithStorage(t *testing.T, tgt req.Target, principal, id, project string, storage ...string) (int, []byte) {
@@ -141,7 +131,7 @@ func TestSecretValuesNeverAppearInResponses(t *testing.T) {
 	if err := json.Unmarshal(put, &view); err != nil {
 		t.Fatal(err)
 	}
-	allowed := map[string]bool{"name": true, "source": true, "secret_name": true, "claim_name": true, "host_path": true, "host_type": true, "mode": true, "mount_path": true, "projects": true}
+	allowed := map[string]bool{"name": true, "source": true, "secret_name": true, "claim_name": true, "mode": true, "mount_path": true, "projects": true}
 	found := false
 	for _, e := range view.Storage {
 		if e["name"] == name {
@@ -338,7 +328,7 @@ func pvcEntry(name, claim, mount string, projects ...string) client.StorageEntry
 
 func TestVolumeSourceCatalogValidationAndResolution(t *testing.T) {
 	tgt := target.Get(t)
-	req.Covers(t, 12, "a storage entry may name a PersistentVolumeClaim or a host path as its source; the catalog edit validates the source's own fields and a spec resolves to the volume's delivery instructions")
+	req.Covers(t, 12, "a storage entry may name a PersistentVolumeClaim as its source; the catalog edit validates the source's own fields and a spec resolves to the volume's delivery instructions")
 	ctx := context.Background()
 	admin := tgt.As("admin").API()
 
@@ -377,48 +367,5 @@ func TestVolumeSourceCatalogValidationAndResolution(t *testing.T) {
 	st, body := createWithStorage(t, tgt, "dev-a", id, "team-a", name)
 	if st != http.StatusCreated {
 		t.Fatalf("create with a pvc storage entry = %d %s, want 201", st, body)
-	}
-}
-
-func TestHostPathSourceMountsAtPath(t *testing.T) {
-	tgt := target.Get(t)
-	req.Covers(t, 12, "a host_path storage entry mounts the node path read-write at the catalogued path on the head pod (a data volume, unlike the read-only Secret mounts)")
-	req.NeedK8s(t, tgt)
-	name := req.Name("node-data")
-	hostPath := "/var/lib/" + req.Name("r12-hostpath")
-	mount := "/opt/bifrost-r12-host"
-	setStorageCatalog(t, tgt, []client.StorageEntry{hostPathEntry(name, hostPath, "DirectoryOrCreate", mount, "team-a")})
-
-	id := req.Name("storh")
-	st, created := createWithStorage(t, tgt, "dev-a", id, "team-a", name)
-	if st != http.StatusCreated {
-		t.Fatalf("create = %d %s, want 201", st, created)
-	}
-	fixture.WaitObserved(t, tgt, "dev-a", id, "running")
-
-	head := headPod(t, tgt, id)
-	var volume *corev1.Volume
-	for i, v := range head.Spec.Volumes {
-		if v.HostPath != nil && v.HostPath.Path == hostPath {
-			volume = &head.Spec.Volumes[i]
-		}
-	}
-	if volume == nil {
-		t.Fatalf("head pod has no hostPath volume for %s: %+v", hostPath, head.Spec.Volumes)
-	}
-	if volume.HostPath.Type == nil || *volume.HostPath.Type != corev1.HostPathDirectoryOrCreate {
-		t.Errorf("hostPath type = %v, want DirectoryOrCreate", volume.HostPath.Type)
-	}
-	mounted := false
-	for _, m := range head.Spec.Containers[0].VolumeMounts {
-		if m.Name == volume.Name {
-			mounted = true
-			if m.MountPath != mount || m.ReadOnly {
-				t.Errorf("mount = %+v, want read-write at %s", m, mount)
-			}
-		}
-	}
-	if !mounted {
-		t.Fatalf("head container does not mount volume %s: %+v", volume.Name, head.Spec.Containers[0].VolumeMounts)
 	}
 }

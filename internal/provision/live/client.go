@@ -231,8 +231,6 @@ func (c *Client) ensureClusterAllow(ctx context.Context, id string, owner *strin
 // claim). The check is METADATA ONLY: the Get asks for a
 // PartialObjectMetadata, so a Secret's data never reaches Bifrost's
 // process (RBAC grants `secrets: get`, and this is the only use of it).
-// host_path entries name no API-server object — a wrong node path surfaces
-// as the kubelet's own FailedMount event.
 func (c *Client) ensureStorageSourcesExist(ctx context.Context, storage []core.ResolvedStorage) error {
 	return ensureStorageSourcesExist(ctx, c.c, c.namespace, storage)
 }
@@ -245,8 +243,6 @@ func ensureStorageSourcesExist(ctx context.Context, c client.Client, namespace s
 		case core.StorageSourcePersistentVolumeClaim:
 			meta.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("PersistentVolumeClaim"))
 			name = st.ClaimName
-		case core.StorageSourceHostPath:
-			continue // node-local; no API-server object to check
 		default:
 			meta.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Secret"))
 			name = st.SecretName

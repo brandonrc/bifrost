@@ -1267,51 +1267,51 @@ func TestOwnedFingerprintCoversStorage(t *testing.T) {
 	}
 }
 
-// testVolumeStorage is a resolved catalog with one PersistentVolumeClaim
-// entry and one host_path entry: the volume sources (requirement 12).
+// testVolumeStorage is a resolved catalog of PersistentVolumeClaim
+// entries: the volume source (requirement 12).
 func testVolumeStorage() []core.ResolvedStorage {
 	return []core.ResolvedStorage{
 		{Name: "analytics", Source: core.StorageSourcePersistentVolumeClaim, ClaimName: "checkmaite-analytics", Mode: core.StorageModeFile, MountPath: ptr.To("/app/data/analytics")},
-		{Name: "node-data", Source: core.StorageSourceHostPath, HostPath: "/srv/data", HostType: "Directory", Mode: core.StorageModeFile, MountPath: ptr.To("/srv/node-data")},
+		{Name: "scratch", Source: core.StorageSourcePersistentVolumeClaim, ClaimName: "checkmaite-scratch", Mode: core.StorageModeFile, MountPath: ptr.To("/app/data/scratch")},
 	}
 }
 
-// assertVolumeStorageProjected checks one pod template carries the claim
-// and the host path as read-write volume mounts at their catalogued paths
+// assertVolumeStorageProjected checks one pod template carries the claims
+// as read-write volume mounts at their catalogued paths
 // (data volumes, unlike the read-only Secret mounts).
 func assertVolumeStorageProjected(t *testing.T, what string, tmpl *corev1.PodTemplateSpec) {
 	t.Helper()
 	c := tmpl.Spec.Containers[0]
 	if len(tmpl.Spec.Volumes) != 2 {
-		t.Fatalf("%s: volumes = %+v, want the claim and hostPath volumes", what, tmpl.Spec.Volumes)
+		t.Fatalf("%s: volumes = %+v, want the two claim volumes", what, tmpl.Spec.Volumes)
 	}
-	claimVol := StorageVolumeName("analytics")
-	hostVol := StorageVolumeName("node-data")
+	analyticsVol := StorageVolumeName("analytics")
+	scratchVol := StorageVolumeName("scratch")
 	seen := map[string]bool{}
 	for _, v := range tmpl.Spec.Volumes {
 		switch v.Name {
-		case claimVol:
-			seen[claimVol] = true
+		case analyticsVol:
+			seen[analyticsVol] = true
 			if v.PersistentVolumeClaim == nil || v.PersistentVolumeClaim.ClaimName != "checkmaite-analytics" || v.PersistentVolumeClaim.ReadOnly {
 				t.Errorf("%s: claim volume = %+v, want claim checkmaite-analytics, read-write", what, v)
 			}
-		case hostVol:
-			seen[hostVol] = true
-			if v.HostPath == nil || v.HostPath.Path != "/srv/data" || v.HostPath.Type == nil || *v.HostPath.Type != corev1.HostPathDirectory {
-				t.Errorf("%s: hostPath volume = %+v, want /srv/data type Directory", what, v)
+		case scratchVol:
+			seen[scratchVol] = true
+			if v.PersistentVolumeClaim == nil || v.PersistentVolumeClaim.ClaimName != "checkmaite-scratch" || v.PersistentVolumeClaim.ReadOnly {
+				t.Errorf("%s: claim volume = %+v, want claim checkmaite-scratch, read-write", what, v)
 			}
 		default:
 			t.Errorf("%s: unexpected volume %+v", what, v)
 		}
 	}
-	if !seen[claimVol] || !seen[hostVol] {
-		t.Fatalf("%s: volumes = %+v, want %s and %s", what, tmpl.Spec.Volumes, claimVol, hostVol)
+	if !seen[analyticsVol] || !seen[scratchVol] {
+		t.Fatalf("%s: volumes = %+v, want %s and %s", what, tmpl.Spec.Volumes, analyticsVol, scratchVol)
 	}
 	mounts := map[string]corev1.VolumeMount{}
 	for _, m := range c.VolumeMounts {
 		mounts[m.Name] = m
 	}
-	for name, path := range map[string]string{claimVol: "/app/data/analytics", hostVol: "/srv/node-data"} {
+	for name, path := range map[string]string{analyticsVol: "/app/data/analytics", scratchVol: "/app/data/scratch"} {
 		m, ok := mounts[name]
 		if !ok || m.MountPath != path || m.ReadOnly {
 			t.Errorf("%s: mount for %s = %+v, want read-write at %s", what, name, m, path)
@@ -1342,8 +1342,7 @@ func TestVolumeSourcesAreProjectedOntoEveryPodTemplate(t *testing.T) {
 }
 
 // The owned fingerprint covers the volume sources: it round-trips through
-// the manifest, and a re-pointed claim, a re-typed host path or a stripped
-// volume is drift.
+// the manifest, and a re-pointed claim or a stripped volume is drift.
 func TestOwnedFingerprintCoversVolumeSources(t *testing.T) {
 	spec := testSpec(t, wg("cpu", 0, 4, 2))
 	spec.StorageResolved = testVolumeStorage()
@@ -1376,36 +1375,14 @@ func TestOwnedFingerprintCoversVolumeSources(t *testing.T) {
 	if fp, _ := FingerprintFromRayCluster(&stripped.Spec); fp == want {
 		t.Fatal("a removed claim volume must change the fingerprint")
 	}
-	// Re-type the host path on the live manifest: drift.
-	retyped := rc.DeepCopy()
-	for i, v := range retyped.Spec.HeadGroupSpec.Template.Spec.Volumes {
-		if v.HostPath != nil {
-			t := corev1.HostPathFileOrCreate
-			retyped.Spec.HeadGroupSpec.Template.Spec.Volumes[i].HostPath.Type = &t
+	// Re-point a claim on the live manifest: drift.
+	liveRepointed := rc.DeepCopy()
+	for i, v := range liveRepointed.Spec.HeadGroupSpec.Template.Spec.Volumes {
+		if v.PersistentVolumeClaim != nil && v.PersistentVolumeClaim.ClaimName == "checkmaite-analytics" {
+			liveRepointed.Spec.HeadGroupSpec.Template.Spec.Volumes[i].PersistentVolumeClaim.ClaimName = "other-claim"
 		}
 	}
-	if fp, _ := FingerprintFromRayCluster(&retyped.Spec); fp == want {
-		t.Fatal("a re-typed host path must change the fingerprint")
-	}
-}
-
-// A host_path entry with no declared type projects a nil Type (Kubernetes
-// then performs no node-path checking) and still round-trips the
-// fingerprint.
-func TestHostPathWithoutTypeProjectsNilType(t *testing.T) {
-	spec := testSpec(t, wg("cpu", 0, 4, 2))
-	spec.StorageResolved = []core.ResolvedStorage{
-		{Name: "any", Source: core.StorageSourceHostPath, HostPath: "/srv/anything", Mode: core.StorageModeFile, MountPath: ptr.To("/opt/any")},
-	}
-	rc, err := RayClusterFor("demo", spec, false, 1, nil)
-	if err != nil {
-		t.Fatalf("RayClusterFor: %v", err)
-	}
-	v := rc.Spec.HeadGroupSpec.Template.Spec.Volumes[0]
-	if v.HostPath == nil || v.HostPath.Type != nil {
-		t.Fatalf("volume = %+v, want a hostPath with nil Type", v)
-	}
-	if fp, ok := FingerprintFromRayCluster(&rc.Spec); !ok || fp != OwnedSpecFingerprint(spec) {
-		t.Fatalf("fingerprint did not round-trip for a typeless host path")
+	if fp, _ := FingerprintFromRayCluster(&liveRepointed.Spec); fp == want {
+		t.Fatal("a re-pointed claim must change the fingerprint")
 	}
 }

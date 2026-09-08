@@ -186,13 +186,11 @@ type fingerprintWorker struct {
 // (requirement 12): which source reaches the pods, how, and where. A
 // stripped envFrom or mount is drift, exactly like a changed image. The
 // catalog name is not on the manifest for env entries, so it is not part
-// of the projection. Exactly one of Secret/Claim/HostPath is set: the
-// source kind is recoverable from which field is non-empty.
+// of the projection. Exactly one of Secret/Claim is set: the source kind
+// is recoverable from which field is non-empty.
 type fingerprintStorage struct {
 	Secret    string  `json:"secret,omitempty"`
 	Claim     string  `json:"claim,omitempty"`
-	HostPath  string  `json:"host_path,omitempty"`
-	HostType  string  `json:"host_type,omitempty"`
 	Mode      string  `json:"mode"`
 	MountPath *string `json:"mount_path"`
 }
@@ -210,9 +208,9 @@ type fingerprintSpec struct {
 }
 
 // sortStorageProjection orders a projection deterministically (secret,
-// claim, host path, mode, mount path): the desired side comes from the
-// spec's list order, the live side from envFrom-then-volumes traversal,
-// and the two must agree byte for byte.
+// claim, mode, mount path): the desired side comes from the spec's list
+// order, the live side from envFrom-then-volumes traversal, and the two
+// must agree byte for byte.
 func sortStorageProjection(in []fingerprintStorage) []fingerprintStorage {
 	sort.Slice(in, func(i, j int) bool {
 		a, b := in[i], in[j]
@@ -221,9 +219,6 @@ func sortStorageProjection(in []fingerprintStorage) []fingerprintStorage {
 		}
 		if a.Claim != b.Claim {
 			return a.Claim < b.Claim
-		}
-		if a.HostPath != b.HostPath {
-			return a.HostPath < b.HostPath
 		}
 		if a.Mode != b.Mode {
 			return a.Mode < b.Mode
@@ -241,9 +236,6 @@ func storageProjection(storage []core.ResolvedStorage) []fingerprintStorage {
 		switch st.Source.OrDefault() {
 		case core.StorageSourcePersistentVolumeClaim:
 			f.Claim = st.ClaimName
-		case core.StorageSourceHostPath:
-			f.HostPath = st.HostPath
-			f.HostType = st.HostType
 		default:
 			f.Secret = st.SecretName
 		}
@@ -261,8 +253,8 @@ func storageProjection(storage []core.ResolvedStorage) []fingerprintStorage {
 
 // storageFromTemplate reads the storage projection back off a live pod
 // template: every envFrom.secretRef on the first container, and every
-// Secret, PersistentVolumeClaim or hostPath volume that container mounts
-// (with its mount path).
+// Secret or PersistentVolumeClaim volume that container mounts (with its
+// mount path).
 func storageFromTemplate(tmpl *corev1.PodTemplateSpec) []fingerprintStorage {
 	c, ok := firstContainer(tmpl)
 	if !ok {
@@ -288,12 +280,6 @@ func storageFromTemplate(tmpl *corev1.PodTemplateSpec) []fingerprintStorage {
 			out = append(out, fingerprintStorage{Secret: v.Secret.SecretName, Mode: core.StorageModeFile.String(), MountPath: ptr.To(mp)})
 		case v.PersistentVolumeClaim != nil:
 			out = append(out, fingerprintStorage{Claim: v.PersistentVolumeClaim.ClaimName, Mode: core.StorageModeFile.String(), MountPath: ptr.To(mp)})
-		case v.HostPath != nil:
-			f := fingerprintStorage{HostPath: v.HostPath.Path, Mode: core.StorageModeFile.String(), MountPath: ptr.To(mp)}
-			if v.HostPath.Type != nil {
-				f.HostType = string(*v.HostPath.Type)
-			}
-			out = append(out, f)
 		}
 	}
 	return sortStorageProjection(out)
@@ -544,7 +530,7 @@ func rayProbe(head bool) *corev1.Probe {
 // storage is the spec's resolved private-storage catalog entries
 // (requirement 12): env entries become `envFrom.secretRef`, file entries a
 // volume at their mount path backed by the entry's source (a read-only
-// Secret volume, or a read-write PersistentVolumeClaim/hostPath). Only
+// Secret volume, or a read-write PersistentVolumeClaim). Only
 // Secret NAMES are written; the kubelet resolves them inside the pod, so
 // the credentials never pass through Bifrost.
 func podTemplate(clusterID, containerName, image, cpu, memory string, gpu *string, generation *uint64, owner *string, storage []core.ResolvedStorage) (corev1.PodTemplateSpec, error) {
@@ -618,8 +604,8 @@ func StorageVolumeName(entry string) string { return "storage-" + entry }
 
 // projectStorage adds the storage entries to container (envFrom for env
 // mode, a volume mount for file mode) and returns the volumes the pod
-// needs for the mounts: a Secret volume (read-only), a
-// PersistentVolumeClaim or a hostPath (read-write — data volumes, not
+// needs for the mounts: a Secret volume (read-only) or a
+// PersistentVolumeClaim (read-write — data volumes, not
 // credentials), per the entry's source. Env entries carry only Secret
 // names — the kubelet resolves them inside the pod, so the credentials
 // never pass through Bifrost.
@@ -640,21 +626,13 @@ func projectStorage(container *corev1.Container, storage []core.ResolvedStorage)
 			var src corev1.VolumeSource
 			switch st.Source.OrDefault() {
 			case core.StorageSourcePersistentVolumeClaim:
-				// Volume sources are data volumes, not credentials: they
-				// mount read-write (the Kubernetes default), matching the
-				// pre-catalog deployments that ran against the same claims
-				// and node paths. The catalog's projects scoping is the
-				// access boundary.
+				// Claims are data volumes, not credentials: they mount
+				// read-write (the Kubernetes default), matching the
+				// pre-catalog deployments that ran against the same claims.
+				// The catalog's projects scoping is the access boundary.
 				src = corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 					ClaimName: st.ClaimName,
 				}}
-			case core.StorageSourceHostPath:
-				hp := &corev1.HostPathVolumeSource{Path: st.HostPath}
-				if st.HostType != "" {
-					t := corev1.HostPathType(st.HostType)
-					hp.Type = &t
-				}
-				src = corev1.VolumeSource{HostPath: hp}
 			default:
 				src = corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: st.SecretName}}
 				mount.ReadOnly = true

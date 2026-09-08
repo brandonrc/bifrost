@@ -120,7 +120,6 @@ func TestEnsureStorageSourcesExistVolumes(t *testing.T) {
 	mount := "/app/data"
 	storage := []core.ResolvedStorage{
 		{Name: "data", Source: core.StorageSourcePersistentVolumeClaim, ClaimName: "analytics", Mode: core.StorageModeFile, MountPath: &mount},
-		{Name: "node-data", Source: core.StorageSourceHostPath, HostPath: "/srv/data", HostType: "Directory", Mode: core.StorageModeFile, MountPath: &mount},
 		{Name: "missing", Source: core.StorageSourcePersistentVolumeClaim, ClaimName: "gone", Mode: core.StorageModeFile, MountPath: &mount},
 	}
 	err := ensureStorageSourcesExist(context.Background(), fake, "tenants", storage)
@@ -131,10 +130,9 @@ func TestEnsureStorageSourcesExistVolumes(t *testing.T) {
 	if !errors.As(err, &perr) || perr.Kind != provision.ProvisionErrBackend || !strings.Contains(perr.Message, `PersistentVolumeClaim "gone" not found`) {
 		t.Fatalf("err = %v, want a backend ProvisionError naming the claim", err)
 	}
-	// The host_path entry names no API-server object: only the two claims
-	// were looked up, as metadata.
+	// Both claims were looked up, as metadata.
 	if len(fake.asked) != 2 {
-		t.Fatalf("Get calls = %d, want 2 (claims only; host_path is node-local)", len(fake.asked))
+		t.Fatalf("Get calls = %d, want 2 (claims)", len(fake.asked))
 	}
 	for _, obj := range fake.asked {
 		meta, ok := obj.(*metav1.PartialObjectMetadata)
@@ -145,7 +143,7 @@ func TestEnsureStorageSourcesExistVolumes(t *testing.T) {
 			t.Fatalf("Get asked for %s, want core/v1 PersistentVolumeClaim metadata", gvk)
 		}
 	}
-	if err := ensureStorageSourcesExist(context.Background(), fake, "tenants", storage[:2]); err != nil {
-		t.Fatalf("claim present + host_path skipped: %v", err)
+	if err := ensureStorageSourcesExist(context.Background(), fake, "tenants", storage[:1]); err != nil {
+		t.Fatalf("claim present: %v", err)
 	}
 }

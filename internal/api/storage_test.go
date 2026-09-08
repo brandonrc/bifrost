@@ -23,19 +23,10 @@ func fileEntry(name, secret, mount string) StorageEntry {
 	return StorageEntry{Name: name, SecretName: strPtr(secret), Mode: File, MountPath: &mount}
 }
 
-// pvcEntry and hostPathEntry build volume-source catalog entries.
+// pvcEntry builds a volume-source catalog entry.
 func pvcEntry(name, claim, mount string) StorageEntry {
 	src := PersistentVolumeClaim
 	return StorageEntry{Name: name, Source: &src, ClaimName: strPtr(claim), Mode: File, MountPath: &mount}
-}
-
-func hostPathEntry(name, path, hostType, mount string) StorageEntry {
-	src := HostPath
-	e := StorageEntry{Name: name, Source: &src, HostPath: strPtr(path), Mode: File, MountPath: &mount}
-	if hostType != "" {
-		e.HostType = strPtr(hostType)
-	}
-	return e
 }
 
 func putStorage(t *testing.T, s *Server, entries []StorageEntry) (PolicyView, error) {
@@ -96,21 +87,13 @@ func TestUpdatePolicyStorageSectionReplaceAndValidation(t *testing.T) {
 		"pvc without claim":    {{Name: "a", Source: srcPtr(PersistentVolumeClaim), Mode: File, MountPath: strPtr("/opt/a")}},
 		"pvc bad claim name":   {pvcEntry("a", "Not_A_Claim", "/opt/a")},
 		"pvc with secret name": {withField(pvcEntry("a", "c", "/opt/a"), "secret_name")},
-		"pvc with host path":   {withField(pvcEntry("a", "c", "/opt/a"), "host_path")},
 		"pvc env mode":         {func() StorageEntry { e := pvcEntry("a", "c", "/opt/a"); e.Mode = Env; e.MountPath = nil; return e }()},
-		"host without path":    {{Name: "a", Source: srcPtr(HostPath), Mode: File, MountPath: strPtr("/opt/a")}},
-		"host relative path":   {hostPathEntry("a", "srv/data", "", "/opt/a")},
-		"host bad type":        {hostPathEntry("a", "/srv/data", "DirectoryMaybe", "/opt/a")},
-		"host with claim":      {withField(hostPathEntry("a", "/srv/data", "", "/opt/a"), "claim_name")},
-		"host env mode": {func() StorageEntry {
-			e := hostPathEntry("a", "/srv/data", "", "/opt/a")
-			e.Mode = Env
-			e.MountPath = nil
-			return e
-		}()},
-		"secret without name": {{Name: "a", Mode: Env}},
-		"secret with claim":   {withField(envEntry("a", "x"), "claim_name")},
-		"unknown source":      {{Name: "a", Source: srcPtr(StorageEntrySource("nfs")), SecretName: strPtr("x"), Mode: Env}},
+		"secret without name":  {{Name: "a", Mode: Env}},
+		"secret with claim":    {withField(envEntry("a", "x"), "claim_name")},
+		"unknown source":       {{Name: "a", Source: srcPtr(StorageEntrySource("nfs")), SecretName: strPtr("x"), Mode: Env}},
+		// A catalog that still names the removed host_path source is
+		// refused at the edit like any other unknown source.
+		"removed source": {{Name: "a", Source: srcPtr(StorageEntrySource("host_path")), Mode: File, MountPath: strPtr("/opt/a")}},
 	} {
 		if _, err := putStorage(t, s, bad); err == nil {
 			t.Errorf("%s: accepted, want 400", name)
@@ -141,10 +124,6 @@ func withField(e StorageEntry, field string) StorageEntry {
 		e.SecretName = &v
 	case "claim_name":
 		e.ClaimName = &v
-	case "host_path":
-		e.HostPath = &v
-	case "host_type":
-		e.HostType = &v
 	}
 	return e
 }
@@ -153,27 +132,18 @@ func TestUpdatePolicyStorageVolumeSourcesRoundTrip(t *testing.T) {
 	s := &Server{Store: newMemStore(t)}
 	pv, err := putStorage(t, s, []StorageEntry{
 		pvcEntry("analytics", "checkmaite-analytics", "/app/data/analytics"),
-		hostPathEntry("node-data", "/srv/data", "Directory", "/srv/node-data"),
-		hostPathEntry("node-any", "/srv/anything", "", "/srv/anything"),
+		pvcEntry("scratch", "checkmaite-scratch", "/app/data/scratch"),
 	})
 	if err != nil {
 		t.Fatalf("put: %v", err)
 	}
-	if pv.Storage == nil || len(*pv.Storage) != 3 {
+	if pv.Storage == nil || len(*pv.Storage) != 2 {
 		t.Fatalf("view after put = %+v", pv.Storage)
 	}
 	got := (*pv.Storage)[0]
 	if got.Source == nil || *got.Source != PersistentVolumeClaim || got.ClaimName == nil || *got.ClaimName != "checkmaite-analytics" ||
-		got.SecretName != nil || got.HostPath != nil || got.MountPath == nil || *got.MountPath != "/app/data/analytics" {
+		got.SecretName != nil || got.MountPath == nil || *got.MountPath != "/app/data/analytics" {
 		t.Errorf("pvc entry round-tripped as %+v", got)
-	}
-	got = (*pv.Storage)[1]
-	if got.Source == nil || *got.Source != HostPath || got.HostPath == nil || *got.HostPath != "/srv/data" ||
-		got.HostType == nil || *got.HostType != "Directory" {
-		t.Errorf("host_path entry round-tripped as %+v", got)
-	}
-	if (*pv.Storage)[2].HostType != nil {
-		t.Errorf("an unset host_type must stay null on the wire, got %+v", (*pv.Storage)[2])
 	}
 	// A spec resolves the entry to its source's delivery instructions.
 	r, err := s.resolveStorage(context.Background(), "team-a", []string{"analytics"})
@@ -208,7 +178,7 @@ func TestPolicyViewStorageCarriesNamesOnly(t *testing.T) {
 	if len(view.Storage) != 1 {
 		t.Fatalf("storage = %v", view.Storage)
 	}
-	allowed := map[string]bool{"name": true, "source": true, "secret_name": true, "claim_name": true, "host_path": true, "host_type": true, "mode": true, "mount_path": true, "projects": true}
+	allowed := map[string]bool{"name": true, "source": true, "secret_name": true, "claim_name": true, "mode": true, "mount_path": true, "projects": true}
 	for k := range view.Storage[0] {
 		if !allowed[k] {
 			t.Errorf("PolicyView.storage carries %q; only names and delivery instructions may be on the wire", k)

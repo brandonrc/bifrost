@@ -448,6 +448,12 @@ into every pod of a cluster, job or service).
 (cluster); `TestJobStorageReferenceIsResolvedLikeAClusters` (r05);
 `TestRBACGrantsRayJobsAndSecretMetadataOnly` (pack).
 
+**Node directories:** the bifrost namespace enforces Pod Security `baseline`,
+which forbids hostPath pod volumes, so there is no `host_path` catalog source.
+Expose a node directory through a statically provisioned hostPath PV + PVC
+(the pattern the checkmaite deployment uses) and catalog the claim with
+`source: "persistent_volume_claim"`.
+
 **Manual:**
 1. On grace create the credentials Secret in the workload namespace:
    `k -n bifrost create secret generic team-a-s3 --from-literal=AWS_ACCESS_KEY_ID=... --from-literal=AWS_SECRET_ACCESS_KEY=... --from-literal=AWS_ENDPOINT_URL=...`

@@ -69,7 +69,7 @@ func (p *PoolPurpose) UnmarshalJSON(data []byte) error {
 // StorageMode is how a storage entry's source reaches the pods: env
 // injects every Secret key as an environment variable; file mounts the
 // source at the entry's MountPath (read-only for a Secret, read-write for
-// the volume sources).
+// a PersistentVolumeClaim).
 type StorageMode string
 
 const (
@@ -105,16 +105,14 @@ func (m *StorageMode) UnmarshalJSON(data []byte) error {
 
 // StorageSource is what backs a storage entry: a Kubernetes Secret in the
 // workload namespace (the original #12 source, delivered as env vars or a
-// file mount), a PersistentVolumeClaim in the workload namespace, or a
-// hostPath on the node (single-node clusters; nothing to catalog at all).
-// The volume sources are file-mode only — a volume has no keys to inject
-// as environment variables.
+// file mount) or a PersistentVolumeClaim in the workload namespace. The
+// volume source is file-mode only — a volume has no keys to inject as
+// environment variables.
 type StorageSource string
 
 const (
 	StorageSourceSecret                StorageSource = "secret"
 	StorageSourcePersistentVolumeClaim StorageSource = "persistent_volume_claim"
-	StorageSourceHostPath              StorageSource = "host_path"
 )
 
 // DefaultStorageSource is the source a StorageEntry has when its `source`
@@ -123,14 +121,13 @@ const DefaultStorageSource = StorageSourceSecret
 
 func (s StorageSource) isValid() bool {
 	switch s {
-	case StorageSourceSecret, StorageSourcePersistentVolumeClaim, StorageSourceHostPath:
+	case StorageSourceSecret, StorageSourcePersistentVolumeClaim:
 		return true
 	}
 	return false
 }
 
-// String returns the wire value ("secret" | "persistent_volume_claim" |
-// "host_path").
+// String returns the wire value ("secret" | "persistent_volume_claim").
 func (s StorageSource) String() string { return string(s) }
 
 // OrDefault maps the zero value onto DefaultStorageSource so an entry
@@ -158,11 +155,10 @@ func (s *StorageSource) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// StorageEntry is a catalog entry for private storage: a Secret,
-// PersistentVolumeClaim or host path Bifrost delivers to the pods of any
-// cluster, job or service whose spec names this entry in its `storage`
-// list. The API only ever sees names and paths; a Secret's contents never
-// cross it.
+// StorageEntry is a catalog entry for private storage: a Secret or
+// PersistentVolumeClaim Bifrost delivers to the pods of any cluster, job
+// or service whose spec names this entry in its `storage` list. The API
+// only ever sees names and paths; a Secret's contents never cross it.
 type StorageEntry struct {
 	// Name is the catalog name a spec refers to.
 	Name string `json:"name"`
@@ -174,13 +170,8 @@ type StorageEntry struct {
 	// ClaimName is the PersistentVolumeClaim in the workload namespace
 	// (persistent_volume_claim source only). Claims are namespace-local:
 	// the claim must live where the pods run.
-	ClaimName string `json:"claim_name,omitempty"`
-	// HostPath is the node path a host_path entry mounts.
-	HostPath string `json:"host_path,omitempty"`
-	// HostType is the Kubernetes HostPathType ("Directory", ...); "" = no
-	// node-path type checking.
-	HostType string      `json:"host_type,omitempty"`
-	Mode     StorageMode `json:"mode"`
+	ClaimName string      `json:"claim_name,omitempty"`
+	Mode      StorageMode `json:"mode"`
 	// MountPath is the mount point inside the pods (StorageModeFile
 	// only); nil for env mode.
 	MountPath *string `json:"mount_path"`
@@ -213,8 +204,6 @@ type ResolvedStorage struct {
 	Source     StorageSource `json:"source,omitempty"`
 	SecretName string        `json:"secret_name"`
 	ClaimName  string        `json:"claim_name,omitempty"`
-	HostPath   string        `json:"host_path,omitempty"`
-	HostType   string        `json:"host_type,omitempty"`
 	Mode       StorageMode   `json:"mode"`
 	MountPath  *string       `json:"mount_path"`
 }

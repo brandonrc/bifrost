@@ -3,7 +3,7 @@
 // entries; the provisioner projects them onto the pods as
 // `envFrom.secretRef` (env, secret source), or a volume at the entry's
 // mount path (file): read-only for a Secret (credentials), read-write for
-// a PersistentVolumeClaim or hostPath (data volumes). A Secret's contents
+// a PersistentVolumeClaim (a data volume). A Secret's contents
 // never cross Bifrost: the API carries names and paths only, and the
 // resolution persisted on a spec is delivery instructions, not data.
 //
@@ -56,17 +56,8 @@ func mountPathReserved(p string) bool {
 	return false
 }
 
-// hostPathTypes are the Kubernetes HostPathType values a host_path entry
-// may declare ("" = no node-path type checking). Mirrored here rather than
-// imported from k8s.io/api so the API edge does not depend on the
-// provisioner's dependency set.
-var hostPathTypes = map[string]bool{
-	"": true, "DirectoryOrCreate": true, "Directory": true, "FileOrCreate": true,
-	"File": true, "Socket": true, "CharDevice": true, "BlockDevice": true,
-}
-
 // storageEntryToWire converts one catalog entry for PolicyView. Only the
-// name, the source's names/paths and the delivery mode are ever on the
+// name, the source's names and the delivery mode are ever on the
 // wire — a Secret's data is not a thing Bifrost can read, let alone echo.
 func storageEntryToWire(e *core.StorageEntry) StorageEntry {
 	projects := make([]string, len(e.Projects))
@@ -77,8 +68,6 @@ func storageEntryToWire(e *core.StorageEntry) StorageEntry {
 		Source:     &source,
 		SecretName: strPtrOrNil(e.SecretName),
 		ClaimName:  strPtrOrNil(e.ClaimName),
-		HostPath:   strPtrOrNil(e.HostPath),
-		HostType:   strPtrOrNil(e.HostType),
 		Mode:       StorageEntryMode(e.Mode),
 		MountPath:  e.MountPath,
 		Projects:   &projects,
@@ -107,13 +96,12 @@ func storageToWire(in []core.StorageEntry) []StorageEntry {
 // storageFromWire converts an incoming catalog and validates it as a
 // unit, refusing the edit with a precise 400 rather than letting every
 // later create fail (the Rust predecessor's rule: validate at the edit). Checks: unique
-// RFC 1123 names; a known source; the source's own required name/path
-// (secret_name / claim_name RFC 1123, host_path absolute, host_type a
-// known HostPathType) with no other source's fields set; a known mode —
-// `file` for the volume sources, which have no keys to inject; for file
-// mode a mount_path that is absolute, unique across the catalog and
-// neither a reserved path nor under one; no mount_path for env mode;
-// non-empty project names.
+// RFC 1123 names; a known source; the source's own required name
+// (secret_name / claim_name RFC 1123) with no other source's fields set;
+// a known mode — `file` for the volume source, which has no keys to
+// inject; for file mode a mount_path that is absolute, unique across the
+// catalog and neither a reserved path nor under one; no mount_path for
+// env mode; non-empty project names.
 func storageFromWire(in []StorageEntry) ([]core.StorageEntry, error) {
 	out := make([]core.StorageEntry, 0, len(in))
 	seen := make(map[string]bool, len(in))
@@ -154,13 +142,8 @@ func storageFromWire(in []StorageEntry) ([]core.StorageEntry, error) {
 				return nil, badRequest(what + "secret_name must be a valid Kubernetes Secret name (RFC 1123)")
 			}
 			e.SecretName = *w.SecretName
-			for _, f := range []struct {
-				p    *string
-				name string
-			}{{w.ClaimName, "claim_name"}, {w.HostPath, "host_path"}, {w.HostType, "host_type"}} {
-				if err := fieldForSource(f.p, f.name, "persistent_volume_claim/host_path"); err != nil {
-					return nil, err
-				}
+			if err := fieldForSource(w.ClaimName, "claim_name", "persistent_volume_claim"); err != nil {
+				return nil, err
 			}
 		case core.StorageSourcePersistentVolumeClaim:
 			if w.ClaimName == nil || *w.ClaimName == "" {
@@ -170,38 +153,11 @@ func storageFromWire(in []StorageEntry) ([]core.StorageEntry, error) {
 				return nil, badRequest(what + "claim_name must be a valid PersistentVolumeClaim name (RFC 1123)")
 			}
 			e.ClaimName = *w.ClaimName
-			for _, f := range []struct {
-				p    *string
-				name string
-			}{{w.SecretName, "secret_name"}, {w.HostPath, "host_path"}, {w.HostType, "host_type"}} {
-				if err := fieldForSource(f.p, f.name, "secret/host_path"); err != nil {
-					return nil, err
-				}
-			}
-		case core.StorageSourceHostPath:
-			if w.HostPath == nil || *w.HostPath == "" {
-				return nil, badRequest(what + "host_path is required for source \"host_path\"")
-			}
-			if !strings.HasPrefix(*w.HostPath, "/") {
-				return nil, badRequest(what + "host_path must be absolute")
-			}
-			e.HostPath = *w.HostPath
-			if w.HostType != nil {
-				if !hostPathTypes[*w.HostType] {
-					return nil, badRequest(fmt.Sprintf("%shost_type %q is not a Kubernetes HostPathType", what, *w.HostType))
-				}
-				e.HostType = *w.HostType
-			}
-			for _, f := range []struct {
-				p    *string
-				name string
-			}{{w.SecretName, "secret_name"}, {w.ClaimName, "claim_name"}} {
-				if err := fieldForSource(f.p, f.name, "secret/persistent_volume_claim"); err != nil {
-					return nil, err
-				}
+			if err := fieldForSource(w.SecretName, "secret_name", "secret"); err != nil {
+				return nil, err
 			}
 		default:
-			return nil, badRequest(fmt.Sprintf("%ssource must be \"secret\", \"persistent_volume_claim\" or \"host_path\"", what))
+			return nil, badRequest(fmt.Sprintf("%ssource must be \"secret\" or \"persistent_volume_claim\"", what))
 		}
 		e.Source = src
 		if src != core.StorageSourceSecret && e.Mode == core.StorageModeEnv {
@@ -301,7 +257,7 @@ func (s *Server) resolveStorage(ctx context.Context, project string, names []str
 		}
 		r := core.ResolvedStorage{
 			Name: entry.Name, Source: entry.Source.OrDefault(), SecretName: entry.SecretName,
-			ClaimName: entry.ClaimName, HostPath: entry.HostPath, HostType: entry.HostType, Mode: entry.Mode,
+			ClaimName: entry.ClaimName, Mode: entry.Mode,
 		}
 		if entry.MountPath != nil {
 			mp := *entry.MountPath

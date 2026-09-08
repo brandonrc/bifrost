@@ -1390,7 +1390,7 @@ func policyFixture(cpuPrice float64, seed bool) *controller.StoredPolicy {
 			{Name: "s3-creds", SecretName: "ml-team-s3", Mode: core.StorageModeEnv, Projects: []string{"ml-team"}},
 			{Name: "data", SecretName: "shared-data", Mode: core.StorageModeFile, MountPath: strPtr("/mnt/data"), Projects: []string{}},
 			{Name: "analytics", Source: core.StorageSourcePersistentVolumeClaim, ClaimName: "analytics-pvc", Mode: core.StorageModeFile, MountPath: strPtr("/app/data"), Projects: []string{"ml-team"}},
-			{Name: "node-data", Source: core.StorageSourceHostPath, HostPath: "/srv/data", HostType: "Directory", Mode: core.StorageModeFile, MountPath: strPtr("/srv/data"), Projects: []string{}},
+			{Name: "scratch", Source: core.StorageSourcePersistentVolumeClaim, ClaimName: "scratch-pvc", Mode: core.StorageModeFile, MountPath: strPtr("/srv/scratch"), Projects: []string{}},
 		},
 	}
 }
