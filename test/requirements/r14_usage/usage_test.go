@@ -125,14 +125,31 @@ func TestUsageReportFiltersByOwner(t *testing.T) {
 	}
 }
 
-func TestUsageReportIsNotForProjectMembers(t *testing.T) {
+func TestUsageReportIsScopedToTheCallersProjects(t *testing.T) {
 	tgt := target.Get(t)
-	req.Covers(t, 14, "the usage report is readable by administrators and refused to callers without cluster read across projects")
+	req.Covers(t, 14, "the usage report answers anonymous callers 401, administrators with everything, and a project member with their projects' rows and nobody else's")
 	ctx := context.Background()
 	if r, err := tgt.As("anon").API().UsageReportWithResponse(ctx, &client.UsageReportParams{}); err != nil || r.StatusCode() != http.StatusUnauthorized {
 		t.Fatalf("anonymous usage report: err=%v status=%v, want 401", err, r.StatusCode())
 	}
 	if r, err := tgt.As("admin").API().UsageReportWithResponse(ctx, &client.UsageReportParams{}); err != nil || r.StatusCode() != http.StatusOK {
 		t.Fatalf("admin usage report: err=%v status=%v, want 200", err, r.StatusCode())
+	}
+	// dev-a holds a project grant on team-a (and a global developer role,
+	// which must not widen the view): every row is team-a's or dev-a's own.
+	// It used to be a 403 for anyone without global cluster read — the
+	// people the ledger is for (#39).
+	r, err := tgt.As("dev-a").API().UsageReportWithResponse(ctx, &client.UsageReportParams{})
+	if err != nil || r.JSON200 == nil {
+		t.Fatalf("dev-a usage report: err=%v status=%v body=%s", err, r.StatusCode(), r.Body)
+	}
+	for _, g := range r.JSON200.Groups {
+		owner := ""
+		if g.Owner != nil {
+			owner = *g.Owner
+		}
+		if g.Project != "team-a" && owner != "req-dev-a" && owner != "dev-a" {
+			t.Errorf("dev-a sees usage of project %q owner %q: another tenant's rows leaked", g.Project, owner)
+		}
 	}
 }

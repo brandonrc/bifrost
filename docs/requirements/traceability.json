@@ -303,7 +303,7 @@
         "TestRunningClusterShowsUpInTheUsageReport",
         "TestUsageReportAttributesToTheRequestingUser",
         "TestUsageReportFiltersByOwner",
-        "TestUsageReportIsNotForProjectMembers"
+        "TestUsageReportIsScopedToTheCallersProjects"
       ],
       "skip_reasons": null
     },
