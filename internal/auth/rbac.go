@@ -615,9 +615,20 @@ const defaultGroupsClaim = "groups"
 //
 // Reference: the predecessor's auth crate, src/lib.rs:241-259 (AuthConfig).
 type AuthConfig struct {
-	// Issuer is the OIDC issuer URL; {issuer}/.well-known/openid-configuration
-	// must resolve. Trailing slash insignificant.
+	// Issuer is the OIDC issuer URL — the exact `iss` tokens carry (trailing
+	// slash insignificant). Unless DiscoveryURL is set,
+	// {issuer}/.well-known/openid-configuration must resolve from here.
 	Issuer string `json:"issuer"`
+	// DiscoveryURL, when set, is where {DiscoveryURL}/.well-known/
+	// openid-configuration is fetched INSTEAD of the issuer, for providers
+	// reachable at a different address than the one they stamp as `iss`
+	// — Keycloak behind a fixed frontend hostname that in-cluster callers
+	// reach through its Service, and that has no in-cluster DNS or trusted
+	// certificate. The advertised issuer is still cross-checked against
+	// Issuer (a provider answering for a different issuer is rejected), and
+	// the JWKS is fetched from wherever the document says. Empty = discover
+	// at the issuer.
+	DiscoveryURL string `json:"discovery_url,omitempty"`
 	// Audience is the required aud claim value.
 	Audience string `json:"audience"`
 	// GroupsClaim is the claim carrying group memberships (array of

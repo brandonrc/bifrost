@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -175,7 +176,8 @@ func buildServer(ctx context.Context, opts serveOptions) (*builtServer, error) {
 		if err != nil {
 			return fail(err)
 		}
-		slog.Info("OIDC discovery", "issuer", cfg.Issuer, "audience", cfg.Audience)
+		slog.Info("OIDC discovery", "issuer", cfg.Issuer, "audience", cfg.Audience,
+			"discovery_url", cmp.Or(cfg.DiscoveryURL, cfg.Issuer))
 		v, err := auth.Discover(ctx, cfg, auth.IdpClient(), opts.AllowInsecureTransport)
 		if err != nil {
 			return fail(err)
