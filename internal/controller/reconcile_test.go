@@ -1394,3 +1394,88 @@ func TestQueueAssignmentIsSplitByPoolPurpose(t *testing.T) {
 		t.Fatalf("serving lookup after compute pool added: q=%+v err=%v", q, err)
 	}
 }
+
+// A cluster deleted before it ever materialised — Apply put its
+// NetworkPolicies in place and the RayCluster was then refused (an
+// admission webhook, in the run that found this) — must not leave those
+// policies behind: Terminate never fires for a cluster that was never
+// observed. The still-Pending intent marks the case; the reap runs once and
+// closes it, so the tombstone is quiet on every later pass.
+func TestReconcileReapsPoliciesOfAClusterThatNeverMaterialised(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryStore()
+	id := core.ClusterId("c")
+	if _, err := store.UpsertDesired(ctx, id, testClusterSpec()); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	prov := &fakeProvisioner{
+		applyFn: func(core.ClusterId, *core.ClusterSpec, uint64, string, *provision.QueueAssignment) (provision.ApplyResponse, error) {
+			return provision.ApplyResponse{}, provision.ProvisionError{Kind: provision.ProvisionErrBackend, Message: "admission webhook denied the request"}
+		},
+	}
+	rec := NewReconciler(store, prov)
+
+	// Pass 1: the apply is refused; the intent stays Pending.
+	if out := rec.ReconcileAllAt(ctx, 0); len(out) != 1 || out[0].Err == nil {
+		t.Fatalf("out = %+v, want the apply error", out)
+	}
+	c, _ := store.Get(ctx, id)
+	if r, err := store.GetIntent(ctx, c.IntentKey()); err != nil || r == nil || r.Status != IntentStatusPending {
+		t.Fatalf("intent = %+v err=%v, want Pending", r, err)
+	}
+
+	// The owner gives up and deletes it.
+	if err := store.SetDesired(ctx, id, DesiredTerminated); err != nil {
+		t.Fatalf("set desired: %v", err)
+	}
+	out := rec.ReconcileAllAt(ctx, 1)
+	if len(out) != 1 || out[0].Err != nil || out[0].Action != ActionTerminated {
+		t.Fatalf("out = %+v, want a clean ActionTerminated", out)
+	}
+	if len(prov.terminateCalls) != 0 {
+		t.Fatalf("terminate calls = %v, want none: there was nothing observed to terminate", prov.terminateCalls)
+	}
+	if len(prov.reapNetpolCalls) != 1 || prov.reapNetpolCalls[0] != id {
+		t.Fatalf("reap calls = %v, want exactly [%s]", prov.reapNetpolCalls, id)
+	}
+	if r, _ := store.GetIntent(ctx, c.IntentKey()); r == nil || r.Status != IntentStatusApplied {
+		t.Fatalf("intent after reap = %+v, want closed", r)
+	}
+
+	// Later passes over the tombstone do nothing at all.
+	for i := 2; i < 5; i++ {
+		if out := rec.ReconcileAllAt(ctx, uint64(i)); len(out) != 1 || out[0].Err != nil || out[0].Action != ActionNoOp {
+			t.Fatalf("pass %d: out = %+v, want NoOp", i, out)
+		}
+	}
+	if len(prov.reapNetpolCalls) != 1 {
+		t.Fatalf("reap calls after settling = %v, want still exactly one", prov.reapNetpolCalls)
+	}
+}
+
+// A tombstone of a cluster that ran and was torn down has a completed
+// intent; it must never be reaped again on every pass.
+func TestReconcileLeavesAnOrdinaryTombstoneAlone(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryStore()
+	id := core.ClusterId("c")
+	if _, err := store.UpsertDesired(ctx, id, testClusterSpec()); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	prov := &fakeProvisioner{}
+	rec := NewReconciler(store, prov)
+	if out := rec.ReconcileAllAt(ctx, 0); len(out) != 1 || out[0].Err != nil || out[0].Action != ActionApplied {
+		t.Fatalf("out = %+v, want ActionApplied", out)
+	}
+	if err := store.SetDesired(ctx, id, DesiredTerminated); err != nil {
+		t.Fatalf("set desired: %v", err)
+	}
+	for i := 1; i < 4; i++ {
+		if out := rec.ReconcileAllAt(ctx, uint64(i)); len(out) != 1 || out[0].Err != nil || out[0].Action != ActionNoOp {
+			t.Fatalf("pass %d: out = %+v, want NoOp", i, out)
+		}
+	}
+	if len(prov.reapNetpolCalls) != 0 {
+		t.Fatalf("reap calls = %v, want none for an ordinary tombstone", prov.reapNetpolCalls)
+	}
+}

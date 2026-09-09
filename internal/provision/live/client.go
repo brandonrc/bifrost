@@ -416,10 +416,10 @@ func (c *Client) Apply(ctx context.Context, id core.ClusterId, spec *core.Cluste
 	if err := c.ensureStorageSourcesExist(ctx, spec.StorageResolved); err != nil {
 		return provision.ApplyResponse{}, err
 	}
-	// Mirrors RayClusterFor's rule: an elastic queue forces the autoscaler
-	// on. Whenever the sidecar will run, it must be able to reach the API
+	// The same rule RayClusterFor applies (provision.EffectiveAutoscaling):
+	// whenever the sidecar will run, it must be able to reach the API
 	// server, or it dies on a connect timeout and the cluster never scales.
-	if c.autoscaling || (queue != nil && queue.Elastic) {
+	if provision.EffectiveAutoscaling(c.autoscaling, queue) {
 		if err := c.ensureAutoscalerEgress(ctx, string(id)); err != nil {
 			return provision.ApplyResponse{}, err
 		}
