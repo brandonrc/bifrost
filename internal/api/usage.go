@@ -37,16 +37,67 @@ func promEscape(v string) string {
 	return v
 }
 
+// usageScope is what one caller may see of the usage ledger, settled once
+// per request. The report is a list endpoint, so it follows the list rule
+// (readGate + per-row tenant access) rather than the global Authorize it
+// used to carry: that check refused the caller the ledger exists for — the
+// project-only member, roles [] and a project grant, every Keycloak-group
+// user — and left the dashboard's Usage page empty for exactly the people
+// whose usage it shows (#39).
+//
+// Admin and Auditor see everything. Everyone else sees rows attributed to
+// them, and rows of projects they hold a read-granting scoped assignment
+// in. A global viewer with no project ties sees only what they own — the
+// same boundary clusterTenantAccess draws for clusters.
+type usageScope struct {
+	all         bool
+	owner       string
+	assignments []auth.RoleScope
+}
+
+func newUsageScope(ctx context.Context, store controller.Store, identity *auth.Identity) usageScope {
+	if identity == nil || hasRole(identity, auth.RoleAdmin, auth.RoleAuditor) {
+		return usageScope{all: true}
+	}
+	return usageScope{owner: identity.Owner(), assignments: EffectiveAssignments(ctx, store, identity)}
+}
+
+// project reports whether the caller may read project-level facts about p
+// (a budget, an unattributed pool row).
+func (u usageScope) project(p string) bool {
+	if u.all {
+		return true
+	}
+	for _, a := range u.assignments {
+		if a.Scope != auth.GlobalScope && auth.ScopeCovers(a.Scope, p) && a.Role.Grants(auth.Read, auth.TargetCluster) {
+			return true
+		}
+	}
+	return false
+}
+
+// sample reports whether one ledger row is the caller's to see.
+func (u usageScope) sample(smp controller.UsageSample) bool {
+	if u.all {
+		return true
+	}
+	if smp.Owner != "" && smp.Owner == u.owner {
+		return true
+	}
+	return smp.Project != "" && u.project(smp.Project)
+}
+
 // UsageReport reports resource-hours (and cost when priced) by project,
 // pool and owner over a window, plus configured projects' time-windowed
-// budget status. Read on Target::Cluster. The `owner` query parameter
-// narrows to one identity's consumption (requirement 14's "who"); an
-// owner of "" selects unattributed samples.
+// budget status, narrowed to what the caller may see (usageScope). The
+// `owner` query parameter narrows to one identity's consumption
+// (requirement 14's "who"); an owner of "" selects unattributed samples.
 func (s *Server) UsageReport(ctx context.Context, req UsageReportRequestObject) (UsageReportResponseObject, error) {
 	identity, _ := IdentityFromContext(ctx)
-	if err := Authorize(ctx, s.Store, identity, auth.Read, auth.TargetCluster); err != nil {
+	if err := readGate(ctx, s.Store, identity, auth.TargetCluster); err != nil {
 		return nil, err
 	}
+	scope := newUsageScope(ctx, s.Store, identity)
 	q := req.Params
 	to := controller.NowUnix()
 	if q.To != nil {
@@ -70,6 +121,9 @@ func (s *Server) UsageReport(ctx context.Context, req UsageReportRequestObject) 
 	type groupKey struct{ project, pool, owner string }
 	grouped := map[groupKey]map[string][]policy.UsageSampleView{}
 	for _, smp := range samples {
+		if !scope.sample(smp) {
+			continue
+		}
 		key := groupKey{smp.Project, smp.Pool, smp.Owner}
 		if grouped[key] == nil {
 			grouped[key] = map[string][]policy.UsageSampleView{}
@@ -129,6 +183,9 @@ func (s *Server) UsageReport(ctx context.Context, req UsageReportRequestObject) 
 	budgets := make([]BudgetStatus, 0, len(budgetProjects))
 	for _, bp := range budgetProjects {
 		if q.Project != nil && *q.Project != bp {
+			continue
+		}
+		if !scope.project(bp) {
 			continue
 		}
 		budget := cfg.Budgets[bp]

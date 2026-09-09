@@ -308,3 +308,91 @@ func TestMetrics_DeniedWithoutRead(t *testing.T) {
 	}
 	mustHTTPError(t, err, 403)
 }
+
+// The scoping tests. The report used to gate on a global Read, which refused
+// the project-only member (roles [], one project grant) the ledger is for
+// and left the dashboard's Usage page empty for the people whose usage it
+// shows (#39). It is a list endpoint now: readGate in, tenant access per row.
+func seedTenantUsage(t *testing.T) *Server {
+	t.Helper()
+	ctx := context.Background()
+	store := controller.NewMemoryStore()
+	owned := func(project, owner string, qty float64) controller.UsageSample {
+		smp := usageSample(0, "gpu", project, "cpu", qty)
+		smp.Owner = owner
+		return smp
+	}
+	if err := store.RecordUsageSamples(ctx, []controller.UsageSample{
+		owned("team-a", "pam", 1.0),  // pam's own cluster in her project
+		owned("team-a", "pete", 2.0), // a teammate's
+		owned("team-b", "bob", 4.0),  // another project entirely
+		owned("", "", 8.0),           // pool-level, unattributed
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return &Server{Store: store}
+}
+
+func usageReportAs(t *testing.T, s *Server, id *auth.Identity) UsageReport200JSONResponse {
+	t.Helper()
+	from, to := int64(0), int64(3600)
+	resp, err := s.UsageReport(ctxWithIdentity(id), UsageReportRequestObject{Params: UsageReportParams{From: &from, To: &to}})
+	if err != nil {
+		t.Fatalf("usage report as %s: %v", id.Subject, err)
+	}
+	return mustResponse[UsageReport200JSONResponse](t, resp)
+}
+
+func ownersOf(r UsageReport200JSONResponse) []string {
+	out := []string{}
+	for _, g := range r.Groups {
+		out = append(out, g.Project+"/"+*g.Owner)
+	}
+	return out
+}
+
+func TestUsageReport_ProjectOnlyMemberSeesTheirProject(t *testing.T) {
+	s := seedTenantUsage(t)
+	// No global role at all; operator on team-a. The identity every
+	// Keycloak group mapping produces.
+	got := ownersOf(usageReportAs(t, s, projectMember("pam", auth.RoleOperator, "team-a")))
+	want := []string{"team-a/pam", "team-a/pete"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("project member sees %v, want %v (her project, all of it; not team-b, not the pool row)", got, want)
+	}
+}
+
+func TestUsageReport_GlobalViewerSeesOnlyWhatTheyOwn(t *testing.T) {
+	s := seedTenantUsage(t)
+	got := ownersOf(usageReportAs(t, s, testIdentity("pam", auth.RoleViewer)))
+	if strings.Join(got, ",") != "team-a/pam" {
+		t.Fatalf("global viewer with no project ties sees %v, want only their own rows", got)
+	}
+}
+
+func TestUsageReport_AdminAndAuditorSeeEverything(t *testing.T) {
+	s := seedTenantUsage(t)
+	for _, id := range []*auth.Identity{admin(), testIdentity("audit", auth.RoleAuditor)} {
+		if got := ownersOf(usageReportAs(t, s, id)); len(got) != 4 {
+			t.Fatalf("%s sees %v, want all four groups", id.Subject, got)
+		}
+	}
+}
+
+func TestUsageReport_BudgetsFollowTheSameScope(t *testing.T) {
+	s := seedTenantUsage(t)
+	budgets := map[string]BudgetView{
+		"team-a": {WindowSecs: 3600, AdditionalProperties: map[string]float64{"cpu": 100}},
+		"team-b": {WindowSecs: 3600, AdditionalProperties: map[string]float64{"cpu": 100}},
+	}
+	if _, err := s.UpdatePolicy(ctxWithIdentity(admin()), UpdatePolicyRequestObject{Body: &UpdatePolicy{Budgets: &budgets}}); err != nil {
+		t.Fatal(err)
+	}
+	r := usageReportAs(t, s, projectMember("pam", auth.RoleOperator, "team-a"))
+	if len(r.Budgets) != 1 || r.Budgets[0].Project != "team-a" {
+		t.Fatalf("project member's budgets = %+v, want team-a only", r.Budgets)
+	}
+	if r := usageReportAs(t, s, admin()); len(r.Budgets) != 2 {
+		t.Fatalf("admin's budgets = %+v, want both", r.Budgets)
+	}
+}
