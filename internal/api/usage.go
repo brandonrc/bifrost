@@ -24,7 +24,6 @@ import (
 
 	"github.com/brandonrc/bifrost/internal/auth"
 	"github.com/brandonrc/bifrost/internal/controller"
-	"github.com/brandonrc/bifrost/internal/core"
 	"github.com/brandonrc/bifrost/internal/policy"
 )
 
@@ -217,11 +216,20 @@ func (s *Server) UsageReport(ctx context.Context, req UsageReportRequestObject) 
 // stateLabel is the label value for a cluster's observed state.
 // ClusterState already serializes to its snake_case wire string via
 // String(); reuse it instead of a parallel match that could drift.
-func stateLabel(s *core.ClusterState) string {
-	if s == nil {
+// stateLabel is the `state` a gauge reports for one stored record. A record
+// whose desired state is terminated is a tombstone — a stopped cluster kept
+// until purge — and says so, whatever its last observation was; it used to
+// report "unknown" beside clusters that were merely new, and a dashboard read
+// 104 clusters in a project that had one (#37). Otherwise the observed
+// state, or "unknown" until the reconcile engine has observed anything.
+func stateLabel(c *controller.StoredCluster) string {
+	if c.Desired == controller.DesiredTerminated {
+		return "terminated"
+	}
+	if c.ObservedState == nil {
 		return "unknown"
 	}
-	return s.String()
+	return c.ObservedState.String()
 }
 
 // renderClusterGauges renders bifrost_clusters_total{state} (counts by
@@ -230,25 +238,37 @@ func stateLabel(s *core.ClusterState) string {
 // project). Both reflect the store as it is — Terminated rows count until
 // the store reaps them. Ported from usage.rs's render_cluster_gauges.
 func renderClusterGauges(clusters []controller.StoredCluster) string {
+	type projectState struct{ project, state string }
 	byState := map[string]int{}
-	byProject := map[string]int{}
+	byProject := map[projectState]int{}
 	for i := range clusters {
 		c := &clusters[i]
-		byState[stateLabel(c.ObservedState)]++
-		byProject[c.Spec.Project]++
+		st := stateLabel(c)
+		byState[st]++
+		byProject[projectState{c.Spec.Project, st}]++
 	}
 	var b strings.Builder
-	b.WriteString("# HELP bifrost_clusters_total Managed clusters by observed state " +
-		"('unknown' before the reconcile engine's first observation).\n" +
+	b.WriteString("# HELP bifrost_clusters_total Managed cluster records by state: the observed state, " +
+		"'unknown' before the reconcile engine's first observation, 'terminated' for a stopped cluster's record awaiting purge.\n" +
 		"# TYPE bifrost_clusters_total gauge\n")
-	states := sortedKeys(byState)
-	for _, st := range states {
+	for _, st := range sortedKeys(byState) {
 		fmt.Fprintf(&b, "bifrost_clusters_total{state=%q} %d\n", promEscape(st), byState[st])
 	}
-	b.WriteString("# HELP bifrost_clusters_by_project Managed clusters per project.\n" +
+	b.WriteString("# HELP bifrost_clusters_by_project Managed cluster records per project and state " +
+		"(same state values as bifrost_clusters_total; sum over state!=\"terminated\" for live clusters).\n" +
 		"# TYPE bifrost_clusters_by_project gauge\n")
-	for _, p := range sortedKeys(byProject) {
-		fmt.Fprintf(&b, "bifrost_clusters_by_project{project=%q} %d\n", promEscape(p), byProject[p])
+	keys := make([]projectState, 0, len(byProject))
+	for k := range byProject {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].project != keys[j].project {
+			return keys[i].project < keys[j].project
+		}
+		return keys[i].state < keys[j].state
+	})
+	for _, k := range keys {
+		fmt.Fprintf(&b, "bifrost_clusters_by_project{project=%q,state=%q} %d\n", promEscape(k.project), promEscape(k.state), byProject[k])
 	}
 	return b.String()
 }

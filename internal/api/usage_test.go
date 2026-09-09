@@ -62,9 +62,12 @@ func stateStr(s core.ClusterState) *core.ClusterState { return &s }
 
 func TestRenderClusterGauges_CountsByStateAndProject(t *testing.T) {
 	clusters := []controller.StoredCluster{
-		{ID: "c1", Spec: core.ClusterSpec{Project: "proj-a"}, ObservedState: stateStr(core.ClusterStateRunning)},
-		{ID: "c2", Spec: core.ClusterSpec{Project: "proj-a"}, ObservedState: stateStr(core.ClusterStateSuspended)},
-		{ID: "c3", Spec: core.ClusterSpec{Project: "proj-b"}, ObservedState: nil},
+		{ID: "c1", Spec: core.ClusterSpec{Project: "proj-a"}, Desired: controller.DesiredRunning, ObservedState: stateStr(core.ClusterStateRunning)},
+		{ID: "c2", Spec: core.ClusterSpec{Project: "proj-a"}, Desired: controller.DesiredSuspended, ObservedState: stateStr(core.ClusterStateSuspended)},
+		{ID: "c3", Spec: core.ClusterSpec{Project: "proj-b"}, Desired: controller.DesiredRunning, ObservedState: nil},
+		// Stopped and awaiting purge: a tombstone, whatever it last observed.
+		{ID: "c4", Spec: core.ClusterSpec{Project: "proj-a"}, Desired: controller.DesiredTerminated, ObservedState: nil},
+		{ID: "c5", Spec: core.ClusterSpec{Project: "proj-a"}, Desired: controller.DesiredTerminated, ObservedState: stateStr(core.ClusterStateRunning)},
 	}
 	text := renderClusterGauges(clusters)
 	if !strings.Contains(text, "# TYPE bifrost_clusters_total gauge") {
@@ -82,11 +85,23 @@ func TestRenderClusterGauges_CountsByStateAndProject(t *testing.T) {
 	if !strings.Contains(text, "# TYPE bifrost_clusters_by_project gauge") {
 		t.Errorf("missing by-project TYPE line: %s", text)
 	}
-	if !strings.Contains(text, `bifrost_clusters_by_project{project="proj-a"} 2`) {
-		t.Errorf("proj-a count wrong: %s", text)
+	if !strings.Contains(text, `bifrost_clusters_total{state="terminated"} 2`) {
+		t.Errorf("tombstones must report terminated, not unknown or their stale observation: %s", text)
 	}
-	if !strings.Contains(text, `bifrost_clusters_by_project{project="proj-b"} 1`) {
-		t.Errorf("proj-b count wrong: %s", text)
+	// Per project AND state, so a dashboard can sum live clusters without
+	// counting the stopped ones a project has not purged (#37).
+	for _, want := range []string{
+		`bifrost_clusters_by_project{project="proj-a",state="running"} 1`,
+		`bifrost_clusters_by_project{project="proj-a",state="suspended"} 1`,
+		`bifrost_clusters_by_project{project="proj-a",state="terminated"} 2`,
+		`bifrost_clusters_by_project{project="proj-b",state="unknown"} 1`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %s in:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, `bifrost_clusters_by_project{project="proj-a"} `) {
+		t.Errorf("the old stateless series must not be emitted alongside the new one: %s", text)
 	}
 }
 
