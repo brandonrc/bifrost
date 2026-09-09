@@ -7,7 +7,7 @@
  ],
  "timezone": "browser",
  "schemaVersion": 39,
- "version": 4,
+ "version": 5,
  "refresh": "15s",
  "editable": true,
  "graphTooltip": 1,
@@ -385,8 +385,8 @@
   {
    "id": 8,
    "type": "bargauge",
-   "title": "Cluster records by project",
-   "description": "Every record Bifrost holds, by project \u2014 including stopped clusters that have not been purged yet, so a big number is history as much as it is load. (bifrost_clusters_by_project carries no state label; when it does, this becomes live clusters only.)",
+   "title": "Live clusters by project",
+   "description": "Clusters per project that are not stopped-and-awaiting-purge. bifrost_clusters_by_project carries the same state label as bifrost_clusters_total; tombstones are state=\"terminated\".",
    "gridPos": {
     "x": 0,
     "y": 5,
@@ -462,7 +462,7 @@
    },
    "targets": [
     {
-     "expr": "bifrost_clusters_by_project",
+     "expr": "sum by (project) (bifrost_clusters_by_project{state!=\"terminated\"})",
      "legendFormat": "{{project}}",
      "instant": true,
      "datasource": {
@@ -491,7 +491,7 @@
    "id": 9,
    "type": "timeseries",
    "title": "Live clusters by state",
-   "description": "Clusters with an observed state, over time. Stopped records that await purge report no state and are counted in the tile to the right, not here \u2014 there are enough of them to flatten this chart into its axis otherwise.",
+   "description": "Clusters by state over time. \"unknown\" is a cluster the reconciler has not observed yet \u2014 new, not stopped. Stopped records awaiting purge are the tile to the right.",
    "gridPos": {
     "x": 8,
     "y": 5,
@@ -628,7 +628,7 @@
    },
    "targets": [
     {
-     "expr": "sum by (state) (bifrost_clusters_total{state!=\"unknown\"})",
+     "expr": "sum by (state) (bifrost_clusters_total{state!=\"terminated\"})",
      "legendFormat": "{{state}}",
      "datasource": {
       "type": "prometheus",
@@ -2650,7 +2650,7 @@
    "id": 35,
    "type": "stat",
    "title": "Unpurged",
-   "description": "Stopped clusters Bifrost still holds a record for (observed state none). Bookkeeping, not load; a purge clears them.",
+   "description": "Stopped clusters Bifrost still holds a record for (state=\"terminated\"). Bookkeeping, not load; a purge clears them.",
    "gridPos": {
     "x": 13,
     "y": 5,
@@ -2687,7 +2687,7 @@
    },
    "targets": [
     {
-     "expr": "sum(bifrost_clusters_total{state=\"unknown\"}) or vector(0)",
+     "expr": "sum(bifrost_clusters_total{state=\"terminated\"}) or vector(0)",
      "refId": "A",
      "datasource": {
       "type": "prometheus",
