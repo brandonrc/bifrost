@@ -19,6 +19,7 @@ import (
 	"github.com/brandonrc/bifrost/internal/auth"
 	"github.com/brandonrc/bifrost/internal/controller"
 	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/brandonrc/bifrost/internal/provision"
 	"github.com/brandonrc/bifrost/internal/provision/live"
 	ctrlconfig "sigs.k8s.io/controller-runtime/pkg/client/config"
 )
@@ -54,6 +55,8 @@ type serveOptions struct {
 	Namespace               string
 	ReconcileInterval       time.Duration
 	Autoscaling             bool
+	RayNodeSelector         string
+	RayTolerations          string
 	LocalAuth               bool
 	GatewayDomain           string
 	GatewayExternalBase     string
@@ -86,6 +89,13 @@ func newServeCmd() *cobra.Command {
 	f.BoolVar(&opts.Autoscaling, "ray-autoscaling", false,
 		"New clusters default to KubeRay in-tree-autoscaler ownership of worker replicas (ADR-0007); "+
 			"per-cluster Kueue-elastic pools always get it regardless of this flag")
+	f.StringVar(&opts.RayNodeSelector, "ray-node-selector", "",
+		"Node selector every tenant Ray pod (heads, workers, Serve, job submitters) carries, as comma-separated key=value pairs. "+
+			"Deployment-wide placement, not per cluster")
+	f.StringVar(&opts.RayTolerations, "ray-tolerations", "",
+		"Tolerations every tenant Ray pod carries, as a JSON array of Kubernetes tolerations "+
+			"(e.g. '[{\"key\":\"hub.jupyter.org/dedicated\",\"operator\":\"Equal\",\"value\":\"user\",\"effect\":\"NoSchedule\"}]'). "+
+			"Lets tenant pods land on tainted node groups the control plane is configured for")
 	f.DurationVar(&opts.MeteringInterval, "metering-interval", controller.DefaultMeteringInterval,
 		"How often a usage sample is recorded per running cluster (requirement 14)")
 	f.StringVar(&opts.AllowedImages, "allowed-images", "",
@@ -221,11 +231,18 @@ func buildServer(ctx context.Context, opts serveOptions) (*builtServer, error) {
 		if err != nil {
 			return fail(fmt.Errorf("resolving kubeconfig: %w", err))
 		}
-		c, err := live.NewClient(restCfg, opts.Namespace, opts.Autoscaling)
+		sched, err := parseScheduling(opts)
+		if err != nil {
+			return fail(err)
+		}
+		c, err := live.NewClient(restCfg, opts.Namespace, opts.Autoscaling, live.WithScheduling(sched))
 		if err != nil {
 			return fail(err)
 		}
 		liveClient = c
+		if !sched.IsZero() {
+			slog.Info("tenant pod scheduling", "scheduling", sched.String())
+		}
 		cfg.Provisioner = c
 		cfg.ServiceProvisioner = live.NewServiceClient(c)
 		cfg.JobProvisioner = live.NewJobClient(c)
@@ -309,4 +326,20 @@ func runServe(ctx context.Context, opts serveOptions) error {
 	case err := <-serveErr:
 		return err
 	}
+}
+
+// parseScheduling turns --ray-node-selector / --ray-tolerations into the
+// provision.Scheduling every tenant pod carries. Both flags are validated
+// here so a typo fails `serve` at startup instead of surfacing as a
+// rejected RayCluster on the first create.
+func parseScheduling(opts serveOptions) (provision.Scheduling, error) {
+	ns, err := provision.ParseNodeSelector(opts.RayNodeSelector)
+	if err != nil {
+		return provision.Scheduling{}, fmt.Errorf("--ray-node-selector: %w", err)
+	}
+	tol, err := provision.ParseTolerations(opts.RayTolerations)
+	if err != nil {
+		return provision.Scheduling{}, fmt.Errorf("--ray-tolerations: %w", err)
+	}
+	return provision.Scheduling{NodeSelector: ns, Tolerations: tol}, nil
 }

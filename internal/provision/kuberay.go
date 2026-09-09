@@ -125,12 +125,20 @@ func EffectiveAutoscaling(flag bool, queue *QueueAssignment) bool {
 // the API server reject malformed ones. A parse failure here is returned
 // as an error instead.
 func RayClusterFor(id core.ClusterId, spec *core.ClusterSpec, autoscaling bool, generation uint64, queue *QueueAssignment) (*rayv1.RayCluster, error) {
+	return RayClusterForScheduled(id, spec, autoscaling, generation, queue, Scheduling{})
+}
+
+// RayClusterForScheduled is [RayClusterFor] with the control plane's
+// [Scheduling] (node selector, tolerations) stamped onto every pod
+// template, head and worker groups alike. The live client calls this; the
+// zero Scheduling renders byte-identically to RayClusterFor.
+func RayClusterForScheduled(id core.ClusterId, spec *core.ClusterSpec, autoscaling bool, generation uint64, queue *QueueAssignment, sched Scheduling) (*rayv1.RayCluster, error) {
 	autoscaling = EffectiveAutoscaling(autoscaling, queue)
 
 	workerSpecs := make([]rayv1.WorkerGroupSpec, 0, len(spec.WorkerGroups))
 	for i := range spec.WorkerGroups {
 		g := spec.WorkerGroups[i]
-		ws, err := workerGroupSpec(string(id), &g, spec.Image, autoscaling, &generation, spec.Owner, spec.StorageResolved)
+		ws, err := workerGroupSpec(string(id), &g, spec.Image, autoscaling, &generation, spec.Owner, spec.StorageResolved, sched)
 		if err != nil {
 			return nil, fmt.Errorf("provision: worker group %q: %w", g.Name, err)
 		}
@@ -158,7 +166,7 @@ func RayClusterFor(id core.ClusterId, spec *core.ClusterSpec, autoscaling bool, 
 		}
 	}
 
-	head, err := headGroupSpec(string(id), spec, &generation)
+	head, err := headGroupSpec(string(id), spec, &generation, sched)
 	if err != nil {
 		return nil, fmt.Errorf("provision: head group: %w", err)
 	}
@@ -471,8 +479,8 @@ func containerImage(tmpl *corev1.PodTemplateSpec) (string, bool) {
 	return c.Image, true
 }
 
-func headGroupSpec(id string, spec *core.ClusterSpec, generation *uint64) (rayv1.HeadGroupSpec, error) {
-	tmpl, err := podTemplate(id, HeadContainerName, spec.Image, spec.HeadCpu, spec.HeadMemory, nil, generation, spec.Owner, spec.StorageResolved)
+func headGroupSpec(id string, spec *core.ClusterSpec, generation *uint64, sched Scheduling) (rayv1.HeadGroupSpec, error) {
+	tmpl, err := podTemplate(id, HeadContainerName, spec.Image, spec.HeadCpu, spec.HeadMemory, nil, generation, spec.Owner, spec.StorageResolved, sched)
 	if err != nil {
 		return rayv1.HeadGroupSpec{}, err
 	}
@@ -482,11 +490,11 @@ func headGroupSpec(id string, spec *core.ClusterSpec, generation *uint64) (rayv1
 	}, nil
 }
 
-func workerGroupSpec(id string, g *core.WorkerGroup, image string, autoscaling bool, generation *uint64, owner *string, storage []core.ResolvedStorage) (rayv1.WorkerGroupSpec, error) {
+func workerGroupSpec(id string, g *core.WorkerGroup, image string, autoscaling bool, generation *uint64, owner *string, storage []core.ResolvedStorage, sched Scheduling) (rayv1.WorkerGroupSpec, error) {
 	// Workers run the cluster image (Kubernetes requires an image on
 	// every container; KubeRay does NOT copy the head image onto worker
 	// groups, so an empty image would be rejected).
-	tmpl, err := podTemplate(id, WorkerContainerName, image, g.Cpu, g.Memory, g.Gpu, generation, owner, storage)
+	tmpl, err := podTemplate(id, WorkerContainerName, image, g.Cpu, g.Memory, g.Gpu, generation, owner, storage, sched)
 	if err != nil {
 		return rayv1.WorkerGroupSpec{}, err
 	}
@@ -553,7 +561,7 @@ func rayProbe(head bool) *corev1.Probe {
 // Secret volume, or a read-write PersistentVolumeClaim). Only
 // Secret NAMES are written; the kubelet resolves them inside the pod, so
 // the credentials never pass through Bifrost.
-func podTemplate(clusterID, containerName, image, cpu, memory string, gpu *string, generation *uint64, owner *string, storage []core.ResolvedStorage) (corev1.PodTemplateSpec, error) {
+func podTemplate(clusterID, containerName, image, cpu, memory string, gpu *string, generation *uint64, owner *string, storage []core.ResolvedStorage, sched Scheduling) (corev1.PodTemplateSpec, error) {
 	cpuQ, err := resource.ParseQuantity(cpu)
 	if err != nil {
 		return corev1.PodTemplateSpec{}, fmt.Errorf("provision: invalid cpu quantity %q: %w", cpu, err)
@@ -608,6 +616,9 @@ func podTemplate(clusterID, containerName, image, cpu, memory string, gpu *strin
 		ObjectMeta: metav1.ObjectMeta{Labels: podLabels},
 		Spec:       corev1.PodSpec{Containers: []corev1.Container{container}, Volumes: volumes},
 	}
+	// Deployment-wide placement (where this control plane may put tenant
+	// pods on this cluster). A zero Scheduling leaves the spec untouched.
+	sched.apply(&tmpl.Spec)
 	// Stamp the generation into the pod template so a spec bump changes
 	// the template hash and KubeRay rolls the pods. Services pass nil —
 	// KubeRay's RayService controller owns their rollout, not Bifrost.
@@ -703,6 +714,12 @@ func SuspendPatch(suspend bool) []byte {
 // spec.StorageResolved (requirement 12) is projected onto both pod
 // templates as Secret references, exactly as RayClusterFor does.
 func RayServiceFor(name string, spec *core.ServiceSpec, generation uint64, queue *QueueAssignment) (*rayv1.RayService, error) {
+	return RayServiceForScheduled(name, spec, generation, queue, Scheduling{})
+}
+
+// RayServiceForScheduled is [RayServiceFor] with the control plane's
+// [Scheduling] stamped onto the Serve head and worker pod templates.
+func RayServiceForScheduled(name string, spec *core.ServiceSpec, generation uint64, queue *QueueAssignment, sched Scheduling) (*rayv1.RayService, error) {
 	var upgradeType rayv1.RayServiceUpgradeType
 	switch spec.Upgrade {
 	case core.UpgradeStrategyCanary:
@@ -719,11 +736,11 @@ func RayServiceFor(name string, spec *core.ServiceSpec, generation uint64, queue
 	}
 	// Serve worker replicas are fixed here (autoscaling=false); Serve
 	// autoscaling is Ray Serve's own concern (deployment num_replicas).
-	workerSpec, err := workerGroupSpec(name, &worker, spec.Image, false, nil, nil, spec.StorageResolved)
+	workerSpec, err := workerGroupSpec(name, &worker, spec.Image, false, nil, nil, spec.StorageResolved, sched)
 	if err != nil {
 		return nil, fmt.Errorf("provision: service worker group: %w", err)
 	}
-	headTmpl, err := podTemplate(name, HeadContainerName, spec.Image, spec.HeadCpu, spec.HeadMemory, nil, nil, nil, spec.StorageResolved)
+	headTmpl, err := podTemplate(name, HeadContainerName, spec.Image, spec.HeadCpu, spec.HeadMemory, nil, nil, nil, spec.StorageResolved, sched)
 	if err != nil {
 		return nil, fmt.Errorf("provision: service head group: %w", err)
 	}
