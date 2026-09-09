@@ -559,12 +559,39 @@ func (r *Reconciler) reconcileOne(ctx context.Context, c *StoredCluster, now uin
 		}
 	case DesiredTerminated:
 		newCondition = nil
-		if observedState != nil && *observedState != core.ClusterStateTerminated {
+		switch {
+		case observedState != nil && *observedState != core.ClusterStateTerminated:
 			if err := r.provisioner.Terminate(ctx, c.ID); err != nil {
 				return 0, wrapProvisionErr(err)
 			}
 			action = ActionTerminated
-		} else {
+		case observedState == nil:
+			// Nothing to observe: either the cluster is long gone, or it
+			// never materialised — an apply that opened its intent, put
+			// the per-cluster NetworkPolicies in place, and then had the
+			// RayCluster refused (an admission webhook, say). Terminate
+			// never fires for such a cluster, so what Apply prepared
+			// would sit there until the tombstone sweep 24h later. The
+			// still-Pending intent is the one-shot marker: reap, then
+			// close the intent so the tombstone is quiet from here on.
+			rec, err := r.store.GetIntent(ctx, c.IntentKey())
+			if err != nil {
+				return 0, wrapStoreErr(err)
+			}
+			if rec != nil && rec.Status == IntentStatusPending {
+				if err := r.provisioner.ReapNetworkPolicies(ctx, c.ID); err != nil {
+					return 0, wrapProvisionErr(err)
+				}
+				if err := r.store.CompleteIntent(ctx, c.IntentKey(), `{"reaped":true}`); err != nil {
+					return 0, wrapStoreErr(err)
+				}
+				slog.Info("reaped policies of a cluster that never materialised",
+					"target", "bifrost::audit", "cluster", c.ID.String())
+				action = ActionTerminated
+			} else {
+				action = ActionNoOp
+			}
+		default:
 			action = ActionNoOp
 		}
 	case DesiredSuspended:

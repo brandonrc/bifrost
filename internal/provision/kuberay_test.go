@@ -460,6 +460,52 @@ func TestElasticAssignmentForcesAutoscalingAndAnnotation(t *testing.T) {
 	}
 }
 
+// A non-elastic pool admits by pod count, and Kueue's RayCluster webhook
+// refuses `enableInTreeAutoscaling: true` there without the elastic-job
+// annotation. So the operator's --ray-autoscaling flag does not reach a
+// cluster in such a pool: it is fixed-size, replicas written, no sidecar —
+// the shape the pool owner asked for. (On grace, with the flag on, every
+// pooled cluster of the requirements run was denied at admission.)
+func TestNonElasticQueueOverridesTheAutoscalingFlag(t *testing.T) {
+	spec := testSpec(t, wg("cpu", 0, 4, 2))
+	q := &QueueAssignment{QueueName: "proj-a", Elastic: false}
+	rc, err := RayClusterFor("demo", spec, true, 1, q)
+	if err != nil {
+		t.Fatalf("RayClusterFor: %v", err)
+	}
+	if rc.Labels[QueueLabel] != "proj-a" {
+		t.Fatalf("queue label = %q", rc.Labels[QueueLabel])
+	}
+	if _, ok := rc.Annotations[ElasticJobAnnotation]; ok {
+		t.Fatalf("a non-elastic assignment must not carry the elastic annotation")
+	}
+	if *rc.Spec.EnableInTreeAutoscaling {
+		t.Fatalf("autoscaling must be off in a non-elastic pool, whatever the flag says")
+	}
+	if rc.Spec.AutoscalerOptions != nil {
+		t.Fatalf("no sidecar options when the sidecar does not run")
+	}
+	w := rc.Spec.WorkerGroupSpecs[0]
+	if w.Replicas == nil || *w.Replicas != 2 {
+		t.Fatalf("replicas = %v, want the spec's 2 written (fixed-size admission)", w.Replicas)
+	}
+	// The rule itself, in all four corners.
+	for _, tc := range []struct {
+		flag  bool
+		queue *QueueAssignment
+		want  bool
+	}{
+		{false, nil, false},
+		{true, nil, true},
+		{true, &QueueAssignment{QueueName: "q"}, false},
+		{false, &QueueAssignment{QueueName: "q", Elastic: true}, true},
+	} {
+		if got := EffectiveAutoscaling(tc.flag, tc.queue); got != tc.want {
+			t.Errorf("EffectiveAutoscaling(%v, %+v) = %v, want %v", tc.flag, tc.queue, got, tc.want)
+		}
+	}
+}
+
 // kuberay.rs: pod_templates_carry_the_cluster_id_label
 func TestPodTemplatesCarryTheClusterIDLabel(t *testing.T) {
 	spec := testSpec(t, wg("cpu", 0, 4, 2))

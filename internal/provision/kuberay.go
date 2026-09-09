@@ -87,6 +87,28 @@ const (
 	ElasticJobAnnotation = "kueue.x-k8s.io/elastic-job"
 )
 
+// EffectiveAutoscaling is the one rule for whether a cluster runs the
+// in-tree autoscaler, given the operator's --ray-autoscaling flag and the
+// cluster's Kueue queue assignment (nil when its project is in no pool).
+//
+// A cluster in no pool follows the operator flag. A Kueue-managed cluster
+// does not: Kueue admits a workload by counting its pods, so its
+// RayCluster webhook rejects `enableInTreeAutoscaling: true` unless the
+// workload is elastic (the kueue.x-k8s.io/elastic-job annotation, which in
+// turn needs the ElasticJobsViaWorkloadSlices gate). So an elastic pool is
+// always autoscaled — elastic mode requires the sidecar — and a
+// non-elastic pool is never autoscaled, whatever the flag says: the pool
+// owner asked for fixed-size admission and Bifrost writes replicas.
+// (docs/defects/2026-09-09-autoscaling-denied-in-kueue-pools.md: with the
+// flag on, every clustered pool cluster on grace was denied at admission.)
+// ADR-0007 holds either way: with autoscaling on we never write replicas.
+func EffectiveAutoscaling(flag bool, queue *QueueAssignment) bool {
+	if queue == nil {
+		return flag
+	}
+	return queue.Elastic
+}
+
 // RayClusterFor builds the RayCluster manifest for spec at generation.
 // autoscaling selects the field-ownership regime (ADR-0007-equivalent).
 // queue nominates the Kueue LocalQueue (ADR-0010-equivalent): nil (the
@@ -103,11 +125,7 @@ const (
 // the API server reject malformed ones. A parse failure here is returned
 // as an error instead.
 func RayClusterFor(id core.ClusterId, spec *core.ClusterSpec, autoscaling bool, generation uint64, queue *QueueAssignment) (*rayv1.RayCluster, error) {
-	// Elastic pools are always in-tree-autoscaled (elastic mode requires
-	// the autoscaler; a non-elastic queue leaves the flag as the operator
-	// set it). ADR-0007 still holds: with autoscaling on we never write
-	// replicas.
-	autoscaling = autoscaling || (queue != nil && queue.Elastic)
+	autoscaling = EffectiveAutoscaling(autoscaling, queue)
 
 	workerSpecs := make([]rayv1.WorkerGroupSpec, 0, len(spec.WorkerGroups))
 	for i := range spec.WorkerGroups {
