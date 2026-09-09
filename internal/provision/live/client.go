@@ -64,6 +64,10 @@ type Client struct {
 	clientset   kubernetes.Interface
 	namespace   string
 	autoscaling bool
+	// scheduling is stamped onto every tenant pod template this client
+	// applies (provision.Scheduling): deployment-wide placement such as
+	// the tolerations a tainted user node group demands.
+	scheduling provision.Scheduling
 
 	// apiServer caches where the API server answers (see
 	// provision.APIServerEndpoint): read from the `kubernetes` Endpoints
@@ -107,7 +111,16 @@ func NewScheme() (*runtime.Scheme, error) {
 // [provision.RayClusterFor]). Uncached per ADR-0001 #5: no Manager, no
 // informer cache — client.New() talks to the API server directly on every
 // call.
-func NewClient(cfg *rest.Config, namespace string, autoscaling bool) (*Client, error) {
+// Option configures a [Client] beyond NewClient's positional parameters.
+type Option func(*Client)
+
+// WithScheduling sets the placement every tenant pod carries (see
+// provision.Scheduling): `serve --ray-node-selector` / `--ray-tolerations`.
+func WithScheduling(s provision.Scheduling) Option {
+	return func(c *Client) { c.scheduling = s }
+}
+
+func NewClient(cfg *rest.Config, namespace string, autoscaling bool, opts ...Option) (*Client, error) {
 	sch, err := NewScheme()
 	if err != nil {
 		return nil, err
@@ -123,7 +136,11 @@ func NewClient(cfg *rest.Config, namespace string, autoscaling bool) (*Client, e
 	if err != nil {
 		return nil, fmt.Errorf("live: building clientset for pod logs: %w", err)
 	}
-	return &Client{c: c, clientset: clientset, namespace: namespace, autoscaling: autoscaling}, nil
+	cl := &Client{c: c, clientset: clientset, namespace: namespace, autoscaling: autoscaling}
+	for _, o := range opts {
+		o(cl)
+	}
+	return cl, nil
 }
 
 // ServiceClient is [Client]'s [provision.ServiceProvisioner] façade over
@@ -424,7 +441,7 @@ func (c *Client) Apply(ctx context.Context, id core.ClusterId, spec *core.Cluste
 			return provision.ApplyResponse{}, err
 		}
 	}
-	manifest, err := provision.RayClusterFor(id, spec, c.autoscaling, generation, queue)
+	manifest, err := provision.RayClusterForScheduled(id, spec, c.autoscaling, generation, queue, c.scheduling)
 	if err != nil {
 		return provision.ApplyResponse{}, provision.ProvisionError{Kind: provision.ProvisionErrBackend, Message: err.Error()}
 	}
@@ -646,7 +663,7 @@ func (s *ServiceClient) Deploy(ctx context.Context, name string, spec *core.Serv
 	}
 	// queue is the project's serving LocalQueue (requirement 4), resolved
 	// by the service reconciler from the serving pool's allocation.
-	manifest, err := provision.RayServiceFor(name, spec, generation, queue)
+	manifest, err := provision.RayServiceForScheduled(name, spec, generation, queue, s.scheduling)
 	if err != nil {
 		return provision.ProvisionError{Kind: provision.ProvisionErrBackend, Message: err.Error()}
 	}

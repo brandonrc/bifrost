@@ -82,11 +82,19 @@ func ClusterSpecForJob(id core.ClusterId, spec *core.RayJobSpec) core.ClusterSpe
 // submitter is a peer of the cluster under the default-deny posture (a
 // label-less submitter could never reach the head's :8265).
 func RayJobFor(id core.ClusterId, spec *core.RayJobSpec, generation uint64, queue *QueueAssignment) (*rayv1.RayJob, error) {
+	return RayJobForScheduled(id, spec, generation, queue, Scheduling{})
+}
+
+// RayJobForScheduled is [RayJobFor] with the control plane's [Scheduling]
+// stamped onto the job's cluster pods AND its submitter pod: the submitter
+// is a peer of the cluster under the same taints, so it must be placeable
+// wherever the cluster is.
+func RayJobForScheduled(id core.ClusterId, spec *core.RayJobSpec, generation uint64, queue *QueueAssignment, sched Scheduling) (*rayv1.RayJob, error) {
 	if spec.Entrypoint == "" {
 		return nil, fmt.Errorf("provision: job %s: entrypoint is required", id)
 	}
 	cs := ClusterSpecForJob(id, spec)
-	rc, err := RayClusterFor(id, &cs, false, generation, queue)
+	rc, err := RayClusterForScheduled(id, &cs, false, generation, queue, sched)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +113,7 @@ func RayJobFor(id core.ClusterId, spec *core.RayJobSpec, generation uint64, queu
 			Entrypoint:               spec.Entrypoint,
 			RuntimeEnvYAML:           spec.RuntimeEnvYaml,
 			RayClusterSpec:           &rc.Spec,
-			SubmitterPodTemplate:     submitterTemplate(string(id), spec),
+			SubmitterPodTemplate:     submitterTemplate(string(id), spec, sched),
 			ShutdownAfterJobFinishes: true,
 			TTLSecondsAfterFinished:  int32(ttl),
 			SubmissionMode:           rayv1.K8sJobMode,
@@ -116,12 +124,12 @@ func RayJobFor(id core.ClusterId, spec *core.RayJobSpec, generation uint64, queu
 // submitterTemplate is KubeRay's default submitter (its image, its
 // resource envelope, RestartPolicy Never) plus the tenant labels every
 // Bifrost pod carries. Only labels are added: KubeRay fills the command.
-func submitterTemplate(id string, spec *core.RayJobSpec) *corev1.PodTemplateSpec {
+func submitterTemplate(id string, spec *core.RayJobSpec, sched Scheduling) *corev1.PodTemplateSpec {
 	labels := map[string]string{ClusterIDLabel: id}
 	if spec.Owner != nil {
 		labels[OwnerLabel] = *spec.Owner
 	}
-	return &corev1.PodTemplateSpec{
+	tmpl := &corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{Labels: labels},
 		Spec: corev1.PodSpec{
 			RestartPolicy: corev1.RestartPolicyNever,
@@ -135,6 +143,8 @@ func submitterTemplate(id string, spec *core.RayJobSpec) *corev1.PodTemplateSpec
 			}},
 		},
 	}
+	sched.apply(&tmpl.Spec)
+	return tmpl
 }
 
 // JobStatusToState maps a RayJob status to a [core.RayJobState]. Ray's own

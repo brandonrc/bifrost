@@ -47,7 +47,7 @@ func (j *JobClient) ApplyJob(ctx context.Context, id core.ClusterId, spec *core.
 	if err := j.ensureClusterAllow(ctx, string(id), spec.Owner); err != nil {
 		return err
 	}
-	manifest, err := provision.RayJobFor(id, spec, generation, queue)
+	manifest, err := provision.RayJobForScheduled(id, spec, generation, queue, j.scheduling)
 	if err != nil {
 		return provision.ProvisionError{Kind: provision.ProvisionErrBackend, Message: err.Error()}
 	}
