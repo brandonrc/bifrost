@@ -566,3 +566,74 @@ func TestValidateResolvesRolesFromGroups(t *testing.T) {
 		t.Fatal("expected deny by default for an unmapped group")
 	}
 }
+
+// discovery_url: discovery (and, through it, the JWKS) can be fetched from
+// an address other than the issuer, for a provider reachable in-cluster
+// through its Service while stamping a fixed frontend hostname as `iss`
+// (Keycloak with a fixed hostname). The issuer cross-check is unchanged:
+// the advertised issuer must still equal the configured one.
+func TestDiscoveryURLFetchesElsewhereButValidatesTheConfiguredIssuer(t *testing.T) {
+	idp := newTestIdp(t) // keys + /jwks live here
+	const external = "https://keycloak.external.example/realms/nebari"
+
+	// The provider's discovery, reached at an internal address, advertises
+	// the external issuer and an internal jwks_uri — exactly Keycloak's shape.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"issuer":   external,
+			"jwks_uri": idp.server.URL + "/jwks",
+		})
+	})
+	internal := httptest.NewServer(mux)
+	defer internal.Close()
+
+	// Without discovery_url the mismatch guard fires, as before.
+	cfg := AuthConfig{Issuer: internal.URL, Audience: "bifrost", GroupsClaim: "groups"}
+	if _, err := Discover(context.Background(), cfg, IdpClient(), true); err == nil || !strings.Contains(err.Error(), "issuer mismatch") {
+		t.Fatalf("expected issuer mismatch without discovery_url, got %v", err)
+	}
+
+	// With it: discovery at the internal address, issuer = the external one.
+	cfg = AuthConfig{Issuer: external, DiscoveryURL: internal.URL, Audience: "bifrost", GroupsClaim: "groups"}
+	v, err := Discover(context.Background(), cfg, IdpClient(), true)
+	if err != nil {
+		t.Fatalf("Discover with discovery_url: %v", err)
+	}
+	if v.Issuer() != external {
+		t.Fatalf("Issuer() = %q, want %q", v.Issuer(), external)
+	}
+	now := time.Now()
+	tok := idp.signRaw(t, jwt.MapClaims{
+		"sub": "user-123", "iss": external, "aud": "bifrost",
+		"exp": now.Add(5 * time.Minute).Unix(), "iat": now.Unix(), "groups": []string{"/ml-eng"},
+	})
+	if _, err := v.Validate(context.Background(), tok); err != nil {
+		t.Fatalf("token with the external iss should validate: %v", err)
+	}
+	// A token stamped with the discovery address as iss is NOT the issuer.
+	bad := idp.signRaw(t, jwt.MapClaims{
+		"sub": "user-123", "iss": internal.URL, "aud": "bifrost",
+		"exp": now.Add(5 * time.Minute).Unix(), "iat": now.Unix(),
+	})
+	if _, err := v.Validate(context.Background(), bad); err == nil {
+		t.Fatal("token with the discovery address as iss must be rejected")
+	}
+
+	// discovery_url pointing at a provider that advertises some OTHER issuer
+	// is still a mismatch — the override moves the fetch, not the trust.
+	cfg = AuthConfig{Issuer: "https://someone-else.example", DiscoveryURL: internal.URL, Audience: "bifrost", GroupsClaim: "groups"}
+	if _, err := Discover(context.Background(), cfg, IdpClient(), true); err == nil || !strings.Contains(err.Error(), "issuer mismatch") {
+		t.Fatalf("expected issuer mismatch for a foreign advertised issuer, got %v", err)
+	}
+}
+
+// The cleartext guard follows the address actually fetched: an https issuer
+// discovered over an http discovery_url is refused without the override.
+func TestDiscoveryURLCleartextGuardFollowsTheFetchAddress(t *testing.T) {
+	cfg := AuthConfig{Issuer: "https://keycloak.external.example/realms/nebari", DiscoveryURL: "http://keycloak.svc:8080/realms/nebari", Audience: "bifrost", GroupsClaim: "groups"}
+	_, err := Discover(context.Background(), cfg, IdpClient(), false)
+	if authErrKind(t, err) != AuthErrInsecureIssuer {
+		t.Fatalf("expected AuthErrInsecureIssuer for http discovery_url, got %v", err)
+	}
+}

@@ -65,7 +65,7 @@ func runToken(ctx context.Context, issuer, clientID, clientSecret string, scope 
 
 func serviceToken(ctx context.Context, issuer, clientID, clientSecret string, scope *string) error {
 	client := auth.IdpClient()
-	meta, err := auth.DiscoverMetadata(ctx, client, issuer)
+	meta, err := auth.DiscoverMetadata(ctx, client, issuer, "")
 	if err != nil {
 		return err
 	}
@@ -146,7 +146,7 @@ func refreshStoredToken(ctx context.Context, creds Credentials) error {
 		return reLogin
 	}
 	client := auth.IdpClient()
-	meta, err := auth.DiscoverMetadata(ctx, client, creds.Issuer)
+	meta, err := auth.DiscoverMetadata(ctx, client, creds.Issuer, "")
 	if err != nil {
 		return reLogin
 	}

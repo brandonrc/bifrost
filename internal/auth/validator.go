@@ -132,7 +132,9 @@ func IdpClient() *http.Client {
 	}
 }
 
-// DiscoverMetadata fetches {issuer}/.well-known/openid-configuration.
+// DiscoverMetadata fetches {discoveryURL}/.well-known/openid-configuration
+// (discoveryURL is normally the issuer; see AuthConfig.DiscoveryURL for
+// when it is not).
 //
 // Discovery itself is delegated to go-oidc's Provider (which builds the
 // well-known URL and does the HTTP round trip); go-oidc's own issuer
@@ -142,10 +144,13 @@ func IdpClient() *http.Client {
 // cross-check (#16) afterward, against the raw claims returned here.
 //
 // Reference: the predecessor's auth crate, src/lib.rs:429-447 (discover_metadata).
-func DiscoverMetadata(ctx context.Context, client *http.Client, issuer string) (*ProviderMetadata, error) {
+func DiscoverMetadata(ctx context.Context, client *http.Client, issuer, discoveryURL string) (*ProviderMetadata, error) {
+	if discoveryURL == "" {
+		discoveryURL = issuer
+	}
 	ctx = oidc.ClientContext(ctx, client)
 	ctx = oidc.InsecureIssuerURLContext(ctx, issuer)
-	provider, err := oidc.NewProvider(ctx, issuer)
+	provider, err := oidc.NewProvider(ctx, discoveryURL)
 	if err != nil {
 		return nil, AuthError{Kind: AuthErrDiscovery, Message: err.Error(), Source: err}
 	}
@@ -211,11 +216,17 @@ func (v *Validator) RoleMappings() RoleMappings {
 //
 // Reference: the predecessor's auth crate, src/lib.rs:480-548 (Validator::discover).
 func Discover(ctx context.Context, config AuthConfig, client *http.Client, allowInsecure bool) (*Validator, error) {
-	if !strings.HasPrefix(config.Issuer, "https://") && !allowInsecure {
-		return nil, AuthError{Kind: AuthErrInsecureIssuer, Issuer: config.Issuer}
+	// The cleartext guard applies to the address discovery (and, through
+	// the document it returns, the JWKS) is actually fetched from.
+	fetchFrom := config.Issuer
+	if config.DiscoveryURL != "" {
+		fetchFrom = config.DiscoveryURL
+	}
+	if !strings.HasPrefix(fetchFrom, "https://") && !allowInsecure {
+		return nil, AuthError{Kind: AuthErrInsecureIssuer, Issuer: fetchFrom}
 	}
 
-	meta, err := DiscoverMetadata(ctx, client, config.Issuer)
+	meta, err := DiscoverMetadata(ctx, client, config.Issuer, config.DiscoveryURL)
 	if err != nil {
 		return nil, err
 	}

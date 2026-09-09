@@ -81,7 +81,7 @@ func runExchange(
 	}
 
 	client := auth.IdpClient()
-	meta, err := auth.DiscoverMetadata(ctx, client, issuer)
+	meta, err := auth.DiscoverMetadata(ctx, client, issuer, "")
 	if err != nil {
 		return err
 	}

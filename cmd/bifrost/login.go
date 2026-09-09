@@ -68,7 +68,7 @@ func newLogoutCmd() *cobra.Command {
 // stores the resulting credentials. Ported from the predecessor CLI's login.
 func runLogin(ctx context.Context, issuer, clientID, scope string) error {
 	client := auth.IdpClient()
-	meta, err := auth.DiscoverMetadata(ctx, client, issuer)
+	meta, err := auth.DiscoverMetadata(ctx, client, issuer, "")
 	if err != nil {
 		return err
 	}
