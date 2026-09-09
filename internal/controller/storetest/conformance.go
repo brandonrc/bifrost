@@ -1451,7 +1451,7 @@ func policyFixture(cpuPrice float64, seed bool) *controller.StoredPolicy {
 			Name: "small", Description: strPtr("one cpu worker"), Image: "rayproject/ray:2.57.0", RayVersion: "2.57.0",
 			HeadCpu: "1", HeadMemory: "2Gi",
 			WorkerGroups: []core.WorkerGroup{{Name: "cpu", Cpu: "1", Memory: "2Gi", MinReplicas: 0, MaxReplicas: 2, Replicas: 1}},
-			MaxWorkers:   u32Ptr(2), TtlSeconds: u64Ptr(3600), Projects: []string{"ml-team"},
+			MaxWorkers:   u32Ptr(2), TtlSeconds: u64Ptr(3600), Projects: []string{"ml-team"}, Storage: []string{},
 		}},
 		Admission: map[string]core.AdmissionRule{
 			"*":       {AllowedImages: []string{"rayproject/ray:2.57.0"}, MaxWorkers: 8},

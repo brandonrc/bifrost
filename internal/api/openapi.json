@@ -1589,6 +1589,13 @@
           "ray_version": {
             "type": "string"
           },
+          "storage": {
+            "description": "Storage catalog entries (#12) every cluster or job from this profile mounts, in addition to any the request names itself. Resolved against the project at create time like a request's own `storage`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "ttl_seconds": {
             "description": "Default absolute max-age cap applied to clusters using this profile; `null` = none.",
             "format": "int64",
