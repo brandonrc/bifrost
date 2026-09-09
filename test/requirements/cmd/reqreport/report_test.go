@@ -131,3 +131,42 @@ func TestDuplicateTestAcrossFilesIsAnError(t *testing.T) {
 		t.Errorf("error = %q; want it to name TestX, %s and %s", err.Error(), pA, pB)
 	}
 }
+
+// TestSkippedInOneShardRunInAnotherIsOneTest: a capability-gated test skips
+// in the shard that lacks the capability and runs in the one that has it.
+// That is one test, counted once, with the outcome of the shard that ran it
+// — not the double-count or the error the cross-file rule was written for.
+func TestSkippedInOneShardRunInAnotherIsOneTest(t *testing.T) {
+	dir := t.TempDir()
+	pA := dir + "/rbac-selfserve.json"
+	pB := dir + "/autoscaling.json"
+	if err := os.WriteFile(pA, []byte(`{"Action":"run","Test":"TestAutoscale"}
+{"Action":"output","Test":"TestAutoscale","Output":"REQ: kind=covers req=6 reason=\"scales\"\n"}
+{"Action":"output","Test":"TestAutoscale","Output":"REQ: kind=skip req=0 reason=\"target kind lacks capability autoscaling\"\n"}
+{"Action":"skip","Test":"TestAutoscale"}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pB, []byte(`{"Action":"run","Test":"TestAutoscale"}
+{"Action":"output","Test":"TestAutoscale","Output":"REQ: kind=covers req=6 reason=\"scales\"\n"}
+{"Action":"pass","Test":"TestAutoscale"}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := Build([]string{pA, pB}, "l3")
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	r6 := rep.Rows[5]
+	if r6.Tests != 1 || r6.Passed != 1 || r6.Skipped != 0 {
+		t.Fatalf("req 6 = tests %d passed %d skipped %d; want the one run counted once as a pass", r6.Tests, r6.Passed, r6.Skipped)
+	}
+	// Order of files must not matter.
+	rep, err = Build([]string{pB, pA}, "l3")
+	if err != nil {
+		t.Fatalf("Build (reversed): %v", err)
+	}
+	if r6 := rep.Rows[5]; r6.Tests != 1 || r6.Passed != 1 {
+		t.Fatalf("reversed: req 6 = tests %d passed %d", r6.Tests, r6.Passed)
+	}
+}

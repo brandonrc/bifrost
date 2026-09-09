@@ -10,11 +10,22 @@
 #             names it), so dynamically registered clusters are reachable via
 #             a Host header against the NodePort; grace gets it once its
 #             overlay sets the flag
+#   autoscaling
+#             the control plane runs with --ray-autoscaling, so a cluster's
+#             worker count is the KubeRay autoscaler's to change (ADR-0007)
+#             and r06's autoscale test can watch it act
 kind:
   namespace: bifrost
   probeNamespace: jupyter
   contexts: ["^kind-"]
   capabilities: [calico, probes, restart, gateway]
+# The same kind cluster, control plane started with --ray-autoscaling (the
+# l3-kind "autoscaling" shard patches the Deployment before the suite runs).
+kind-autoscaling:
+  namespace: bifrost
+  probeNamespace: jupyter
+  contexts: ["^kind-"]
+  capabilities: [calico, probes, restart, gateway, autoscaling]
 grace:
   namespace: bifrost
   probeNamespace: jupyter

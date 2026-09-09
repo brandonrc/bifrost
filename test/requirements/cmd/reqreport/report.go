@@ -48,9 +48,38 @@ const selfTestPackageSuffix = "/test/requirements/req"
 // correctly comes out failing.
 type testResult struct {
 	Name    string
-	File    string // the -in file this test was first seen in; see readEvents
+	File    string // the -in file this record came from; see readEvents
 	Outcome string // pass|fail|skip
 	Lines   []req.Line
+}
+
+// fileResults is every file's record of one test name. A name recurring
+// across files is legal in exactly one shape: one file ran the test and the
+// others skipped it — which is what a capability-gated test looks like when a
+// package runs in more than one shard (r06 in rbac-selfserve, where the
+// autoscale test skips, and in autoscaling, where it runs). resolve keeps
+// the record that ran; two files that both ran it is the error it always was.
+type fileResults map[string]*testResult
+
+func (fr fileResults) resolve(name string) (*testResult, error) {
+	var ran []*testResult
+	var first *testResult
+	for _, r := range fr {
+		if first == nil || r.File < first.File {
+			first = r
+		}
+		if r.Outcome != "skip" {
+			ran = append(ran, r)
+		}
+	}
+	switch len(ran) {
+	case 0:
+		return first, nil
+	case 1:
+		return ran[0], nil
+	}
+	sort.Slice(ran, func(i, j int) bool { return ran[i].File < ran[j].File })
+	return nil, fmt.Errorf("reqreport: test %q ran in both %s and %s", name, ran[0].File, ran[1].File)
 }
 
 // Row is one requirement's aggregate for one lane.
@@ -80,12 +109,20 @@ type Report struct {
 // an error if the same test name appears in two different files (see
 // readEvents).
 func Build(files []string, lane string) (*Report, error) {
-	results := map[string]*testResult{}
+	perFile := map[string]fileResults{}
 	var order []string
 	for _, f := range files {
-		if err := readEvents(f, results, &order); err != nil {
+		if err := readEvents(f, perFile, &order); err != nil {
 			return nil, err
 		}
+	}
+	results := map[string]*testResult{}
+	for name, fr := range perFile {
+		r, err := fr.resolve(name)
+		if err != nil {
+			return nil, err
+		}
+		results[name] = r
 	}
 
 	rep := &Report{Lane: lane}
@@ -110,13 +147,12 @@ func Build(files []string, lane string) (*Report, error) {
 // A test name recurring within the SAME file (run, then one or more output
 // events, then an outcome event) is normal -- that's how go test reports
 // one test -- and folds into the same testResult. The same name recurring
-// across DIFFERENT files is almost certainly two unrelated inputs
-// (different lanes, a stale rerun, a copy/paste) that happen to share a
-// name; silently merging their REQ lines would double-count Tests, and
-// whichever file's outcome event is read last would silently clobber the
-// other's, with no error and no sign of the lost coverage. So it's a hard
-// error instead.
-func readEvents(path string, results map[string]*testResult, order *[]string) error {
+// across DIFFERENT files is kept per file and settled by fileResults.resolve:
+// a run beside skips is one test that ran in the shard that could run it;
+// two runs is two unrelated inputs (different lanes, a stale rerun) whose
+// REQ lines would double-count and whose outcomes would clobber each other,
+// so that stays a hard error.
+func readEvents(path string, perFile map[string]fileResults, order *[]string) error {
 	fh, err := os.Open(path)
 	if err != nil {
 		return err
@@ -133,13 +169,16 @@ func readEvents(path string, results map[string]*testResult, order *[]string) er
 		if strings.HasSuffix(e.Package, selfTestPackageSuffix) {
 			continue // req's own self-tests; see selfTestPackageSuffix
 		}
-		r, ok := results[e.Test]
+		fr, ok := perFile[e.Test]
+		if !ok {
+			fr = fileResults{}
+			perFile[e.Test] = fr
+			*order = append(*order, e.Test)
+		}
+		r, ok := fr[path]
 		if !ok {
 			r = &testResult{Name: e.Test, File: path}
-			results[e.Test] = r
-			*order = append(*order, e.Test)
-		} else if r.File != path {
-			return fmt.Errorf("reqreport: test %q appears in both %s and %s", e.Test, r.File, path)
+			fr[path] = r
 		}
 		switch e.Action {
 		case "output":

@@ -20,10 +20,10 @@ func Get(t testing.TB) req.Target {
 	switch v := os.Getenv("REQ_TARGET"); v {
 	case "", "inproc":
 		return inproc.New(t)
-	case "kind", "grace":
+	case "kind", "kind-autoscaling", "grace":
 		return cluster.New(t, v)
 	default:
-		t.Fatalf("REQ_TARGET=%q is not a known target (inproc, kind, grace)", v)
+		t.Fatalf("REQ_TARGET=%q is not a known target (inproc, kind, kind-autoscaling, grace)", v)
 		return nil
 	}
 }
