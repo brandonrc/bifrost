@@ -236,6 +236,11 @@ type Profile struct {
 	IdleTimeoutSecs *uint64 `json:"idle_timeout_secs"`
 	// Projects that may use this profile; empty = every project.
 	Projects []string `json:"projects"`
+	// Storage names storage catalog entries (#12) every cluster or job
+	// from this profile mounts, on top of any the request names itself;
+	// empty = none. Resolved against the project at create time exactly
+	// like a request's own storage.
+	Storage []string `json:"storage"`
 }
 
 // profileAlias breaks the recursion MarshalJSON would otherwise cause by
@@ -251,6 +256,9 @@ func (p Profile) MarshalJSON() ([]byte, error) {
 	}
 	if a.Projects == nil {
 		a.Projects = []string{}
+	}
+	if a.Storage == nil {
+		a.Storage = []string{}
 	}
 	return json.Marshal(a)
 }

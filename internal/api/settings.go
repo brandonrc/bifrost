@@ -206,6 +206,8 @@ func policyView(p *controller.StoredPolicy, source string) PolicyView {
 func profileToWire(p *core.Profile) ProfileSpec {
 	projects := make([]string, len(p.Projects))
 	copy(projects, p.Projects)
+	storage := make([]string, len(p.Storage))
+	copy(storage, p.Storage)
 	out := ProfileSpec{
 		Name:         p.Name,
 		Description:  p.Description,
@@ -215,6 +217,7 @@ func profileToWire(p *core.Profile) ProfileSpec {
 		HeadMemory:   p.HeadMemory,
 		WorkerGroups: workerGroupsToWire(p.WorkerGroups),
 		Projects:     &projects,
+		Storage:      &storage,
 	}
 	if p.MaxWorkers != nil {
 		v := int32(*p.MaxWorkers)
@@ -324,6 +327,19 @@ func profilesFromWire(in []ProfileSpec) ([]core.Profile, error) {
 				}
 			}
 			p.Projects = append([]string(nil), (*w.Projects)...)
+		}
+		if w.Storage != nil {
+			seenStorage := make(map[string]bool, len(*w.Storage))
+			for _, name := range *w.Storage {
+				if name == "" {
+					return nil, badRequest(what + "storage names must not be empty")
+				}
+				if seenStorage[name] {
+					return nil, badRequest(what + fmt.Sprintf("storage %q is listed twice", name))
+				}
+				seenStorage[name] = true
+			}
+			p.Storage = append([]string(nil), *w.Storage...)
 		}
 		// The shape a cluster gets from this profile must itself be
 		// buildable: run the create-time shape validation on it. Profiles
@@ -537,6 +553,12 @@ func (s *Server) UpdatePolicy(ctx context.Context, req UpdatePolicyRequestObject
 	if body.Storage != nil {
 		next.Storage = storage
 	}
+	// A profile's storage must name entries of the catalog it will be
+	// resolved against, whichever section this request replaced: a
+	// dangling name would surface as a 400 on somebody else's create.
+	if err := profilesReferenceKnownStorage(next.Profiles, next.Storage); err != nil {
+		return nil, err
+	}
 	next.FromFileSeed = false
 
 	if err := s.Store.SetPolicy(ctx, next); err != nil {
@@ -552,4 +574,21 @@ func (s *Server) UpdatePolicy(ctx context.Context, req UpdatePolicyRequestObject
 		Status:   &status,
 	})
 	return UpdatePolicy200JSONResponse(policyView(next, "store")), nil
+}
+
+// profilesReferenceKnownStorage refuses a catalog whose profiles name
+// storage entries the storage catalog does not have.
+func profilesReferenceKnownStorage(profiles []core.Profile, storage []core.StorageEntry) error {
+	known := make(map[string]bool, len(storage))
+	for i := range storage {
+		known[storage[i].Name] = true
+	}
+	for i := range profiles {
+		for _, name := range profiles[i].Storage {
+			if !known[name] {
+				return badRequest(fmt.Sprintf("invalid profile %q: no such storage %q", profiles[i].Name, name))
+			}
+		}
+	}
+	return nil
 }

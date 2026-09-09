@@ -308,3 +308,98 @@ func TestLoadProfilesValidatesTheSeedFile(t *testing.T) {
 		t.Error("malformed JSON accepted")
 	}
 }
+
+// A profile's storage is additive: what it names is attached ahead of the
+// request's own names, a request cannot drop it, and naming the same entry
+// twice (once each) is not a conflict. This is how a `checkmaite` profile
+// gives every cluster started from the JupyterLab sidebar — which sends
+// the profile name and an empty shape — the analytics volume without the
+// notebook user knowing the catalog.
+func TestExpandProfileAttachesTheProfilesStorage(t *testing.T) {
+	p := smallProfile("team-a")
+	p.Storage = []string{"analytics", "creds"}
+
+	spec := core.ClusterSpec{Project: "team-a"}
+	if err := expandProfile(&spec, &p); err != nil {
+		t.Fatalf("expand: %v", err)
+	}
+	if got := strings.Join(spec.Storage, ","); got != "analytics,creds" {
+		t.Errorf("storage = %q, want the profile's two entries", got)
+	}
+
+	spec = core.ClusterSpec{Project: "team-a", Storage: []string{"scratch", "analytics"}}
+	if err := expandProfile(&spec, &p); err != nil {
+		t.Fatalf("expand with own storage: %v", err)
+	}
+	if got := strings.Join(spec.Storage, ","); got != "analytics,creds,scratch" {
+		t.Errorf("storage = %q, want profile entries first, the request's extra after, no duplicate", got)
+	}
+
+	// A profile without storage leaves the request's alone.
+	none := smallProfile("team-a")
+	spec = core.ClusterSpec{Project: "team-a", Storage: []string{"scratch"}}
+	if err := expandProfile(&spec, &none); err != nil || strings.Join(spec.Storage, ",") != "scratch" {
+		t.Errorf("no-storage profile: err=%v storage=%v", err, spec.Storage)
+	}
+}
+
+// The catalog refuses a profile whose storage names nothing in the storage
+// catalog — in the same request or the one already stored — so the fault
+// is the administrator's 400 now, not a notebook user's 400 later. The
+// view round-trips the field, and a cluster created from the profile
+// resolves the storage against its project like a request's own.
+func TestUpdatePolicyProfileStorageMustExistAndRoundTrips(t *testing.T) {
+	s := &Server{Store: newMemStore(t)}
+	ctx := ctxWithIdentity(admin())
+	projects := []string{"team-a"}
+	storage := []string{"analytics"}
+	prof := ProfileSpec{Name: "checkmaite", Image: "checkmaite:1", RayVersion: "2.9.0", HeadCpu: "1", HeadMemory: "2Gi",
+		WorkerGroups: []WorkerGroup{}, Projects: &projects, Storage: &storage}
+	profiles := []ProfileSpec{prof}
+
+	// No storage catalog yet: dangling.
+	err := mustErr(s.UpdatePolicy(ctx, UpdatePolicyRequestObject{Body: &UpdatePolicy{Profiles: &profiles}}))
+	mustHTTPError(t, err, 400)
+	if !strings.Contains(err.Error(), `no such storage "analytics"`) {
+		t.Errorf("message = %q", err.Error())
+	}
+
+	// Same request carries the entry: fine, and the view shows it.
+	entries := []StorageEntry{pvcEntry("analytics", "checkmaite-analytics", "/app/data/analytics")}
+	resp, err := s.UpdatePolicy(ctx, UpdatePolicyRequestObject{Body: &UpdatePolicy{Profiles: &profiles, Storage: &entries}})
+	if err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	pv := mustResponse[UpdatePolicy200JSONResponse](t, resp)
+	if pv.Profiles == nil || len(*pv.Profiles) != 1 || (*pv.Profiles)[0].Storage == nil || strings.Join(*(*pv.Profiles)[0].Storage, ",") != "analytics" {
+		t.Errorf("view = %+v, want the profile's storage echoed", pv.Profiles)
+	}
+
+	// Removing the entry from the storage section while a stored profile
+	// still names it is refused too.
+	none := []StorageEntry{}
+	mustHTTPError(t, mustErr(s.UpdatePolicy(ctx, UpdatePolicyRequestObject{Body: &UpdatePolicy{Storage: &none}})), 400)
+
+	// Listed twice on one profile: refused.
+	twice := []string{"analytics", "analytics"}
+	dup := prof
+	dup.Storage = &twice
+	dupProfiles := []ProfileSpec{dup}
+	mustHTTPError(t, mustErr(s.UpdatePolicy(ctx, UpdatePolicyRequestObject{Body: &UpdatePolicy{Profiles: &dupProfiles}})), 400)
+
+	// A cluster from the profile, with an empty shape, carries the mount.
+	name := "checkmaite"
+	body := CreateCluster{Id: "c1", Spec: ClusterSpec{Name: "c1", Project: "team-a", Profile: &name, WorkerGroups: []WorkerGroup{}}}
+	cresp, err := s.CreateCluster(ctxWithIdentity(testIdentity("op", auth.RoleOperator)), CreateClusterRequestObject{Body: &body})
+	if err != nil {
+		t.Fatalf("create from profile: %v", err)
+	}
+	_ = cresp
+	stored, err := s.Store.Get(ctx, core.ClusterId("c1"))
+	if err != nil || stored == nil {
+		t.Fatalf("stored: %v %v", stored, err)
+	}
+	if len(stored.Spec.StorageResolved) != 1 || stored.Spec.StorageResolved[0].Name != "analytics" || stored.Spec.StorageResolved[0].ClaimName != "checkmaite-analytics" {
+		t.Errorf("resolved storage = %+v, want the analytics claim", stored.Spec.StorageResolved)
+	}
+}

@@ -98,8 +98,13 @@ func (s *Server) resolveProfile(ctx context.Context, spec *core.ClusterSpec) err
 // profile out. Image, ray_version, head_cpu, head_memory and
 // worker_groups are fixed; ttl_seconds and idle_timeout_secs are the
 // profile's defaults, which a request may override with its own value.
-// p.MaxWorkers caps the expanded spec's total max_replicas; p.Projects
-// gates which project may use it. Every refusal is a 400.
+// p.Storage is additive: every entry it names is attached ahead of the
+// request's own, and a request cannot drop one (an administrator who put
+// the analytics volume on the checkmaite profile meant every checkmaite
+// cluster to have it). Resolution against the project happens afterwards
+// in resolveStorage, as for a request's own names. p.MaxWorkers caps the
+// expanded spec's total max_replicas; p.Projects gates which project may
+// use it. Every refusal is a 400.
 func expandProfile(spec *core.ClusterSpec, p *core.Profile) error {
 	if !profileAvailableTo(p, spec.Project) {
 		return badRequest(fmt.Sprintf("profile %q is not available to project %q", p.Name, spec.Project))
@@ -141,6 +146,15 @@ func expandProfile(spec *core.ClusterSpec, p *core.Profile) error {
 	if spec.IdleTimeoutSecs == nil && p.IdleTimeoutSecs != nil {
 		v := *p.IdleTimeoutSecs
 		spec.IdleTimeoutSecs = &v
+	}
+	if len(p.Storage) > 0 {
+		merged := append([]string(nil), p.Storage...)
+		for _, name := range spec.Storage {
+			if !containsString(merged, name) {
+				merged = append(merged, name)
+			}
+		}
+		spec.Storage = merged
 	}
 	if p.MaxWorkers != nil && *p.MaxWorkers > 0 {
 		if total := totalMaxWorkers(spec); total > int(*p.MaxWorkers) {

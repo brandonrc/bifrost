@@ -919,6 +919,9 @@ type ProfileSpec struct {
 	Projects   *[]string `json:"projects,omitempty"`
 	RayVersion string    `json:"ray_version"`
 
+	// Storage Storage catalog entries (#12) every cluster or job from this profile mounts, in addition to any the request names itself. Resolved against the project at create time like a request's own `storage`.
+	Storage *[]string `json:"storage,omitempty"`
+
 	// TtlSeconds Default absolute max-age cap applied to clusters using this profile; `null` = none.
 	TtlSeconds   *int64        `json:"ttl_seconds,omitempty"`
 	WorkerGroups []WorkerGroup `json:"worker_groups"`
