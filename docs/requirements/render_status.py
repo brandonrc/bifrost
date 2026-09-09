@@ -167,7 +167,7 @@ td.gap{color:var(--muted)}
   <div class="eyebrow">Bifrost · Ray Software Pack</div>
   <h1>Requirement status</h1>
   <p class="lede">The eighteen rows, what is in the source, and what an automated test actually proves about each one. Two things are kept apart on purpose: a row can be built and still be untested, and a row can pass every lane and still be unproven where it matters.</p>
-  <div class="meta"><span>main <b>__SHA__</b></span><span>curated <b>2026-09-08</b></span><span>suite <b>__TOTAL__ tests</b></span><span>browser <b>__BROWSER__ specs</b></span><span>rows with tests <b>__TESTED__ of 18</b></span></div>
+  <div class="meta"><span>main <b>__SHA__</b></span><span>curated <b>2026-09-09</b></span><span>suite <b>__TOTAL__ tests</b></span><span>browser <b>__BROWSER__ specs</b></span><span>rows with tests <b>__TESTED__ of 18</b></span></div>
   <div class="tiles">__TILES__</div>
 </header>
 <div class="wrap">
