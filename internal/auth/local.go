@@ -56,7 +56,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
 // bcryptCost is the bcrypt work factor. Pinned to 12 (the Rust reference's

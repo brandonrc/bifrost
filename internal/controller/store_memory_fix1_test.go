@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
 // Fix round 1 (review of commit 23055b9): tests for the M1/L1/L3 fixes in

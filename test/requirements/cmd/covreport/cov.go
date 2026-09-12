@@ -19,7 +19,7 @@ type Policy struct {
 	Exclude []string
 }
 
-const modulePrefix = "github.com/brandonrc/bifrost/"
+const modulePrefix = "github.com/bifrost-compute/bifrost/"
 
 // Compute returns covered-statement percentage per tier from a coverprofile.
 // Lines: file:startLine.col,endLine.col numStatements count

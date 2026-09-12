@@ -17,7 +17,7 @@ import (
 // interleave, a failure with its assertion line, and the package's own trailer.
 const sample = "\x16=== RUN   TestPoolAndAllocationLifecycle\n    pools_test.go:22: REQ: kind=covers req=13 reason=\"an administrator creates a pool\"\n\x16--- PASS: TestPoolAndAllocationLifecycle (21.40s)\n\x16=== NAME\n\x16=== RUN   TestPermissionMatrix\n\x16=== PAUSE TestPermissionMatrix\n\x16=== RUN   TestSuspendResume\n\x16=== CONT  TestPermissionMatrix\n    matrix_test.go:35: REQ: kind=covers req=3 reason=\"every operation\"\n\x16=== NAME  TestSuspendResume\n    lifecycle_test.go:88: suspend as project operator\n\x16--- PASS: TestSuspendResume (3.01s)\n\x16=== NAME  TestPermissionMatrix\n    matrix_test.go:140: create_pool as dev-a = 200, permissions.yaml says deny (403)\n\x16--- FAIL: TestPermissionMatrix (12.02s)\n\x16=== RUN   TestIdleClusterIsReaped\n    hygiene_test.go:20: REQ: kind=covers req=6 reason=\"an idle cluster is reaped\"\n\x16--- SKIP: TestIdleClusterIsReaped (0.00s)\n\x16=== RUN   TestWithSubtests\n\x16=== RUN   TestWithSubtests/first_case\n    sub_test.go:9: checking\n\x16=== NAME  TestWithSubtests\n\x16--- FAIL: TestWithSubtests (0.11s)\n\x16    --- FAIL: TestWithSubtests/first_case (0.10s)\n\x16FAIL\n\n"
 
-const samplePkg = "github.com/brandonrc/bifrost/test/requirements/r03_rbac"
+const samplePkg = "github.com/bifrost-compute/bifrost/test/requirements/r03_rbac"
 
 // results is the ordered list of outcomes a report reads: the action and the
 // test it belongs to, ignoring output events.

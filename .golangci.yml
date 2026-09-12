@@ -32,5 +32,5 @@ linters:
         apitest-test-only:
           files: ["!$test"]
           deny:
-            - pkg: "github.com/brandonrc/bifrost/internal/api/apitest"
+            - pkg: "github.com/bifrost-compute/bifrost/internal/api/apitest"
               desc: "apitest is a dev-mode auth bypass (predecessor issue #45); import it only from _test.go files"

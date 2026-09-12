@@ -32,9 +32,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/brandonrc/bifrost/internal/controller"
-	"github.com/brandonrc/bifrost/internal/controller/storetest"
-	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/controller"
+	"github.com/bifrost-compute/bifrost/internal/controller/storetest"
+	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
 // nextPgSchema is a process-wide counter so parallel test binaries (or

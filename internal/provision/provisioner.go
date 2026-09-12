@@ -22,7 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
 // ProvisionErrorKind discriminates [ProvisionError] variants — the Go

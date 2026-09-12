@@ -4,9 +4,9 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/brandonrc/bifrost/test/requirements/fixture"
-	"github.com/brandonrc/bifrost/test/requirements/req"
-	"github.com/brandonrc/bifrost/test/requirements/target"
+	"github.com/bifrost-compute/bifrost/test/requirements/fixture"
+	"github.com/bifrost-compute/bifrost/test/requirements/req"
+	"github.com/bifrost-compute/bifrost/test/requirements/target"
 )
 
 // A private cluster's Jobs API is reached only through the authenticated

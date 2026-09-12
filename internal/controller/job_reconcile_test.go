@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/brandonrc/bifrost/internal/core"
-	"github.com/brandonrc/bifrost/internal/provision"
+	"github.com/bifrost-compute/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/provision"
 )
 
 // scriptedJobProvisioner is a scripted JobProvisioner: ApplyJob records the

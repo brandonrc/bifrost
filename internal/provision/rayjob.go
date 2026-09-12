@@ -11,7 +11,7 @@ import (
 
 	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
 
-	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
 // KubeRay RayJob backend (requirement 5): translate a [core.RayJobSpec]

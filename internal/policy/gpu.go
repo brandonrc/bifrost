@@ -28,7 +28,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
 // EffectiveGpuSharing is the sharing mode a pool effectively runs: its own

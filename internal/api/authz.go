@@ -19,9 +19,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/brandonrc/bifrost/internal/auth"
-	"github.com/brandonrc/bifrost/internal/controller"
-	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/auth"
+	"github.com/bifrost-compute/bifrost/internal/controller"
+	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
 // PermissionStr returns the snake_case wire form of a permission verb (for

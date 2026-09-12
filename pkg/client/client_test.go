@@ -5,8 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/brandonrc/bifrost/internal/api/apitest"
-	"github.com/brandonrc/bifrost/pkg/client"
+	"github.com/bifrost-compute/bifrost/internal/api/apitest"
+	"github.com/bifrost-compute/bifrost/pkg/client"
 )
 
 func TestClientRoundTripsVersion(t *testing.T) {

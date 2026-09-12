@@ -12,8 +12,8 @@
 
 ## Global Constraints
 
-- Module path is `github.com/brandonrc/bifrost`; Go `1.26.0`, toolchain `go1.26.6`. `CGO_ENABLED=0` for builds; tests run with `-race` (needs `CGO_ENABLED=1`).
-- No file under `test/requirements/` except `test/requirements/target/inproc/` may import `github.com/brandonrc/bifrost/internal/...` (spec §1.3). The guard test in Task 7 enforces it; do not add exceptions.
+- Module path is `github.com/bifrost-compute/bifrost`; Go `1.26.0`, toolchain `go1.26.6`. `CGO_ENABLED=0` for builds; tests run with `-race` (needs `CGO_ENABLED=1`).
+- No file under `test/requirements/` except `test/requirements/target/inproc/` may import `github.com/bifrost-compute/bifrost/internal/...` (spec §1.3). The guard test in Task 7 enforces it; do not add exceptions.
 - Every `Test*` function under `test/requirements/contract/`, `test/requirements/pack/` and `test/requirements/r??_*/` must call `req.Covers` or `req.NotYetBuilt` as its first statement after obtaining a target.
 - No `time.Sleep` in test files under `test/requirements/` (use `req.Eventually`).
 - Requirement numbers are 1–18. `req.Covers` panics on anything else.
@@ -87,7 +87,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/brandonrc/bifrost/internal/controller"
+	"github.com/bifrost-compute/bifrost/internal/controller"
 )
 
 func TestNewServesHealthzAndVersion(t *testing.T) {
@@ -119,7 +119,7 @@ func TestNewRequiresStore(t *testing.T) {
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `go test ./internal/app/ 2>&1 | head -5`
-Expected: build failure — `package github.com/brandonrc/bifrost/internal/app` has no non-test Go files / `undefined: New`.
+Expected: build failure — `package github.com/bifrost-compute/bifrost/internal/app` has no non-test Go files / `undefined: New`.
 
 - [ ] **Step 3: Write `internal/app/app.go`**
 
@@ -140,11 +140,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/brandonrc/bifrost/internal/api"
-	"github.com/brandonrc/bifrost/internal/auth"
-	"github.com/brandonrc/bifrost/internal/controller"
-	"github.com/brandonrc/bifrost/internal/core"
-	"github.com/brandonrc/bifrost/internal/provision"
+	"github.com/bifrost-compute/bifrost/internal/api"
+	"github.com/bifrost-compute/bifrost/internal/auth"
+	"github.com/bifrost-compute/bifrost/internal/controller"
+	"github.com/bifrost-compute/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/provision"
 )
 
 // Config is everything New needs. Store is required; the rest is optional
@@ -272,7 +272,7 @@ Expected: FAIL listing `api.NewHandler(`, `&api.Server{`, `controller.RunReconci
 
 - [ ] **Step 7: Refactor `serve.go`**
 
-Replace the `builtServer` type and the tail of `buildServer` (from `var liveClient *live.Client` through the closing `return`) and the loop-start block in `runServe`. Add `"github.com/brandonrc/bifrost/internal/app"` to imports and remove the now-unused `"github.com/brandonrc/bifrost/internal/api"` import **only if** `api.CheckBindAllowed` is no longer referenced — it is still used in `runServe`, so keep the `api` import.
+Replace the `builtServer` type and the tail of `buildServer` (from `var liveClient *live.Client` through the closing `return`) and the loop-start block in `runServe`. Add `"github.com/bifrost-compute/bifrost/internal/app"` to imports and remove the now-unused `"github.com/bifrost-compute/bifrost/internal/api"` import **only if** `api.CheckBindAllowed` is no longer referenced — it is still used in `runServe`, so keep the `api` import.
 
 New `builtServer`:
 ```go
@@ -335,7 +335,7 @@ Update `serve_test.go` references: `built.handler` → `built.app.Handler`, `bui
 - [ ] **Step 8: Build and run the whole cmd + app test set**
 
 Run: `go build ./... && go test ./cmd/bifrost/ ./internal/app/ 2>&1 | tail -4`
-Expected: `ok  github.com/brandonrc/bifrost/cmd/bifrost` and `ok ... /internal/app`.
+Expected: `ok  github.com/bifrost-compute/bifrost/cmd/bifrost` and `ok ... /internal/app`.
 
 - [ ] **Step 9: Full suite still green**
 
@@ -369,7 +369,7 @@ Claude-Session: https://claude.ai/code/session_01LGo24EU9EmVHMGhnDEi3zk"
 - Modify: `.github/workflows/ci.yml:36-39` (codegen drift step)
 
 **Interfaces:**
-- Produces: package `github.com/brandonrc/bifrost/pkg/client` with `NewClientWithResponses(server string, opts ...ClientOption) (*ClientWithResponses, error)`, `WithRequestEditorFn(fn RequestEditorFn) ClientOption`, and per-operation methods named from operationIds in CamelCase with `WithResponse` suffix: `VersionWithResponse`, `HealthzWithResponse`, `LoginWithResponse`, `CreateClusterWithResponse`, `ListClustersWithResponse`, `GetClusterWithResponse`, `DeleteClusterWithResponse`, `UpsertAssignmentWithResponse`, and body aliases `LoginJSONRequestBody`, `CreateClusterJSONRequestBody`, `UpsertAssignmentJSONRequestBody`. Tasks 4 and 6 use these names.
+- Produces: package `github.com/bifrost-compute/bifrost/pkg/client` with `NewClientWithResponses(server string, opts ...ClientOption) (*ClientWithResponses, error)`, `WithRequestEditorFn(fn RequestEditorFn) ClientOption`, and per-operation methods named from operationIds in CamelCase with `WithResponse` suffix: `VersionWithResponse`, `HealthzWithResponse`, `LoginWithResponse`, `CreateClusterWithResponse`, `ListClustersWithResponse`, `GetClusterWithResponse`, `DeleteClusterWithResponse`, `UpsertAssignmentWithResponse`, and body aliases `LoginJSONRequestBody`, `CreateClusterJSONRequestBody`, `UpsertAssignmentJSONRequestBody`. Tasks 4 and 6 use these names.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -382,8 +382,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/brandonrc/bifrost/internal/api/apitest"
-	"github.com/brandonrc/bifrost/pkg/client"
+	"github.com/bifrost-compute/bifrost/internal/api/apitest"
+	"github.com/bifrost-compute/bifrost/pkg/client"
 )
 
 func TestClientRoundTripsVersion(t *testing.T) {
@@ -839,7 +839,7 @@ import (
 
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/brandonrc/bifrost/pkg/client"
+	"github.com/bifrost-compute/bifrost/pkg/client"
 )
 
 // FakeClock is controllable time. nil on every target in P0 (spec's
@@ -923,9 +923,9 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/brandonrc/bifrost/pkg/client"
-	"github.com/brandonrc/bifrost/test/requirements/req"
-	"github.com/brandonrc/bifrost/test/requirements/target"
+	"github.com/bifrost-compute/bifrost/pkg/client"
+	"github.com/bifrost-compute/bifrost/test/requirements/req"
+	"github.com/bifrost-compute/bifrost/test/requirements/target"
 )
 
 func TestInprocCreateConvergesToRunning(t *testing.T) {
@@ -985,8 +985,8 @@ import (
 	"context"
 	"sync"
 
-	"github.com/brandonrc/bifrost/internal/core"
-	"github.com/brandonrc/bifrost/internal/provision"
+	"github.com/bifrost-compute/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/provision"
 )
 
 // fakeProvisioner is the Kubernetes edge, faked. It converges one step per
@@ -1126,12 +1126,12 @@ import (
 
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/brandonrc/bifrost/internal/app"
-	"github.com/brandonrc/bifrost/internal/auth"
-	"github.com/brandonrc/bifrost/internal/controller"
-	"github.com/brandonrc/bifrost/internal/core"
-	"github.com/brandonrc/bifrost/pkg/client"
-	"github.com/brandonrc/bifrost/test/requirements/req"
+	"github.com/bifrost-compute/bifrost/internal/app"
+	"github.com/bifrost-compute/bifrost/internal/auth"
+	"github.com/bifrost-compute/bifrost/internal/controller"
+	"github.com/bifrost-compute/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/pkg/client"
+	"github.com/bifrost-compute/bifrost/test/requirements/req"
 )
 
 type principal struct {
@@ -1321,8 +1321,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/brandonrc/bifrost/test/requirements/req"
-	"github.com/brandonrc/bifrost/test/requirements/target/inproc"
+	"github.com/bifrost-compute/bifrost/test/requirements/req"
+	"github.com/bifrost-compute/bifrost/test/requirements/target/inproc"
 )
 
 // Get returns the run's target. A fresh inproc target per test keeps tests
@@ -1389,9 +1389,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/brandonrc/bifrost/internal/api"
-	"github.com/brandonrc/bifrost/internal/api/apitest"
-	"github.com/brandonrc/bifrost/internal/controller"
+	"github.com/bifrost-compute/bifrost/internal/api"
+	"github.com/bifrost-compute/bifrost/internal/api/apitest"
+	"github.com/bifrost-compute/bifrost/internal/controller"
 )
 
 func post(t *testing.T, h http.Handler, path, body string) *httptest.ResponseRecorder {
@@ -1756,8 +1756,8 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 
-	"github.com/brandonrc/bifrost/test/requirements/req"
-	"github.com/brandonrc/bifrost/test/requirements/target"
+	"github.com/bifrost-compute/bifrost/test/requirements/req"
+	"github.com/bifrost-compute/bifrost/test/requirements/target"
 )
 
 // dummy builds a value satisfying the schema's TYPE with every required
@@ -1844,8 +1844,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/brandonrc/bifrost/test/requirements/req"
-	"github.com/brandonrc/bifrost/test/requirements/target"
+	"github.com/bifrost-compute/bifrost/test/requirements/req"
+	"github.com/bifrost-compute/bifrost/test/requirements/target"
 )
 
 func TestEveryNonPublicOperationRequiresAToken(t *testing.T) {
@@ -1928,7 +1928,7 @@ import (
 	"testing"
 )
 
-const internalPrefix = `"github.com/brandonrc/bifrost/internal/`
+const internalPrefix = `"github.com/bifrost-compute/bifrost/internal/`
 
 func goFiles(t *testing.T, root string, testOnly bool) []string {
 	t.Helper()
@@ -2038,7 +2038,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/brandonrc/bifrost/test/requirements/req"
+	"github.com/bifrost-compute/bifrost/test/requirements/req"
 )
 
 // Req 17 is "design must not foreclose Slurm". The seam that would have to
@@ -2212,7 +2212,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/brandonrc/bifrost/test/requirements/req"
+	"github.com/bifrost-compute/bifrost/test/requirements/req"
 )
 
 type event struct {
@@ -2522,11 +2522,11 @@ test/requirements/
 `testdata/profile.txt`:
 ```
 mode: atomic
-github.com/brandonrc/bifrost/internal/core/a.go:1.1,2.2 2 1
-github.com/brandonrc/bifrost/internal/core/a.go:3.1,4.2 2 0
-github.com/brandonrc/bifrost/internal/api/b.go:1.1,2.2 4 3
-github.com/brandonrc/bifrost/internal/api/zz_generated_api.go:1.1,2.2 100 0
-github.com/brandonrc/bifrost/cmd/bifrost/main.go:1.1,2.2 10 0
+github.com/bifrost-compute/bifrost/internal/core/a.go:1.1,2.2 2 1
+github.com/bifrost-compute/bifrost/internal/core/a.go:3.1,4.2 2 0
+github.com/bifrost-compute/bifrost/internal/api/b.go:1.1,2.2 4 3
+github.com/bifrost-compute/bifrost/internal/api/zz_generated_api.go:1.1,2.2 100 0
+github.com/bifrost-compute/bifrost/cmd/bifrost/main.go:1.1,2.2 10 0
 ```
 `cov_test.go`:
 ```go
@@ -2593,7 +2593,7 @@ type Policy struct {
 	Exclude []string
 }
 
-const modulePrefix = "github.com/brandonrc/bifrost/"
+const modulePrefix = "github.com/bifrost-compute/bifrost/"
 
 // Compute returns covered-statement percentage per tier from a coverprofile.
 // Lines: file:startLine.col,endLine.col numStatements count
@@ -2987,7 +2987,7 @@ package pack
 import (
 	"testing"
 
-	"github.com/brandonrc/bifrost/test/requirements/req"
+	"github.com/bifrost-compute/bifrost/test/requirements/req"
 )
 
 // Defect 4 (docs/defects, 2026-09-02): the dashboard's nginx resolved
@@ -3021,7 +3021,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/brandonrc/bifrost/test/requirements/req"
+	"github.com/bifrost-compute/bifrost/test/requirements/req"
 )
 
 // The chart's default image tag once named an image that never existed
@@ -3164,7 +3164,7 @@ This is the test that only a real node can run. Grace is a playground; CoreDNS i
 ssh geraci@grace 'bash -s' <<'REMOTE'
 export KUBECONFIG=/var/snap/microk8s/current/credentials/client.config
 set -e
-cd /tmp && rm -rf bifrost-pack && git clone -q https://github.com/brandonrc/bifrost-pack.git 2>/dev/null || true
+cd /tmp && rm -rf bifrost-pack && git clone -q https://github.com/bifrost-compute/bifrost-pack.git 2>/dev/null || true
 REMOTE
 # If the pack has no remote yet, copy the chart instead:
 rsync -a --delete /Users/khan/openteams/bifrost-pack/chart/ geraci@grace:/tmp/bifrost-pack-chart/

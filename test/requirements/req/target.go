@@ -7,7 +7,7 @@ import (
 
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/brandonrc/bifrost/pkg/client"
+	"github.com/bifrost-compute/bifrost/pkg/client"
 )
 
 // FakeClock is controllable time. nil on every target in P0 (spec's

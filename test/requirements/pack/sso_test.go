@@ -3,7 +3,7 @@ package pack
 import (
 	"testing"
 
-	"github.com/brandonrc/bifrost/test/requirements/req"
+	"github.com/bifrost-compute/bifrost/test/requirements/req"
 )
 
 // The dashboard learns its OIDC client id and issuer at runtime from

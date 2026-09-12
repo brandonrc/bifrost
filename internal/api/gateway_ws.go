@@ -27,8 +27,8 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/brandonrc/bifrost/internal/controller"
-	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/controller"
+	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
 // proxyUpgrade bridges a websocket upgrade request to cluster's native Ray

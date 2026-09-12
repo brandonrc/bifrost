@@ -11,8 +11,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/brandonrc/bifrost/internal/auth"
-	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/auth"
+	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
 // ListProfiles lists the profiles the caller may use: Read on cluster

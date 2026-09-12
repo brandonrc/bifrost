@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
 // Chain and UsageSource tests below are ported from

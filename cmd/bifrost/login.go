@@ -13,8 +13,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/brandonrc/bifrost/internal/api"
-	"github.com/brandonrc/bifrost/internal/auth"
+	"github.com/bifrost-compute/bifrost/internal/api"
+	"github.com/bifrost-compute/bifrost/internal/auth"
 )
 
 func newLoginCmd() *cobra.Command {

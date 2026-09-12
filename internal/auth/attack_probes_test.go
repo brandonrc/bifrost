@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
 // Negative tests for the credential-handling boundary in flows.go and

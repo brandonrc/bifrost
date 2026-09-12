@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
 // --- fakeLocalStore: a minimal in-memory LocalUserStore for tests. ---

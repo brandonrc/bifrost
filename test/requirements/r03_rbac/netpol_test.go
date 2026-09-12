@@ -9,9 +9,9 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/brandonrc/bifrost/test/requirements/fixture"
-	"github.com/brandonrc/bifrost/test/requirements/req"
-	"github.com/brandonrc/bifrost/test/requirements/target"
+	"github.com/bifrost-compute/bifrost/test/requirements/fixture"
+	"github.com/bifrost-compute/bifrost/test/requirements/req"
+	"github.com/bifrost-compute/bifrost/test/requirements/target"
 )
 
 // agnhost is the Kubernetes e2e probe image: tiny, has `netexec` (an HTTP

@@ -41,8 +41,8 @@ import (
 	"gopkg.in/yaml.v3"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/brandonrc/bifrost/pkg/client"
-	"github.com/brandonrc/bifrost/test/requirements/req"
+	"github.com/bifrost-compute/bifrost/pkg/client"
+	"github.com/bifrost-compute/bifrost/test/requirements/req"
 )
 
 //go:embed targets.yaml

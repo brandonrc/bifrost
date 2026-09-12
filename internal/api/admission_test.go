@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
 func TestAdmission_ImagePrefixesAndWorkerCap(t *testing.T) {

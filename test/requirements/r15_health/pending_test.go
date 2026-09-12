@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/brandonrc/bifrost/test/requirements/fixture"
-	"github.com/brandonrc/bifrost/test/requirements/req"
-	"github.com/brandonrc/bifrost/test/requirements/target"
+	"github.com/bifrost-compute/bifrost/test/requirements/fixture"
+	"github.com/bifrost-compute/bifrost/test/requirements/req"
+	"github.com/bifrost-compute/bifrost/test/requirements/target"
 )
 
 // The pending-reasons half of requirement 15: a cluster that cannot be

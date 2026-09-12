@@ -4,7 +4,7 @@
 
 **Goal:** Stand up the bifrost repo with all CI discipline gates live, prove the toolchain by porting the two pure-logic packages (core, policy) from the Rust reference, validate the spec-first codegen bet, and bootstrap bifrost-api.
 
-**Architecture:** Single Go module `github.com/brandonrc/bifrost` (ADR-0001 #1). Rust reference for all ported code: `/Users/khan/openteams/mobula` — every port task names its source files; the Rust tests are the behavioral oracle and get ported alongside the code.
+**Architecture:** Single Go module `github.com/bifrost-compute/bifrost` (ADR-0001 #1). Rust reference for all ported code: `/Users/khan/openteams/mobula` — every port task names its source files; the Rust tests are the behavioral oracle and get ported alongside the code.
 
 **Tech Stack:** Go ≥1.25 (toolchain 1.26), golangci-lint v2, oapi-codegen ≥2.8.0, no cgo anywhere.
 
@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Module path `github.com/brandonrc/bifrost`; license Apache-2.0 (match mobula).
+- Module path `github.com/bifrost-compute/bifrost`; license Apache-2.0 (match mobula).
 - `CGO_ENABLED=0` for all builds and tests.
 - `internal/core` and `internal/policy` import NOTHING outside stdlib + each other (depguard-enforced; mobula ADR-0002).
 - Every commit message: conventional-commit style, NO AI-attribution footers (no "Generated with", no Co-Authored-By: Claude) — project convention.
@@ -32,7 +32,7 @@
 - [ ] **Step 1: go.mod**
 
 ```
-module github.com/brandonrc/bifrost
+module github.com/bifrost-compute/bifrost
 
 go 1.25
 

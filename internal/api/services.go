@@ -22,10 +22,10 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/brandonrc/bifrost/internal/auth"
-	"github.com/brandonrc/bifrost/internal/controller"
-	"github.com/brandonrc/bifrost/internal/core"
-	"github.com/brandonrc/bifrost/internal/policy"
+	"github.com/bifrost-compute/bifrost/internal/auth"
+	"github.com/bifrost-compute/bifrost/internal/controller"
+	"github.com/bifrost-compute/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/policy"
 )
 
 // servingQueues memoizes the per-project serving-queue lookup for one

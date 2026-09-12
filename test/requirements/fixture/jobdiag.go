@@ -14,7 +14,7 @@ import (
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sort"
 
-	"github.com/brandonrc/bifrost/test/requirements/req"
+	"github.com/bifrost-compute/bifrost/test/requirements/req"
 )
 
 // DiagnoseJobHead is the operator's view of a RayJob's head while KubeRay is

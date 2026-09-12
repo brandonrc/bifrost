@@ -6,8 +6,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/brandonrc/bifrost/internal/core"
-	"github.com/brandonrc/bifrost/internal/provision"
+	"github.com/bifrost-compute/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/provision"
 )
 
 // scriptedServiceProvisioner is the Kubernetes edge for the service loop,

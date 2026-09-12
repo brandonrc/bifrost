@@ -50,8 +50,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/brandonrc/bifrost/internal/controller"
-	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/controller"
+	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
 // RunConformance runs the full store-conformance suite against a fresh

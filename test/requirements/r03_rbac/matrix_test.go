@@ -11,10 +11,10 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/brandonrc/bifrost/test/requirements/contract"
-	"github.com/brandonrc/bifrost/test/requirements/fixture"
-	"github.com/brandonrc/bifrost/test/requirements/req"
-	"github.com/brandonrc/bifrost/test/requirements/target"
+	"github.com/bifrost-compute/bifrost/test/requirements/contract"
+	"github.com/bifrost-compute/bifrost/test/requirements/fixture"
+	"github.com/bifrost-compute/bifrost/test/requirements/req"
+	"github.com/bifrost-compute/bifrost/test/requirements/target"
 )
 
 //go:embed permissions.yaml

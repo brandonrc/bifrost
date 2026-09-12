@@ -3,8 +3,8 @@ package api
 import (
 	"testing"
 
-	"github.com/brandonrc/bifrost/internal/auth"
-	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/auth"
+	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
 func TestListRegistry_AdminOnly(t *testing.T) {

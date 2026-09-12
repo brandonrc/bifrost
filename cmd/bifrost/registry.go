@@ -7,7 +7,7 @@ import (
 	"os"
 	"runtime"
 
-	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
 // loadRegistry reads, resolves, and validates a cluster registry file for

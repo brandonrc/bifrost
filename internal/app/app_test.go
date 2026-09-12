@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/brandonrc/bifrost/internal/controller"
+	"github.com/bifrost-compute/bifrost/internal/controller"
 )
 
 func TestNewServesHealthzAndVersion(t *testing.T) {

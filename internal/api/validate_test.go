@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/brandonrc/bifrost/internal/api"
-	"github.com/brandonrc/bifrost/internal/api/apitest"
-	"github.com/brandonrc/bifrost/internal/controller"
+	"github.com/bifrost-compute/bifrost/internal/api"
+	"github.com/bifrost-compute/bifrost/internal/api/apitest"
+	"github.com/bifrost-compute/bifrost/internal/controller"
 )
 
 func post(t *testing.T, h http.Handler, path, body string) *httptest.ResponseRecorder {

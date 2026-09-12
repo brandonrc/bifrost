@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
 // Fix round 2 (same class as fix round 1, review of commit 338cc34):

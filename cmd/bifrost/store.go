@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/brandonrc/bifrost/internal/controller"
+	"github.com/bifrost-compute/bifrost/internal/controller"
 )
 
 // storeKind is the --store backend selector.

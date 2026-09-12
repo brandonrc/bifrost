@@ -12,7 +12,7 @@ package apitest
 import (
 	"net/http"
 
-	"github.com/brandonrc/bifrost/internal/api"
+	"github.com/bifrost-compute/bifrost/internal/api"
 )
 
 // NewHandler builds a Bifrost API http.Handler with no validator and no

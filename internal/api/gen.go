@@ -2,7 +2,7 @@
 // control plane, spec-first from the contract at openapi.json — which is
 // the source of truth for the Bifrost REST API (ADR-0006). It is edited
 // here, in the same PR as the handler that implements the change, and
-// published downstream to github.com/brandonrc/bifrost-api (the SDK
+// published downstream to github.com/bifrost-compute/bifrost-api (the SDK
 // pipeline's home) by .github/workflows/sync-api.yml on every push to main.
 //
 // zz_generated_api.go is produced by oapi-codegen from openapi.json and

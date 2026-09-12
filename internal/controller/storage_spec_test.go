@@ -3,7 +3,7 @@ package controller
 import (
 	"testing"
 
-	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
 // Requirement 12: the persisted storage resolution is part of the spec the

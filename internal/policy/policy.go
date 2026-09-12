@@ -23,7 +23,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
 // Well-known resource keys (any other K8s resource name is equally valid).

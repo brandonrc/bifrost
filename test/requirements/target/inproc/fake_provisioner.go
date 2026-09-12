@@ -4,8 +4,8 @@ import (
 	"context"
 	"sync"
 
-	"github.com/brandonrc/bifrost/internal/core"
-	"github.com/brandonrc/bifrost/internal/provision"
+	"github.com/bifrost-compute/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/provision"
 )
 
 // fakeProvisioner is the Kubernetes edge, faked. It converges one step per

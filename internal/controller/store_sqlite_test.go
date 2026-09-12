@@ -18,9 +18,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/brandonrc/bifrost/internal/controller"
-	"github.com/brandonrc/bifrost/internal/controller/storetest"
-	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/controller"
+	"github.com/bifrost-compute/bifrost/internal/controller/storetest"
+	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
 func newTestSqliteStore(t *testing.T, path string) *controller.SqliteStore {

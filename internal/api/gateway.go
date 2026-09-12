@@ -31,8 +31,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/brandonrc/bifrost/internal/controller"
-	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/controller"
+	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
 // GatewayLimits are the federating gateway's hardening knobs, ported from

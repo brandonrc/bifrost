@@ -22,7 +22,7 @@ package controller
 // types below, including core.AuditRequired, whose two fields are plain
 // strings).
 
-import "github.com/brandonrc/bifrost/internal/core"
+import "github.com/bifrost-compute/bifrost/internal/core"
 
 // clonePtr returns a new pointer to a copy of *p, or nil if p is nil. Only
 // safe for T with no nested pointer/slice/map fields of its own — every

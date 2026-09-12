@@ -1,6 +1,6 @@
 package controller
 
-import "github.com/brandonrc/bifrost/internal/core"
+import "github.com/bifrost-compute/bifrost/internal/core"
 
 // Registrar is the reconciler's view of the gateway routing table
 // (requirement 5): when the lifecycle controller brings a cluster up it

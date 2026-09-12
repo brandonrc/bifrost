@@ -55,7 +55,7 @@ spec:
               # Pin the tag that matches the deployed control plane: a suite
               # from a later commit can assert behaviour the running image does
               # not have yet, and the failure then reads as a regression.
-              image: ghcr.io/brandonrc/bifrost-test:latest
+              image: ghcr.io/bifrost-compute/bifrost-test:latest
               imagePullPolicy: IfNotPresent
               env:
                 # The targets.yaml target: its capabilities decide which tests

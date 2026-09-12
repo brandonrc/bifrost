@@ -1,7 +1,7 @@
 # bifrost-jupyter — Design Spec (Wave 2-C)
 
 **Status:** approved design · Wave 2 sub-project C · greenfield (no Rust oracle).
-**Repo to create:** `github.com/brandonrc/bifrost-jupyter` (new).
+**Repo to create:** `github.com/bifrost-compute/bifrost-jupyter` (new).
 **Requirements served:** #9 (start/stop clusters from JupyterLab), #11 (env vars),
 and #6's kernel-side connect handoff (Ray address back to the notebook) — the
 "dask-gateway-like UX, for Ray, fronted by Bifrost."

@@ -188,7 +188,7 @@ func discover(dir, only string) ([]string, error) {
 // outPath and a one-line summary to stdout.
 // importPath prefixes a package name to match what `go test -json` reports,
 // which is what reqreport keys a package by.
-const importPath = "github.com/brandonrc/bifrost/test/requirements/"
+const importPath = "github.com/bifrost-compute/bifrost/test/requirements/"
 
 func runPackage(bin, name, outPath, timeout string) (bool, error) {
 	file, err := os.Create(outPath)
