@@ -14,7 +14,7 @@ storage *from the cluster* — is therefore only half met: credentials arrive,
 packets do not.
 
 **Workaround used.** A hand-written NetworkPolicy in the `bifrost` namespace
-selecting `bifrost.dev/cluster-id Exists` with egress to the storage
+selecting `bifrost-compute.dev/cluster-id Exists` with egress to the storage
 namespace/pod on its port (`grace-deploy/aks3-egress.yaml`). With it the job
 read 1000 rows and summed them correctly.
 

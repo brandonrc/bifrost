@@ -2,7 +2,7 @@
 #
 # Scope: two namespaced Roles and nothing cluster-scoped. The suite reads and
 # reaps only the objects a run creates (everything it makes carries
-# `req.bifrost.dev/run=<run id>`, and its guarded client refuses to mutate
+# `req.bifrost-compute.dev/run=<run id>`, and its guarded client refuses to mutate
 # anything without that label), so the grants below are the smallest set that
 # lets it do that and read back what the control plane provisioned.
 #

@@ -30,7 +30,7 @@ import (
 
 // clusterIDLabel is the label the control plane stamps on every object it
 // owns (spec §1.4); postflight sweeps by it.
-const clusterIDLabel = "bifrost.dev/cluster-id"
+const clusterIDLabel = "bifrost-compute.dev/cluster-id"
 
 type k8sHandle struct {
 	raw       ctrlclient.Client
@@ -104,7 +104,7 @@ func checkContext(allow []string) error {
 }
 
 // guarded wraps a controller-runtime client so that a test can mutate only
-// objects that belong to its run: a bifrost.dev/cluster-id carrying the run
+// objects that belong to its run: a bifrost-compute.dev/cluster-id carrying the run
 // prefix, or the req.RunLabel the runner stamps on probe objects. Reads are
 // unrestricted. This is the "Never" clause of spec §6 made mechanical.
 type guarded struct {

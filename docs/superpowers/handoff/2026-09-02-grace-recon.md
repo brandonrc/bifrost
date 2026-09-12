@@ -91,9 +91,9 @@ second, distinct OIDC client specifically for the Ray Jobs gateway call).
 **All NetworkPolicies on the cluster** (`kubectl get networkpolicy -A`):
 | namespace | policy | selects |
 |---|---|---|
-| bifrost | `bifrost-cluster-team-b-scoring` | `bifrost.dev/cluster-id=team-b-scoring` |
-| bifrost | `bifrost-default-deny` | any pod with `bifrost.dev/cluster-id` label |
-| bifrost | `bifrost-tenant-allow` | any pod with `bifrost.dev/cluster-id` label |
+| bifrost | `bifrost-cluster-team-b-scoring` | `bifrost-compute.dev/cluster-id=team-b-scoring` |
+| bifrost | `bifrost-default-deny` | any pod with `bifrost-compute.dev/cluster-id` label |
+| bifrost | `bifrost-tenant-allow` | any pod with `bifrost-compute.dev/cluster-id` label |
 | checkmaite | `allow-backups-to-postgresql`, `checkmaite-...-api`, `checkmaite-...-ui`, `checkmaite-postgresql` | (checkmaite-internal) |
 | jupyter | `hub`, `nebari-data-science-pack-singleuser-gateway-egress`, `proxy`, `singleuser` | hub/proxy/singleuser components |
 | ray | `shared-nebari-rayserve-pack-ray-cluster`, `shared-nebari-rayserve-pack-ray-head` | ray.io labels |
@@ -124,13 +124,13 @@ independent counts:**
 
 2. Even if jupyter-side egress were fixed, entry into a bifrost-provisioned cluster is gated by
    `bifrost-cluster-<id>`, which only admits ingress from `jupyter` namespace pods carrying the label
-   **`bifrost.dev/owner: admin`** (see §6 — this looks like a placeholder/example value baked in per
+   **`bifrost-compute.dev/owner: admin`** (see §6 — this looks like a placeholder/example value baked in per
    cluster at provision time, presumably meant to be the actual owner's identity, not literally
-   `admin`). A real singleuser pod would need to carry a matching `bifrost.dev/owner=<username>` label
+   `admin`). A real singleuser pod would need to carry a matching `bifrost-compute.dev/owner=<username>` label
    (KubeSpawner would have to inject it) for bifrost's per-cluster NetworkPolicy to admit it.
 
    The `bifrost-tenant-allow` policy separately admits ingress on 8265/10001 only from pods/namespaces
-   labeled `bifrost.dev/control-plane: "true"`, and admits 8265/52365/8000 from any namespace's
+   labeled `bifrost-compute.dev/control-plane: "true"`, and admits 8265/52365/8000 from any namespace's
    `kuberay-operator` pods — neither of these paths helps a jupyter consumer.
 
 Because `alice-nb`/`bob-nb` match none of the `singleuser` policy's selectors, they are **not
@@ -209,13 +209,13 @@ one-off debug/smoke-test pod, not part of the running system).
 
 **Three NetworkPolicies, full specs:**
 
-`bifrost-default-deny` — selects any pod with a `bifrost.dev/cluster-id` label (i.e. every
+`bifrost-default-deny` — selects any pod with a `bifrost-compute.dev/cluster-id` label (i.e. every
 bifrost-provisioned Ray head/worker pod), denies all ingress+egress by default (baseline zero-trust).
 ```yaml
 spec:
   podSelector:
     matchExpressions:
-    - {key: bifrost.dev/cluster-id, operator: Exists}
+    - {key: bifrost-compute.dev/cluster-id, operator: Exists}
   policyTypes: [Ingress, Egress]
 ```
 
@@ -227,16 +227,16 @@ spec:
     to: [{namespaceSelector: {kubernetes.io/metadata.name: kube-system}, podSelector: {k8s-app: kube-dns}}]
   ingress:
   - from:
-    - podSelector: {bifrost.dev/control-plane: "true"}
-    - namespaceSelector: {bifrost.dev/control-plane: "true"}
-      podSelector: {bifrost.dev/control-plane: "true"}
+    - podSelector: {bifrost-compute.dev/control-plane: "true"}
+    - namespaceSelector: {bifrost-compute.dev/control-plane: "true"}
+      podSelector: {bifrost-compute.dev/control-plane: "true"}
     ports: [{port: 8265, protocol: TCP}, {port: 10001, protocol: TCP}]
   - from:
     - namespaceSelector: {}  # any namespace
       podSelector: {app.kubernetes.io/name: kuberay-operator}
     ports: [{port: 8265, protocol: TCP}, {port: 52365, protocol: TCP}, {port: 8000, protocol: TCP}]
 ```
-i.e. only the bifrost control plane itself (labeled `bifrost.dev/control-plane=true`) and any
+i.e. only the bifrost control plane itself (labeled `bifrost-compute.dev/control-plane=true`) and any
 `kuberay-operator` pod (any namespace) can reach a provisioned cluster's dashboard/client ports by
 default — **no tenant namespace (jupyter, checkmaite) is admitted by this baseline policy.**
 
@@ -244,22 +244,22 @@ default — **no tenant namespace (jupyter, checkmaite) is admitted by this base
 11h old, i.e. same age as the RayCluster itself):
 ```yaml
 spec:
-  podSelector: {bifrost.dev/cluster-id: team-b-scoring}
+  podSelector: {bifrost-compute.dev/cluster-id: team-b-scoring}
   egress:
-  - to: [{podSelector: {bifrost.dev/cluster-id: team-b-scoring}}]   # intra-cluster head<->worker only
+  - to: [{podSelector: {bifrost-compute.dev/cluster-id: team-b-scoring}}]   # intra-cluster head<->worker only
   ingress:
-  - from: [{podSelector: {bifrost.dev/cluster-id: team-b-scoring}}]  # intra-cluster
+  - from: [{podSelector: {bifrost-compute.dev/cluster-id: team-b-scoring}}]  # intra-cluster
   - from:
     - namespaceSelector: {kubernetes.io/metadata.name: jupyter}
-      podSelector: {bifrost.dev/owner: admin}
+      podSelector: {bifrost-compute.dev/owner: admin}
     ports: [{port: 10001, protocol: TCP}, {port: 8265, protocol: TCP}]
 ```
 This is the mechanism that's supposed to let a specific jupyter pod reach *its own* bifrost-provisioned
 cluster: bifrost auto-generates one of these per RayCluster, scoped to admit only jupyter pods
-carrying `bifrost.dev/owner=<the cluster's owner>` (here literally `admin`, i.e. whoever owns
+carrying `bifrost-compute.dev/owner=<the cluster's owner>` (here literally `admin`, i.e. whoever owns
 `team-b-scoring` is named `admin`). **This confirms the design intent** — bifrost expects the calling
-jupyter pod to carry a `bifrost.dev/owner` label matching the cluster owner. Today's KubeSpawner
-config does not set any `bifrost.dev/*` labels on singleuser pods (not found in `01-spawner.py` grep,
+jupyter pod to carry a `bifrost-compute.dev/owner` label matching the cluster owner. Today's KubeSpawner
+config does not set any `bifrost-compute.dev/*` labels on singleuser pods (not found in `01-spawner.py` grep,
 and confirmed absent on `alice-nb`/`bob-nb`, though those aren't real singleuser pods anyway) — this
 label injection would need to be added to the data-science-pack's KubeSpawner profile/hook for §5a
 test (a) to work end-to-end.
@@ -313,7 +313,7 @@ compete for the same 40 CPUs — no horizontal scaling available for parallel te
    "public internet" egress rule explicitly excludes `10.0.0.0/8`, which covers all in-cluster pod/service
    IPs here, so it provides no help.)
 2. **Identity/labels:** bifrost's per-cluster NetworkPolicy (`bifrost-cluster-<id>`) only admits jupyter
-   pods labeled `bifrost.dev/owner=<owner>`. KubeSpawner does not currently set this label on singleuser
+   pods labeled `bifrost-compute.dev/owner=<owner>`. KubeSpawner does not currently set this label on singleuser
    pods. Needs a KubeSpawner hook/profile change (or bifrost needs a different admission mechanism not
    dependent on a label the jupyter chart doesn't know about).
 3. **Image:** default jupyter profiles lack Ray; the test must explicitly select the `ray-256` profile
@@ -342,7 +342,7 @@ compete for the same 40 CPUs — no horizontal scaling available for parallel te
    but this should be double-checked against the actual bifrost Jobs gateway port/Service once it's
    identified, since `bifrost-tenant-allow`'s ingress rules (8265/10001/52365/8000, gated to
    control-plane-labeled pods or kuberay-operator) don't obviously include a path for checkmaite-namespace
-   callers either, if the Jobs gateway routes through a `bifrost.dev/cluster-id`-labeled pod.
+   callers either, if the Jobs gateway routes through a `bifrost-compute.dev/cluster-id`-labeled pod.
 
 **Cluster capacity:** single node, 40 CPU / ~108Gi allocatable, currently ~31%/36% requested. Room for
 roughly 8-9 concurrent `team-b-scoring`-sized (3 CPU/8Gi) test clusters by request accounting, but this

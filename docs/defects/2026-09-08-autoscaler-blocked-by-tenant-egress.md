@@ -17,7 +17,7 @@ requests.exceptions.ConnectTimeout: HTTPSConnectionPool(host='10.152.183.1', por
 ```
 
 `10.152.183.1` is the `kubernetes` Service. `bifrost-default-deny` denies all
-egress from pods carrying `bifrost.dev/cluster-id`, and `bifrost-tenant-allow`
+egress from pods carrying `bifrost-compute.dev/cluster-id`, and `bifrost-tenant-allow`
 opens exactly one egress: kube-dns on :53. The autoscaler runs in the head pod
 with that label, so its only way to read and patch its own RayCluster is
 closed. It restarts until the head restarts with it.
@@ -31,7 +31,7 @@ policy (`ClusterAllowNetworkPolicy`) needs an egress rule from the **head** pod
 to the API server — the `kubernetes` Endpoints' addresses and port (here
 `192.168.42.150:16443`; the Service VIP is DNAT'd, so the rule must name the
 endpoint IPs as `ipBlock`s, refreshed if they change), or the head must run with
-the `bifrost.dev/control-plane` egress exemption the control plane itself uses.
+the `bifrost-compute.dev/control-plane` egress exemption the control plane itself uses.
 The sidecar also needs the RBAC KubeRay grants it (it does: a RoleBinding named
 after the cluster exists). Add a kind-lane job that runs the shards with
 `--ray-autoscaling` so the path stays covered.

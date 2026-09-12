@@ -28,8 +28,8 @@ import (
 )
 
 const (
-	clusterIDLabel = "bifrost.dev/cluster-id"
-	ownerLabel     = "bifrost.dev/owner"
+	clusterIDLabel = "bifrost-compute.dev/cluster-id"
+	ownerLabel     = "bifrost-compute.dev/owner"
 )
 
 func TestCreateConvergesAndDeleteRemovesEverything(t *testing.T) {

@@ -22,7 +22,7 @@
 //     no longer listed. The applied-set is in-memory; a control-plane
 //     restart between apply and delete leaves orphaned objects until the
 //     loop runs again in the same process — bounded, and the objects are
-//     bifrost.dev/pool-labeled for manual/audit cleanup.
+//     bifrost-compute.dev/pool-labeled for manual/audit cleanup.
 //   - Absent Kueue = inert: when the CRDs aren't served, the loop skips
 //     everything (no actuation, no observation) and pools remain
 //     in-process quota only (ADR-0010 fallback).

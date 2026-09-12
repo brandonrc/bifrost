@@ -46,8 +46,8 @@ type Target interface {
 
 // RunLabel marks every Kubernetes object a run creates outside the API
 // (probe pods, CNI-check policies) so postflight can find and reap them
-// by run, exactly as bifrost.dev/cluster-id does for API-created clusters.
-const RunLabel = "req.bifrost.dev/run"
+// by run, exactly as bifrost-compute.dev/cluster-id does for API-created clusters.
+const RunLabel = "req.bifrost-compute.dev/run"
 
 // Restarter is implemented by targets that can kill and restart the control
 // plane under test (the cluster target). Tests gate on

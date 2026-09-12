@@ -211,7 +211,7 @@ operations from `permissions.yaml`), `TestEveryNonPublicOperationRequiresAToken`
 5. Network: from a pod owned by bob (or any pod without alice's owner label)
    in the `bifrost` namespace, `curl -m 3 alice-c1-head-svc.bifrost.svc:8265` times out,
    and `ray.init("ray://alice-c1-head-svc.bifrost.svc:10001")` fails. From a
-   pod labelled `bifrost.dev/owner=<alice's subject>` both succeed.
+   pod labelled `bifrost-compute.dev/owner=<alice's subject>` both succeed.
    `k -n bifrost get networkpolicy alice-c1` shows the owner selector.
 6. Without a token, `curl -H 'Host: alice-c1.ray...' http://10.152.183.219:8484/api/jobs/`
    is `401`.
@@ -361,7 +361,7 @@ grace has no GPU nodes, so the GPU cap is only validated, not scheduled.
 
 **Manual:**
 1. Ownership: `k -n bifrost get raycluster alice-c1 -o jsonpath='{.metadata.labels}'`
-   shows `bifrost.dev/owner` and `bifrost.dev/project`; the head Service and
+   shows `bifrost-compute.dev/owner` and `bifrost-compute.dev/project`; the head Service and
    NetworkPolicy carry the same labels.
 2. Restart survival: `k -n bifrost rollout restart deploy/bifrost`; when the
    new pod is `1/1`, `GET /api/v1/clusters/alice-c1` still returns the record
@@ -597,7 +597,7 @@ A controlled path only counts if the tools people use take it. On grace:
 | Consumer | State | What a tester checks |
 |----------|-------|----------------------|
 | checkmaite | **Wired 2026-09-04.** Its API submits over Ray's Job Submission REST API to `checkmaite-jobs.ray.100-89-230-107.sslip.io`, a Bifrost cluster in project `checkmaite`, with a Bifrost access token minted for `checkmaite-svc`. Bifrost authorizes each request in that project, audits it under that subject, and meters the cluster to it. | Submit a batch run; then as admin confirm `GET /api/v1/audit` shows rows with `subject: checkmaite-svc` and `cluster: checkmaite-jobs`, and `GET /api/v1/usage` attributes `project: checkmaite` to `owner: checkmaite-svc`. |
-| JupyterLab / JupyterHub | **Not wired.** The singleuser image ships no Bifrost extension, the singleuser NetworkPolicy has no egress to the Bifrost namespace, and KubeSpawner stamps no `bifrost.dev/owner` label, so a notebook can neither call the API nor reach its own cluster. | Nothing to check yet; rows 9 and 11 stay untested until the data-science-pack ships those three changes. |
+| JupyterLab / JupyterHub | **Not wired.** The singleuser image ships no Bifrost extension, the singleuser NetworkPolicy has no egress to the Bifrost namespace, and KubeSpawner stamps no `bifrost-compute.dev/owner` label, so a notebook can neither call the API nor reach its own cluster. | Nothing to check yet; rows 9 and 11 stay untested until the data-science-pack ships those three changes. |
 | Gateway hostnames | **Reachable.** One wildcard HTTPRoute covers `*.ray.<domain>` on nebari-gateway, and the gateway certificate carries the matching wildcards (`grace-deploy/bifrost-gateway/`). | `curl -k https://<cluster>.ray.100-89-230-107.sslip.io/api/version` is 401 without a token and 200 with one. |
 
 The token checkmaite holds expires after 90 days, the server maximum, so it
@@ -647,7 +647,7 @@ Lane-tuning knobs live in the workflow env and the grace script:
 | 1 | serve endpoint test skipped (no `serve-fixture` capability) | confirm on grace, flip capability in `targets.yaml` |
 | 1, 5 | no deploy / submit-job UI | add panels to bifrost-ui and bifrost-jupyter |
 | 2, 3, 6 | no wildcard `*.ray.<domain>` route on grace | wildcard HTTPRoute or per-object routes rendered by the pack |
-| 3, 6 | real notebook cannot reach the API or its cluster | data-science-pack: egress to `bifrost` ns + `bifrost.dev/owner` label from KubeSpawner |
+| 3, 6 | real notebook cannot reach the API or its cluster | data-science-pack: egress to `bifrost` ns + `bifrost-compute.dev/owner` label from KubeSpawner |
 | 3 | Keycloak SPA mappers added by hand | nebari-operator fix |
 | 4, 13 | Kueue fairness shown structurally, not under contention | contention test on grace; Kueue RayCluster integration for serving |
 | 7 | no delegated group admin; GPU cap unscheduled | project-scoped policy write; GPU node for a lane |

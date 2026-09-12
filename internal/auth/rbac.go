@@ -329,7 +329,7 @@ func (id Identity) MarshalJSON() ([]byte, error) {
 // Owner is the identity to attribute owned resources to (tier-2 owned
 // session clusters): the human Username when present, else Subject. For
 // local auth Subject already IS the username, so the fallback is correct
-// there too. This is the value stamped as bifrost.dev/owner and matched by
+// there too. This is the value stamped as bifrost-compute.dev/owner and matched by
 // the per-owner NetworkPolicy, so it must equal the JupyterHub username on
 // the owner's notebook pod.
 func (id *Identity) Owner() string {
