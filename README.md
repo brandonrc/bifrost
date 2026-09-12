@@ -1,7 +1,7 @@
 # Bifrost
 
-**An open-source, Anyscale-grade control plane for Ray and Dask clusters on
-Kubernetes.** Self-serve compute for data scientists, governed serving for
+**An open-source, Anyscale-grade control plane for Ray clusters on
+Kubernetes, designed to grow to Dask.** Self-serve compute for data scientists, governed serving for
 platform teams, and audit-ready operations for the people who answer for it —
 without handing your stack to a managed platform.
 
@@ -12,9 +12,12 @@ gate where identity, quota, and policy are enforced on every request.
 
 ## What it does
 
-- **Self-serve clusters** — a JupyterLab user requests a private Ray (or
-  Dask) cluster and gets a client address back; no shared heads, workers, or
-  object stores; idle clusters are reaped automatically.
+- **Self-serve clusters** — a JupyterLab user requests a private Ray cluster
+  from a catalog of approved profiles and gets a client address back; no
+  shared heads, workers, or object stores; idle clusters are reaped
+  automatically.
+- **Ephemeral jobs** — submit a job and Bifrost creates a cluster for it,
+  runs it, records the outcome, and removes the cluster.
 - **A guarded gateway** — callers never talk to Ray directly. The gateway
   terminates the caller's identity, enforces RBAC, and swaps in per-cluster
   credentials southbound, including for the Ray Jobs API and WebSocket log
@@ -22,9 +25,10 @@ gate where identity, quota, and policy are enforced on every request.
 - **Governed model serving** — groups share models through group-owned
   RayService deployments, isolated in their own resource pools so notebook
   workloads can't starve production serving.
-- **Admin-controlled profiles** — administrators decide which images, CPU /
-  memory / GPU shapes, and worker counts users may request; users pick from
-  approved options instead of submitting raw manifests.
+- **Admin-controlled profiles and storage** — administrators decide which
+  images, CPU / memory / GPU shapes, worker counts, and storage sources users
+  may request; users pick from approved options instead of submitting raw
+  manifests.
 - **Fair-share capacity** — Kueue-backed resource pools with quotas, weights,
   and borrowing between groups.
 - **Cost and usage visibility** — who requested what, for how long, and what
@@ -64,22 +68,34 @@ Invariants the code is built around:
 - **Observation over memory.** The reconciler never trusts a stored phase —
   it re-observes the cluster every pass and repairs drift.
 - **Contract-first API.** The OpenAPI 3.1 contract is frozen in
-  [`bifrost-api`](https://github.com/brandonrc/bifrost-api); the server's
-  handlers are generated from it, so the spec and the code cannot drift
-  apart. TypeScript, Python, and Rust SDKs are generated from the same file.
+  [`bifrost-api`](https://github.com/bifrost-compute/bifrost-api); the
+  server's handlers are generated from it, so the spec and the code cannot
+  drift apart. TypeScript and Python SDKs are generated from the same file.
 
 ## Status
 
-Early and moving fast. Foundations are in: the domain model and policy
-engine (quota, budget, cost, GPU-sharing) are implemented and tested, the
-API contract v1 is frozen with SDK pipelines, the
-[management console](https://github.com/brandonrc/bifrost-ui) runs, and CI
-enforces race-enabled tests, lint, coverage, and vulnerability gates on
-every push. The store, reconcile engine, provisioners, and gateway are
-landing next, followed by the JupyterLab extension and serving workflows.
+Fifteen of the eighteen requirement rows in [`docs/SPEC.md`](docs/SPEC.md)
+are built. That covers self-serve clusters, ephemeral jobs, the guarded
+gateway, group model serving in its own resource pool, admin-controlled
+profiles and storage, Kueue-backed pools with quotas, usage metering, the
+audit chain, cluster health without Kubernetes access, and the JupyterLab
+extension. Each row has a requirement test package under
+[`test/requirements/`](test/requirements/) that runs in process, against a
+kind cluster in CI, and against a live cluster, so "built" means proven on
+real Kubernetes rather than asserted.
 
-Not yet usable for real workloads — watch the repo if you want to be here
-when it is.
+The full stack has been deployed end to end on a Kubernetes test
+environment with Keycloak SSO, JupyterLab integration, per-owner network
+isolation, and Grafana observability.
+
+**Ray is the engine today.** The compute contract is engine-agnostic by
+design, but the Dask engine (row 16) and the Slurm scheduler (row 17) are
+not built. Row 18, the NIST security baseline, is partial: the audit chain
+and a hardened UBI9 image exist, the FIPS variant does not.
+
+Container images publish to `ghcr.io/bifrost-compute/bifrost` on every push
+to `main`. The Helm chart lives in
+[`bifrost-pack`](https://github.com/bifrost-compute/bifrost-pack).
 
 ## Development
 
@@ -99,8 +115,10 @@ evidence.
 
 | Repo | What it holds |
 |---|---|
-| [`bifrost-api`](https://github.com/brandonrc/bifrost-api) | The frozen OpenAPI contract + generated TS/Python/Rust SDKs |
-| [`bifrost-ui`](https://github.com/brandonrc/bifrost-ui) | The management console (React) |
+| [`bifrost-api`](https://github.com/bifrost-compute/bifrost-api) | The frozen OpenAPI 3.1 contract and the generated TypeScript and Python SDKs |
+| [`bifrost-ui`](https://github.com/bifrost-compute/bifrost-ui) | The management console (React), built entirely on the generated client |
+| [`bifrost-jupyter`](https://github.com/bifrost-compute/bifrost-jupyter) | JupyterLab extension to start, stop, and connect to clusters |
+| [`bifrost-pack`](https://github.com/bifrost-compute/bifrost-pack) | Helm chart and Nebari pack for deploying the whole stack |
 
 ## License
 
