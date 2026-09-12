@@ -130,9 +130,9 @@ change must construct nothing itself except flags and signal handling.
 
 Every cluster a test creates is named with the run prefix:
 `t<runid>-<short>`. No server change is needed: the API already stamps
-`bifrost.dev/cluster-id=<id>` on every Kubernetes object it owns, so the
+`bifrost-compute.dev/cluster-id=<id>` on every Kubernetes object it owns, so the
 prefix is visible both through the API (list, filter) and on the cluster
-(label selector on `bifrost.dev/cluster-id`). `t.Cleanup` deletes through
+(label selector on `bifrost-compute.dev/cluster-id`). `t.Cleanup` deletes through
 the API every cluster carrying the prefix; on real clusters a postflight
 lists any Kubernetes object whose `cluster-id` label carries the prefix and
 fails the run if the list is non-empty. This deliberately avoids a test-only
@@ -416,7 +416,7 @@ The same preflight/postflight wraps every L3 run; grace adds refusals.
 **Never**
 - No test may `helm upgrade`, `kubectl delete ns`, or touch any object
   outside the run prefix. The cluster target's `K8s()` client is wrapped:
-  Delete/Patch/Update on an object whose `bifrost.dev/cluster-id` label
+  Delete/Patch/Update on an object whose `bifrost-compute.dev/cluster-id` label
   lacks the run prefix returns an error.
 - Grace runs are scoped to the `bifrost` namespace plus read-only probes
   from the `jupyter` and `checkmaite` namespaces (§5a). The consumer packs

@@ -142,7 +142,7 @@ spec:
       labels:
         app.kubernetes.io/name: bifrost-pack
         app.kubernetes.io/instance: bifrost
-        bifrost.dev/control-plane: "true"
+        bifrost-compute.dev/control-plane: "true"
     spec:
       serviceAccountName: bifrost
       securityContext:

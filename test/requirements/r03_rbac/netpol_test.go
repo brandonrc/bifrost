@@ -35,7 +35,7 @@ func TestCNIEnforcesNetworkPolicy(t *testing.T) {
 	ctx := context.Background()
 
 	server, err := pr.RunPod(ctx, req.PodSpec{
-		Labels:  map[string]string{"req.bifrost.dev/role": "cni-server"},
+		Labels:  map[string]string{"req.bifrost-compute.dev/role": "cni-server"},
 		Image:   agnhost,
 		Command: []string{"/agnhost", "netexec", "--http-port=8080"},
 		Detach:  true,
@@ -65,7 +65,7 @@ func TestCNIEnforcesNetworkPolicy(t *testing.T) {
 			Labels:    map[string]string{req.RunLabel: req.RunID()},
 		},
 		Spec: networkingv1.NetworkPolicySpec{
-			PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{req.RunLabel: req.RunID(), "req.bifrost.dev/role": "cni-server"}},
+			PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{req.RunLabel: req.RunID(), "req.bifrost-compute.dev/role": "cni-server"}},
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
 		},
 	}
@@ -118,7 +118,7 @@ print("OPEN", open_ports)
 sys.exit(1 if open_ports else 0)
 `, head)
 	res, err := pr.RunPod(ctx, req.PodSpec{
-		Labels:  map[string]string{"bifrost.dev/owner": "req-not-the-owner"},
+		Labels:  map[string]string{"bifrost-compute.dev/owner": "req-not-the-owner"},
 		Image:   pr.RayImage(),
 		Command: []string{"python", "-c", script},
 		Timeout: 4 * time.Minute,

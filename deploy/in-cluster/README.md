@@ -64,7 +64,7 @@ so a running service will trip the per-project service limit on the next run.
 
 ## What it does to the cluster
 
-Every object a run creates carries `req.bifrost.dev/run=<run id>`, and the
+Every object a run creates carries `req.bifrost-compute.dev/run=<run id>`, and the
 suite's Kubernetes client refuses to mutate anything that does not. Each
 package sweeps its own objects afterwards and fails if any survive, so a green
 run also means it left nothing behind.

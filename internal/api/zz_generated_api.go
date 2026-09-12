@@ -515,7 +515,7 @@ type ClusterSpec struct {
 	// Set control-plane-side from the request identity (never trusted from
 	// the client body); `None` for clusters created without an owner (e.g.
 	// admin/service paths). When set it is stamped as the
-	// `bifrost.dev/owner` label on the RayCluster and its pods, and drives
+	// `bifrost-compute.dev/owner` label on the RayCluster and its pods, and drives
 	// the per-owner Ray-client (`:10001`) ingress NetworkPolicy so only the
 	// owner's notebook pod can reach the cluster. `#[serde(default)]` keeps
 	// specs persisted before this field deserializable (they parse as
