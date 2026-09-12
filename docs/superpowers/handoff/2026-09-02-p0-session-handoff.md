@@ -81,7 +81,7 @@ See the ledger snapshot's `minor (deferred)` lines. Notable: set `openapi3.Schem
 - `team-b-scoring` RayCluster (created today via the API, project team-b) — crash-looping on the wget liveness probe (defect 2). Safe to delete via the API if it becomes noise.
 - **mobula fully removed** (release, ns, RayCluster, 5 NebariApps, 5 HTTPRoutes, 3 PVCs, retained 50 Gi PV). 12 releases remain at prior revisions.
 - Consequence found by recon: checkmaite's `CHECKMAITE_RAY_JOBS_ADDRESS=https://ray-gw.100-89-230-107.sslip.io` pointed at mobula's deleted route — **checkmaite's Ray path is currently dead**; bifrost's gateway must serve that host or checkmaite is repointed (P2 / spec §5a decision for the user).
-- jupyter `singleuser` NetworkPolicy has no egress to `bifrost`; KubeSpawner sets no `bifrost.dev/owner` label — consumer path (a) needs data-science-pack changes.
+- jupyter `singleuser` NetworkPolicy has no egress to `bifrost`; KubeSpawner sets no `bifrost-compute.dev/owner` label — consumer path (a) needs data-science-pack changes.
 - Node: 40 CPU / ~108 Gi allocatable, ~31 %/36 % requested.
 
 ## Pushes / durability at handoff

@@ -58,16 +58,16 @@ const (
 	FieldManager = "bifrost"
 
 	ManagedByLabel = "app.kubernetes.io/managed-by"
-	ClusterIDLabel = "bifrost.dev/cluster-id"
+	ClusterIDLabel = "bifrost-compute.dev/cluster-id"
 	// OwnerLabel is stamped on the RayCluster and its head/worker pods
 	// recording the cluster's authenticated owner (tier-2 owned session
 	// clusters). Value is core.ClusterSpec.Owner. Frozen-contract label
 	// key (see bifrost-api openapi.json ClusterSpec.owner description).
-	OwnerLabel = "bifrost.dev/owner"
+	OwnerLabel = "bifrost-compute.dev/owner"
 	// ProjectLabel is stamped on a RayService so the live client can read
 	// the owning project back (requirement 2: project-scoped services)
 	// without a store lookup — the resource itself says whose it is.
-	ProjectLabel = "bifrost.dev/project"
+	ProjectLabel = "bifrost-compute.dev/project"
 	// NotebookNamespace is the namespace the interactive notebooks
 	// (JupyterHub singleuser pods) run in — the only namespace the
 	// per-owner Ray-client ingress rule admits from.
@@ -77,7 +77,7 @@ const (
 	// metadata (so Observe can read back the generation the cluster
 	// actually carries) *and* on the pod templates (so a generation bump
 	// changes the pod-template hash and KubeRay rolls the pods).
-	GenerationAnnotation = "bifrost.dev/generation"
+	GenerationAnnotation = "bifrost-compute.dev/generation"
 
 	// QueueLabel nominates the Kueue LocalQueue a workload is admitted
 	// through.
@@ -865,11 +865,11 @@ const (
 	ClusterAllowPolicyPrefix = "bifrost-cluster-"
 	// ControlPlaneNamespaceLabel marks the namespace(s) the Bifrost
 	// control plane (API / reconciler / job gateway) runs in.
-	ControlPlaneNamespaceLabel = "bifrost.dev/control-plane"
+	ControlPlaneNamespaceLabel = "bifrost-compute.dev/control-plane"
 	// ControlPlanePodLabel marks the Bifrost control-plane pods
 	// themselves: the tenant allow policy admits ingress from pods
 	// carrying this label, never from a whole namespace.
-	ControlPlanePodLabel = "bifrost.dev/control-plane"
+	ControlPlanePodLabel = "bifrost-compute.dev/control-plane"
 
 	pssEnforceLabel = "pod-security.kubernetes.io/enforce"
 	pssWarnLabel    = "pod-security.kubernetes.io/warn"
@@ -998,7 +998,7 @@ func TenantAllowNetworkPolicy() *networkingv1.NetworkPolicy {
 //
 // Tier-2 per-owner Ray-client pin: when owner is non-nil, a second ingress
 // rule admits the owner's notebook — pods in [NotebookNamespace] carrying
-// bifrost.dev/owner=<owner> (the label the hub stamps on that user's
+// bifrost-compute.dev/owner=<owner> (the label the hub stamps on that user's
 // singleuser pod) — to the Ray client (:10001) and dashboard (:8265) ports,
 // and to nothing else. When owner is nil (ownerless clusters) only the
 // intra-cluster allow is emitted. Ported from kuberay.rs:536-582.

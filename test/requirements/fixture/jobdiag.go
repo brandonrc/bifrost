@@ -151,8 +151,8 @@ except Exception as e:
 		}{
 			{"operator@kuberay", "kuberay", map[string]string{"app.kubernetes.io/name": "kuberay-operator"}},
 			{"operator@probe-ns", "", map[string]string{"app.kubernetes.io/name": "kuberay-operator"}},
-			{"same-cluster@" + tgt.Namespace(), tgt.Namespace(), map[string]string{"bifrost.dev/cluster-id": jobID}},
-			{"control-plane@" + tgt.Namespace(), tgt.Namespace(), map[string]string{"bifrost.dev/control-plane": "true"}},
+			{"same-cluster@" + tgt.Namespace(), tgt.Namespace(), map[string]string{"bifrost-compute.dev/cluster-id": jobID}},
+			{"control-plane@" + tgt.Namespace(), tgt.Namespace(), map[string]string{"bifrost-compute.dev/control-plane": "true"}},
 		}
 		for _, peer := range peers {
 			res, err := pr.RunPod(ctx, req.PodSpec{

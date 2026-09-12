@@ -31,7 +31,7 @@ import (
 // sharing rather than per-project quotas. The AllocationSpec
 // nominal/borrowing/lending limits are reserved for a future per-project
 // ClusterQueue layout; until then they are serialized into LocalQueue
-// metadata annotations (bifrost.dev/nominal etc., as JSON) so the declared
+// metadata annotations (bifrost-compute.dev/nominal etc., as JSON) so the declared
 // intent is recorded on the object and a later layout migration can read
 // it back.
 
@@ -46,13 +46,13 @@ const (
 	// Stamped on the ResourceFlavors, Cohort, ClusterQueue, and
 	// LocalQueues so DeletePool can find and remove a pool's objects by
 	// selector after the spec is gone from the store.
-	PoolLabel = "bifrost.dev/pool"
+	PoolLabel = "bifrost-compute.dev/pool"
 
 	// Annotation keys recording the reserved per-project limits on the
 	// LocalQueue (see module docs above).
-	NominalAnnotation        = "bifrost.dev/nominal"
-	BorrowingLimitAnnotation = "bifrost.dev/borrowing-limit"
-	LendingLimitAnnotation   = "bifrost.dev/lending-limit"
+	NominalAnnotation        = "bifrost-compute.dev/nominal"
+	BorrowingLimitAnnotation = "bifrost-compute.dev/borrowing-limit"
+	LendingLimitAnnotation   = "bifrost-compute.dev/lending-limit"
 )
 
 // ResourceFlavorFor builds the ResourceFlavor manifest for one pool

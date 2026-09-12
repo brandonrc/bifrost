@@ -11,7 +11,7 @@ labels Bifrost stamps on the pods it provisions (`bifrost_cluster`,
 | source | metrics | how they get scraped |
 |---|---|---|
 | Bifrost `GET /api/v1/metrics` | `bifrost_clusters_total{state}`, `bifrost_clusters_by_project{project,state}` (state `terminated` = a stopped cluster awaiting purge), `bifrost_pool_nominal`, `bifrost_pool_resource_usage` | a `ServiceMonitor` with a bearer token from a local `viewer` user — the endpoint is Read on the cluster target |
-| every Ray head and worker, `:8080` | `ray_node_*`, `ray_resources`, `ray_scheduler_tasks`, `ray_running_jobs`, `ray_finished_jobs_total`, `ray_gcs_actors_count`, `ray_object_store_*` | a `PodMonitor` on `ray.io/is-ray-node=yes` in the workload namespace, relabelling the `bifrost.dev/*` pod labels onto every series; needs an ingress allow on 8080 from the scraper's namespace, because the tenant policy admits nothing else |
+| every Ray head and worker, `:8080` | `ray_node_*`, `ray_resources`, `ray_scheduler_tasks`, `ray_running_jobs`, `ray_finished_jobs_total`, `ray_gcs_actors_count`, `ray_object_store_*` | a `PodMonitor` on `ray.io/is-ray-node=yes` in the workload namespace, relabelling the `bifrost-compute.dev/*` pod labels onto every series; needs an ingress allow on 8080 from the scraper's namespace, because the tenant policy admits nothing else |
 | the platform gateway (Envoy) | `envoy_cluster_upstream_rq_*` for the `httproute/bifrost/*` routes | a `PodMonitor` on the gateway pods, keeping only request-level series for the platform's routes |
 | kubelet / cAdvisor, kube-state-metrics, node-exporter | `container_*`, `kube_pod_*`, `node_*` | whatever Prometheus stack the cluster runs |
 

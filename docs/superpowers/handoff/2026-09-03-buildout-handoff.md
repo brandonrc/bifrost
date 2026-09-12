@@ -96,7 +96,7 @@ that token: verified end to end from its own pod (job SUCCEEDED), audited under 
 it is on the host — `grace-deploy/checkmaite/checkmaite-values.yaml` carries them for the next `helm upgrade`.
 
 JupyterHub is still not wired: no extension in the singleuser image, no egress from `jupyter` to `bifrost`, no
-`bifrost.dev/owner` label from KubeSpawner. All three are data-science-pack changes.
+`bifrost-compute.dev/owner` label from KubeSpawner. All three are data-science-pack changes.
 
 ## In-cluster lane 2026-09-04
 

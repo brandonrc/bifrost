@@ -29,7 +29,7 @@ Ray 2.5x / JupyterHub docs (2026).
    the WS log-tail with credential strip-and-swap. It does **not** carry Ray
    Client (`ray://:10001`, gRPC). Port 10001 is reachable only in-cluster, via a
    per-owner NetworkPolicy that pins ingress on `:10001` **and** `:8265` to the
-   pod labeled `bifrost.dev/owner == <cluster owner>`. Consequence: everything #9/#11 and
+   pod labeled `bifrost-compute.dev/owner == <cluster owner>`. Consequence: everything #9/#11 and
    observability need goes through Bifrost over HTTP; the interactive
    `ray.init("ray://…")` path does not and is deployment-fragile.
 
@@ -135,7 +135,7 @@ It is not merely unimplemented; it cannot be made to work on the OIDC path:
   (`internal/auth/rbac.go:335`) returns it. The lookup key and `Owner()`'s value
   are **one field**: "the mint succeeds" and "`Owner()` yields
   `preferred_username`" are mutually exclusive. Clusters would then carry a UUID
-  `bifrost.dev/owner` label (`internal/provision/kuberay.go:64`) and the
+  `bifrost-compute.dev/owner` label (`internal/provision/kuberay.go:64`) and the
   per-owner NetworkPolicy (`kuberay.go:719`) would stop admitting the notebook
   pod to `:8265`/`:10001` — silently breaking the ENTIRE data plane — one selector guards both
   ports, so Ray Client, dashboard and Jobs API die together. Group-derived project roles are lost too.
@@ -162,7 +162,7 @@ true only while the Jobs API was reached through the *gateway*. Since T3 the
 extension talks to the in-cluster head service directly (§2 amendment), and the
 tier-2 per-owner rule in `internal/provision/kuberay.go`
 (`ClusterAllowNetworkPolicy`) is a **single ingress rule** whose one
-`bifrost.dev/owner` pod-selector guards
+`bifrost-compute.dev/owner` pod-selector guards
 `Ports: []NetworkPolicyPort{tcpPort(10001), tcpPort(8265)}` **together**. One
 selector, both ports: an owner mismatch removes Ray Client *and* the Ray
 dashboard/Jobs API in the same stroke. What survives is only the Bifrost control
