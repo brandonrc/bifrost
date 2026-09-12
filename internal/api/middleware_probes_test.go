@@ -12,8 +12,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/brandonrc/bifrost/internal/auth"
-	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/auth"
+	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
 // Adversarial probes for the API skeleton's security surface. These are

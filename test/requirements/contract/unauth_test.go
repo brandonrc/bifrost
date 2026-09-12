@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/brandonrc/bifrost/test/requirements/req"
-	"github.com/brandonrc/bifrost/test/requirements/target"
+	"github.com/bifrost-compute/bifrost/test/requirements/req"
+	"github.com/bifrost-compute/bifrost/test/requirements/target"
 )
 
 func TestEveryNonPublicOperationRequiresAToken(t *testing.T) {

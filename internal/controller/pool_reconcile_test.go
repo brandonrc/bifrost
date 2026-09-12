@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/brandonrc/bifrost/internal/core"
-	"github.com/brandonrc/bifrost/internal/provision"
+	"github.com/bifrost-compute/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/provision"
 )
 
 // Tests below are ported from the predecessor's controller crate, src/pool_reconcile.rs's

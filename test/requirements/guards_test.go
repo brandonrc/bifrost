@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-const internalPrefix = `"github.com/brandonrc/bifrost/internal/`
+const internalPrefix = `"github.com/bifrost-compute/bifrost/internal/`
 
 func goFiles(t *testing.T, root string, testOnly bool) []string {
 	t.Helper()

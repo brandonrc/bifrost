@@ -20,8 +20,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/brandonrc/bifrost/pkg/client"
-	"github.com/brandonrc/bifrost/test/requirements/req"
+	"github.com/bifrost-compute/bifrost/pkg/client"
+	"github.com/bifrost-compute/bifrost/test/requirements/req"
 )
 
 // RayImage is the image clusters are provisioned with. It must carry the

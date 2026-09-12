@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/brandonrc/bifrost/internal/api"
+	"github.com/bifrost-compute/bifrost/internal/api"
 )
 
 // TestBuildServerGatewayOnly is the smoke test the task brief asked for:

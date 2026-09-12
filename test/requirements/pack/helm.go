@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/brandonrc/bifrost/test/requirements/req"
+	"github.com/bifrost-compute/bifrost/test/requirements/req"
 )
 
 // ChartDir resolves the chart: $PACK_CHART, else a sibling checkout.

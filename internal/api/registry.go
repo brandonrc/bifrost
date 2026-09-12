@@ -8,7 +8,7 @@ package api
 import (
 	"context"
 
-	"github.com/brandonrc/bifrost/internal/auth"
+	"github.com/bifrost-compute/bifrost/internal/auth"
 )
 
 // ListRegistry lists the gateway's routing table (static and dynamic

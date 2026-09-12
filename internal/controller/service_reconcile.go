@@ -18,8 +18,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/brandonrc/bifrost/internal/core"
-	"github.com/brandonrc/bifrost/internal/provision"
+	"github.com/bifrost-compute/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/provision"
 )
 
 // ServiceAction is what one service reconcile pass did.

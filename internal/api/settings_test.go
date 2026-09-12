@@ -3,8 +3,8 @@ package api
 import (
 	"testing"
 
-	"github.com/brandonrc/bifrost/internal/auth"
-	"github.com/brandonrc/bifrost/internal/policy"
+	"github.com/bifrost-compute/bifrost/internal/auth"
+	"github.com/bifrost-compute/bifrost/internal/policy"
 )
 
 func admin() *auth.Identity { return testIdentity("root", auth.RoleAdmin) }

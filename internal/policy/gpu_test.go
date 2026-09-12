@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
 // Ported from the predecessor's policy crate, src/gpu.rs #[cfg(test)] mod tests.

@@ -1,4 +1,4 @@
-module github.com/brandonrc/bifrost
+module github.com/bifrost-compute/bifrost
 
 go 1.26.0
 

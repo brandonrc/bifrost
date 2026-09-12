@@ -68,8 +68,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/brandonrc/bifrost/internal/core"
-	"github.com/brandonrc/bifrost/internal/provision"
+	"github.com/bifrost-compute/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/provision"
 )
 
 // IntentRetentionSecs is how long an Applied outbox row is retained before

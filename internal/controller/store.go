@@ -21,7 +21,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
 // --- Store error ---

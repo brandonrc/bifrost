@@ -18,8 +18,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/brandonrc/bifrost/internal/core"
-	"github.com/brandonrc/bifrost/internal/provision"
+	"github.com/bifrost-compute/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/provision"
 )
 
 // JobGeneration is the spec generation stamped on every RayJob: a job spec

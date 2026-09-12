@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/brandonrc/bifrost/test/requirements/req"
+	"github.com/bifrost-compute/bifrost/test/requirements/req"
 )
 
 // event is one line of `go test -json` output. Only the fields reqreport

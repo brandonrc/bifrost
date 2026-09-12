@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/brandonrc/bifrost/test/requirements/req"
+	"github.com/bifrost-compute/bifrost/test/requirements/req"
 )
 
 // Req 17 is "design must not foreclose Slurm". The seam that would have to

@@ -27,7 +27,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
 // SqliteStore is a database/sql-backed Store using the pure-Go

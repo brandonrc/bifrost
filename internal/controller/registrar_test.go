@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/brandonrc/bifrost/internal/core"
-	"github.com/brandonrc/bifrost/internal/provision"
+	"github.com/bifrost-compute/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/provision"
 )
 
 // The reconciler depends on Registrar, not on the registry type; this

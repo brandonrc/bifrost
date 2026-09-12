@@ -18,13 +18,13 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/brandonrc/bifrost/internal/api"
-	"github.com/brandonrc/bifrost/internal/app"
-	"github.com/brandonrc/bifrost/internal/auth"
-	"github.com/brandonrc/bifrost/internal/controller"
-	"github.com/brandonrc/bifrost/internal/core"
-	"github.com/brandonrc/bifrost/pkg/client"
-	"github.com/brandonrc/bifrost/test/requirements/req"
+	"github.com/bifrost-compute/bifrost/internal/api"
+	"github.com/bifrost-compute/bifrost/internal/app"
+	"github.com/bifrost-compute/bifrost/internal/auth"
+	"github.com/bifrost-compute/bifrost/internal/controller"
+	"github.com/bifrost-compute/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/pkg/client"
+	"github.com/bifrost-compute/bifrost/test/requirements/req"
 )
 
 type principal struct {

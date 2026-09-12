@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
 // FailingStore is a test-only Store that delegates to a MemoryStore but

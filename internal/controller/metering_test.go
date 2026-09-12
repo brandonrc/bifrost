@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
 func TestMeterRecordsRunningClustersAndClosesTheStep(t *testing.T) {

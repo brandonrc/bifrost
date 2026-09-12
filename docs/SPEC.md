@@ -46,7 +46,7 @@ ALL rows ship. Priority governs **sequence**, never scope-cut.
 
 ## Architecture (inherited from the Rust predecessor, translated to Go idiom)
 
-Single Go module `github.com/brandonrc/bifrost`. Crate boundaries become
+Single Go module `github.com/bifrost-compute/bifrost`. Crate boundaries become
 package boundaries with an enforced import graph (depguard):
 
 | predecessor crate | bifrost package | Responsibility |
@@ -166,7 +166,7 @@ Silent incompatibility is not admissible.
 0.3 Repos: `bifrost` scaffold (module, CI gates, lint config, layout),
     `bifrost-api` (frozen contract + inherited SDK pipeline + SBOM),
     `bifrost-ui` (fork of the predecessor's UI, client package swap) — created under
-    github.com/brandonrc.
+    github.com/bifrost-compute.
 0.4 `internal/core` + `internal/policy` ported (pure logic, no I/O — proves
     the toolchain and the coverage/lint gates on real code).
 

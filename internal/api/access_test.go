@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/brandonrc/bifrost/internal/auth"
+	"github.com/bifrost-compute/bifrost/internal/auth"
 )
 
 func TestIdentity_DevModeDefault(t *testing.T) {

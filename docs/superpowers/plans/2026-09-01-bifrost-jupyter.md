@@ -6,7 +6,7 @@
 
 **Architecture:** One pip-installable wheel from `jupyterlab/extension-template` (`kind=frontend-and-server`): a TS labextension panel + a Python `jupyter-server` extension (same-origin proxy holding the credential and calling Bifrost via `bifrost_client`) + a kernel-side helper. Spike-first: prove the end-to-end risk surface (auth/owner-match/create/connect) with no UI before building the panel.
 
-**Tech Stack:** TypeScript (JupyterLab 4.x, `@jupyterlab/*`), Python 3.11+ (jupyter-server 2.x extension, `bifrost_client`), Ray Jobs API (`JobSubmissionClient`). New repo `github.com/brandonrc/bifrost-jupyter`.
+**Tech Stack:** TypeScript (JupyterLab 4.x, `@jupyterlab/*`), Python 3.11+ (jupyter-server 2.x extension, `bifrost_client`), Ray Jobs API (`JobSubmissionClient`). New repo `github.com/bifrost-compute/bifrost-jupyter`.
 
 **Spec:** `docs/superpowers/specs/2026-09-01-bifrost-jupyter-design.md` (in the bifrost repo).
 

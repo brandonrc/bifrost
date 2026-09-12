@@ -7,9 +7,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/brandonrc/bifrost/test/requirements/req"
-	"github.com/brandonrc/bifrost/test/requirements/target/cluster"
-	"github.com/brandonrc/bifrost/test/requirements/target/inproc"
+	"github.com/bifrost-compute/bifrost/test/requirements/req"
+	"github.com/bifrost-compute/bifrost/test/requirements/target/cluster"
+	"github.com/bifrost-compute/bifrost/test/requirements/target/inproc"
 )
 
 // Get returns the run's target. A fresh inproc target per test keeps tests

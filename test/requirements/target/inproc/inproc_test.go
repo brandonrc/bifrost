@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/brandonrc/bifrost/pkg/client"
-	"github.com/brandonrc/bifrost/test/requirements/req"
-	"github.com/brandonrc/bifrost/test/requirements/target/inproc"
+	"github.com/bifrost-compute/bifrost/pkg/client"
+	"github.com/bifrost-compute/bifrost/test/requirements/req"
+	"github.com/bifrost-compute/bifrost/test/requirements/target/inproc"
 )
 
 // These are inproc's own smoke tests: they bind to the in-process target

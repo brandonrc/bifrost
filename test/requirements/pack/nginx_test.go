@@ -3,7 +3,7 @@ package pack
 import (
 	"testing"
 
-	"github.com/brandonrc/bifrost/test/requirements/req"
+	"github.com/bifrost-compute/bifrost/test/requirements/req"
 )
 
 // Defect 4 (docs/defects, 2026-09-02): the dashboard's nginx resolved

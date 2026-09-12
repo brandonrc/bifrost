@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/brandonrc/bifrost/internal/auth"
+	"github.com/bifrost-compute/bifrost/internal/auth"
 )
 
 // loadAuthConfig reads a JSON OIDC validator config (issuer, audience,

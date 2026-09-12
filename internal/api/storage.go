@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
 // reservedMountPrefixes are the mount points a file-mode entry may neither

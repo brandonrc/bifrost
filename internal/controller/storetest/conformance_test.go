@@ -3,8 +3,8 @@ package storetest_test
 import (
 	"testing"
 
-	"github.com/brandonrc/bifrost/internal/controller"
-	"github.com/brandonrc/bifrost/internal/controller/storetest"
+	"github.com/bifrost-compute/bifrost/internal/controller"
+	"github.com/bifrost-compute/bifrost/internal/controller/storetest"
 )
 
 // TestConformanceSelf exercises RunConformance against NewMemoryStore

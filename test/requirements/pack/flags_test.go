@@ -3,7 +3,7 @@ package pack
 import (
 	"testing"
 
-	"github.com/brandonrc/bifrost/test/requirements/req"
+	"github.com/bifrost-compute/bifrost/test/requirements/req"
 )
 
 // The gateway values render the two serve flags the dynamic registry needs

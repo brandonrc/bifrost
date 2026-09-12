@@ -5,8 +5,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/brandonrc/bifrost/internal/core"
-	"github.com/brandonrc/bifrost/internal/provision"
+	"github.com/bifrost-compute/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/provision"
 )
 
 // fakeJobProvisioner is the KubeRay RayJob controller, faked (requirement

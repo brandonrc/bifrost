@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/brandonrc/bifrost/internal/auth"
-	"github.com/brandonrc/bifrost/internal/controller"
+	"github.com/bifrost-compute/bifrost/internal/auth"
+	"github.com/bifrost-compute/bifrost/internal/controller"
 )
 
 func devHandler() http.Handler {

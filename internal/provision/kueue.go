@@ -12,7 +12,7 @@ import (
 
 	kueuev1beta2 "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 
-	"github.com/brandonrc/bifrost/internal/core"
+	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
 // Kueue backend for resource pools (ADR-0010-equivalent): translate

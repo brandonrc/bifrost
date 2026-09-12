@@ -10,8 +10,8 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 
-	"github.com/brandonrc/bifrost/test/requirements/req"
-	"github.com/brandonrc/bifrost/test/requirements/target"
+	"github.com/bifrost-compute/bifrost/test/requirements/req"
+	"github.com/bifrost-compute/bifrost/test/requirements/target"
 )
 
 // dummy builds a value satisfying the schema's TYPE with every required
