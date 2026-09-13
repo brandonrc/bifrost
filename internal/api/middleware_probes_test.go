@@ -97,11 +97,12 @@ func TestUnauthenticatedRequestsNeverReachHandlers(t *testing.T) {
 }
 
 // The public allowlist is the entire pre-auth attack surface, so it must be
-// exactly the seven entries the Rust reference exempts (auth_layer.rs's
-// is_public) and nothing that merely resembles them. The near-miss table is
-// the point: prefix/suffix/case/slash variants are how an allowlist grows a
-// hole during a refactor.
-func TestPublicAllowlistIsExactlyTheRustSeven(t *testing.T) {
+// exactly the five entries that remain after the dead /docs exemptions were
+// dropped (F10 — nothing serves /docs; auth_layer.rs's is_public exempted
+// them for a Swagger UI this server never mounts) and nothing that merely
+// resembles them. The near-miss table is the point: prefix/suffix/case/slash
+// variants are how an allowlist grows a hole during a refactor.
+func TestPublicAllowlistIsExactlyTheFive(t *testing.T) {
 	srv := httptest.NewServer(probeAuthedHandler())
 	defer srv.Close()
 
@@ -114,16 +115,13 @@ func TestPublicAllowlistIsExactlyTheRustSeven(t *testing.T) {
 		return resp.StatusCode
 	}
 
-	// The seven exemptions must not 401. What they DO answer varies (404
+	// The five exemptions must not 401. What they DO answer varies (404
 	// where nothing is mounted, 405 for a POST-only operation, 501 for a
 	// stub) — the assertion is only that auth let them through.
 	for _, p := range []string{
 		"/healthz",
 		"/api/v1/version",
 		SpecPath,
-		"/docs",
-		"/docs/",
-		"/docs/index.html",
 		"/api/v1/auth/login",
 		"/api/v1/auth/providers",
 	} {
@@ -132,14 +130,15 @@ func TestPublicAllowlistIsExactlyTheRustSeven(t *testing.T) {
 		}
 	}
 
-	// Everything else must be refused. A 200 or 501 here means the path
-	// reached the router without a credential.
+	// Everything else must be refused — including the retired /docs entries
+	// themselves (a 200 or 501 here means the path reached the router
+	// without a credential).
 	for _, p := range []string{
 		"/healthz/", "/HEALTHZ", "/healthzz",
 		"/api/v1/version/", "/api/v1/versionx", "/api/v1/Version",
 		"/api/v1/auth/loginx", "/api/v1/auth/login/", "/api/v1/auth/",
 		"/api/v1/auth/tokens", "/api/v1/auth/identity", "/api/v1/auth/logout",
-		"/docsx", "/docs.json",
+		"/docs", "/docs/", "/docs/index.html", "/docsx", "/docs.json",
 		"/api/v1/openapi.json/", "/api/v1/openapi.jsonx",
 		"//healthz", "/./healthz", "/api/v1//version",
 	} {
@@ -149,14 +148,13 @@ func TestPublicAllowlistIsExactlyTheRustSeven(t *testing.T) {
 	}
 }
 
-// "/docs/" is the allowlist's only prefix match — every other entry is an
-// exact comparison — so it is the one place a traversal could smuggle a
-// protected path past isPublic. It does in fact pass isPublic; what saves
-// it is that the mux cleans the path, redirects, and the follow-up request
-// re-enters the auth middleware. That makes the safety property depend on
-// the router's normalization, not on the allowlist, so it needs a test:
-// swapping the mux for one that serves cleaned paths directly (rather than
-// redirecting) would open a real bypass with no other signal.
+// The retired /docs/* prefix exemption was the one place a traversal could
+// smuggle a protected path past isPublic. With the entries removed the
+// allowlist refuses /docs/* outright — the traversal dies at the first
+// gate, before the mux ever cleans the path — but the probe stays: if
+// anyone re-adds a prefix exemption, only the mux's clean-and-redirect (and
+// re-entry through auth) stands between this and a bypass, and this test is
+// the signal for that regression.
 func TestTraversalThroughDocsPrefixStillEndsUnauthorized(t *testing.T) {
 	srv := httptest.NewServer(probeAuthedHandler())
 	defer srv.Close()

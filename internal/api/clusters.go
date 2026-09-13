@@ -10,6 +10,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -365,6 +366,49 @@ func (s *Server) windowedConsumption(ctx context.Context, project string, from, 
 	return policy.WindowedResourceHours(byPoolResource, from, to), nil
 }
 
+// checkGpuTenantIsolation applies the #58 GPU tenant-isolation rule to the
+// compute pool project is allocated to: a policy.GpuSharingViolation when
+// the rule refuses spec (callers map it to their 400 + deny-audit shape),
+// an already-wrapped store error on a backend failure, nil when the rule
+// passes or the project holds no compute allocation at all. Shared by
+// CreateCluster and SubmitJob so a job can never claim a GPU shape a
+// same-shape cluster would be refused.
+func (s *Server) checkGpuTenantIsolation(ctx context.Context, project string, spec *core.ClusterSpec) error {
+	pools, err := s.Store.ListPools(ctx)
+	if err != nil {
+		return wrapStoreErr(err)
+	}
+	for i := range pools {
+		p := &pools[i]
+		// A workload is admitted through a compute pool only (requirement
+		// 4): a serving pool's sharing mode and tenancy are irrelevant to
+		// it, and reading them here would let the serving allocation
+		// shape compute admission.
+		if p.Spec.Purpose.OrDefault() != core.PoolPurposeCompute {
+			continue
+		}
+		allocs, err := s.Store.ListAllocations(ctx, p.Name)
+		if err != nil {
+			return wrapStoreErr(err)
+		}
+		matches := false
+		for _, a := range allocs {
+			if a.Project == project {
+				matches = true
+				break
+			}
+		}
+		if !matches {
+			continue
+		}
+		if verr := policy.CheckClusterGpuIsolation(&p.Spec, s.PolicySeed.EffectiveGPUDefaultSharing(), len(allocs), spec); verr != nil {
+			return verr
+		}
+		break
+	}
+	return nil
+}
+
 // CreateCluster records a cluster's desired spec (the reconciler converges
 // it). Scoped RBAC (#49): Write on Cluster, globally or via an assignment
 // covering the spec's project. Admission order mirrors clusters.rs exactly:
@@ -454,38 +498,13 @@ func (s *Server) CreateCluster(ctx context.Context, req CreateClusterRequestObje
 	// GPU tenant-isolation admission (#58): when the project's pool is
 	// shared by more than one project, fractional GPU requests (and
 	// admission into a pool resolving to time-slice at all) are rejected.
-	pools, err := s.Store.ListPools(ctx)
-	if err != nil {
-		return nil, wrapStoreErr(err)
-	}
-	for i := range pools {
-		p := &pools[i]
-		// A cluster is admitted through a compute pool only (requirement
-		// 4): a serving pool's sharing mode and tenancy are irrelevant to
-		// it, and reading them here would let the serving allocation
-		// shape compute admission.
-		if p.Spec.Purpose.OrDefault() != core.PoolPurposeCompute {
-			continue
-		}
-		allocs, err := s.Store.ListAllocations(ctx, p.Name)
-		if err != nil {
-			return nil, wrapStoreErr(err)
-		}
-		matches := false
-		for _, a := range allocs {
-			if a.Project == project {
-				matches = true
-				break
-			}
-		}
-		if !matches {
-			continue
-		}
-		if verr := policy.CheckClusterGpuIsolation(&p.Spec, s.PolicySeed.EffectiveGPUDefaultSharing(), len(allocs), &spec); verr != nil {
+	if verr := s.checkGpuTenantIsolation(ctx, project, &spec); verr != nil {
+		var viol policy.GpuSharingViolation
+		if errors.As(verr, &viol) {
 			s.denyCreate(ctx, identity, idStr, "gpu_tenant_isolation", http.StatusBadRequest)
-			return nil, badRequest(verr.Error())
+			return nil, badRequest(viol.Error())
 		}
-		break
+		return nil, verr
 	}
 
 	// Quota admission (#44): only enforced for projects with a configured

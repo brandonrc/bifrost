@@ -29,8 +29,29 @@ import (
 // csvField writes value into out per RFC 4180 quoting: a field containing
 // ",", '"', CR or LF is wrapped in double quotes, with inner quotes
 // doubled. Ported from audit.rs's csv_field.
+//
+// Formula injection (F7): a cell whose first character is =, +, - or @ is
+// evaluated as a live formula when the CSV is opened in Excel, LibreOffice
+// or Google Sheets — and audit subjects/paths are attacker-influenced.
+// Spreadsheet parsers trim leading whitespace before formula detection,
+// so the check runs on the first non-whitespace (space/tab/CR) character,
+// not the raw byte 0 — "\t=cmd|..." must not slip through. Such values
+// are prefixed with a single quote (the conventional text-marker escape)
+// and force-quoted.
 func csvField(out *strings.Builder, value string) {
-	if strings.ContainsAny(value, ",\"\n\r") {
+	formula := false
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if c == ' ' || c == '\t' || c == '\r' {
+			continue
+		}
+		formula = strings.ContainsRune("=+-@", rune(c))
+		break
+	}
+	if formula {
+		value = "'" + value
+	}
+	if formula || strings.ContainsAny(value, ",\"\n\r") {
 		out.WriteByte('"')
 		for _, c := range value {
 			if c == '"' {

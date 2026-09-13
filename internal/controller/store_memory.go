@@ -417,6 +417,11 @@ func (s *MemoryStore) ListPools(_ context.Context) ([]StoredPool, error) {
 	for _, p := range s.pools {
 		out = append(out, cloneStoredPool(p))
 	}
+	// Name-ordered, matching the SQL backends' ORDER BY: first-match
+	// consumers (GPU tenancy admission checks, queue assignment) must see
+	// the same first pool on every call — Go map iteration order is
+	// nondeterministic.
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
 

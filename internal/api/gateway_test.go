@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bifrost-compute/bifrost/internal/auth"
+	"github.com/bifrost-compute/bifrost/internal/controller"
 	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
@@ -672,3 +673,357 @@ func TestGatewayEnforcesMaxInflight(t *testing.T) {
 // bridge (proxyUpgrade, gateway_ws.go) — see gateway_ws_test.go for its
 // tests, including the "websocket upgrade to a registered cluster host
 // reaches the upstream, not a 501" case this file used to pin.
+
+// ---------------------------------------------------------------------------
+// Red-team fix (2026-09-12): the gateway tenant boundary is role-aware.
+// ---------------------------------------------------------------------------
+
+// The live-verified split-brain: the gateway's tenant check counted ANY
+// covering project assignment as membership (role-agnostic), so a global
+// developer holding viewer@team-x could POST jobs to team-x's clusters
+// while the control plane's own clusterTenantAccess would 403 the same
+// principal. Now the covering assignment must itself license the verb,
+// mirroring the control-plane meaning end to end.
+func TestGatewayTenantBoundaryIsRoleAware(t *testing.T) {
+	upstream, lastReq, _ := newRecordingUpstream(t, http.StatusOK, []byte("ok"), nil)
+	token := "tok"
+	registry := &core.ClusterRegistry{Clusters: []core.ClusterEndpoint{{
+		Id:         "c1",
+		Hostname:   "ray.team-x.test",
+		ApiBaseUrl: upstream.URL,
+		AuthToken:  &token,
+		Project:    "team-x",
+	}}}
+	local, callerToken := newLocalRoleToken(t, "dev", core.LocalRoleDeveloper)
+	store := newMemStore(t)
+
+	h := NewHandler(NewServer(), HandlerOptions{Local: local, Registry: registry, Store: store})
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+
+	post := func() int {
+		req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/jobs/", strings.NewReader("{}"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Host = "ray.team-x.test"
+		req.Header.Set("Authorization", "Bearer "+callerToken)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	// viewer@team-x: membership without the verb — 403, upstream untouched.
+	if err := store.UpsertRoleAssignment(context.Background(), "dev", "viewer", "project:team-x"); err != nil {
+		t.Fatal(err)
+	}
+	if got := post(); got != http.StatusForbidden {
+		t.Errorf("global developer + viewer@team-x POST = %d, want 403 (role-aware tenant boundary)", got)
+	}
+	if lastReq() != nil {
+		t.Error("a tenant-boundary denial must never reach the upstream cluster")
+	}
+
+	// Even a stored auditor@team-x row (storable only by bypassing
+	// UpsertAssignment, which now refuses it) licenses nothing here.
+	if err := store.UpsertRoleAssignment(context.Background(), "dev", "auditor", "project:team-x"); err != nil {
+		t.Fatal(err)
+	}
+	if got := post(); got != http.StatusForbidden {
+		t.Errorf("global developer + auditor@team-x POST = %d, want 403", got)
+	}
+
+	// developer@team-x: the covering assignment licenses the verb — 200-class.
+	if err := store.UpsertRoleAssignment(context.Background(), "dev", "developer", "project:team-x"); err != nil {
+		t.Fatal(err)
+	}
+	if got := post(); got != http.StatusOK {
+		t.Errorf("global developer + developer@team-x POST = %d, want 200", got)
+	}
+	if lastReq() == nil {
+		t.Error("the authorized request should have been proxied to the upstream cluster")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Red-team fix (2026-09-12): the host->cluster resolution is pinned by
+// RequireAuth and consumed by HostGateway — one lookup per request.
+// ---------------------------------------------------------------------------
+
+// HostGateway must consume the pinned resolution, not re-resolve: a pin
+// pointing at upstream A wins over the registry's live mapping to
+// upstream B, and a pin of "not a cluster host" falls through even when
+// the registry now maps the host. Driven in-process (ServeHTTP on the
+// handler, not a live server) because the pin travels via the request
+// CONTEXT, which does not cross the wire.
+func TestHostGatewayConsumesPinnedResolution(t *testing.T) {
+	upstreamA, lastReqA, _ := newRecordingUpstream(t, http.StatusOK, []byte("A"), nil)
+	upstreamB, lastReqB, _ := newRecordingUpstream(t, http.StatusOK, []byte("B"), nil)
+	tokenA, tokenB := "tok-a", "tok-b"
+	registry := &core.ClusterRegistry{Clusters: []core.ClusterEndpoint{{
+		Id: "c-b", Hostname: "ray.cluster.test", ApiBaseUrl: upstreamB.URL, AuthToken: &tokenB,
+	}}}
+	gw := NewGatewayState(registry, nil)
+	notGateway := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNotFound) })
+	h := gw.HostGateway(notGateway)
+
+	do := func(pin *pinnedGatewayEndpoint) int {
+		req := httptest.NewRequest(http.MethodGet, "/api/jobs/", nil)
+		req.Host = "ray.cluster.test"
+		if pin != nil {
+			req = pinGatewayEndpoint(req, pin.endpoint, pin.ok)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	// Pinned to A while the registry says B: A is used, B never sees the
+	// request.
+	pinned := pinnedGatewayEndpoint{endpoint: core.ClusterEndpoint{
+		Id: "c-a", Hostname: "ray.cluster.test", ApiBaseUrl: upstreamA.URL, AuthToken: &tokenA,
+	}, ok: true}
+	if got := do(&pinned); got != http.StatusOK {
+		t.Fatalf("pinned-cluster request = %d, want 200", got)
+	}
+	if lastReqA() == nil {
+		t.Error("the pinned endpoint was not used — HostGateway re-resolved")
+	}
+	if lastReqB() != nil {
+		t.Error("the registry's live mapping was consulted despite the pin")
+	}
+
+	// Pinned "not a cluster": falls through to the control plane even
+	// though the registry maps the host.
+	notCluster := pinnedGatewayEndpoint{ok: false}
+	if got := do(&notCluster); got != http.StatusNotFound {
+		t.Errorf("pinned non-cluster request = %d, want 404 (fall through)", got)
+	}
+
+	// No pin at all: the fallback live lookup still works.
+	if got := do(nil); got != http.StatusOK || lastReqB() == nil {
+		t.Errorf("unpinned request = %d, want 200 via the live registry lookup", got)
+	}
+}
+
+// The red-team probe itself: a dynamic entry registered BETWEEN
+// RequireAuth's lookup and HostGateway's dispatch must not flip the
+// request mid-flight. An unauthenticated public-path request admitted as
+// control-plane traffic stays control-plane (200 from the version route,
+// never proxied southbound); only the NEXT request sees the new entry.
+func TestConcurrentRegistrationCannotFlipRequestMidFlight(t *testing.T) {
+	registry := &core.ClusterRegistry{}
+	local, _ := newLocalRoleToken(t, "dev", core.LocalRoleDeveloper)
+	gw := NewGatewayState(registry, nil)
+	notGateway := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Stands in for the control-plane mux: answer 200 like a public
+		// route would, and record that we were reached.
+		w.WriteHeader(http.StatusOK)
+	})
+	// Interposed between RequireAuth and HostGateway: registers the
+	// cluster-host entry after RequireAuth resolved (and pinned) "no such
+	// host". example.invalid is never dialed if the fix holds.
+	registerLate := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if err := registry.Upsert(core.ClusterEndpoint{
+				Id: "late", Hostname: "late.gw.test", ApiBaseUrl: "http://example.invalid:8265",
+			}); err != nil {
+				t.Errorf("register: %v", err)
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+	h := RequireAuth(AuthState{Local: local, Registry: registry})(registerLate(gw.HostGateway(notGateway)))
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/version", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Host = "late.gw.test"
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	// 200 = the stub control plane answered (the pinned "not a cluster"
+	// held). A flip would have proxied to example.invalid and answered 502.
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("public-path request racing a registration = %d, want 200 from the control plane — "+
+			"the mid-request registration flipped it southbound", resp.StatusCode)
+	}
+
+	// Sanity: the next request DOES see the entry — RequireAuth now
+	// resolves the host and suppresses the public allowlist (401 without
+	// a token), never proxying unauthenticated traffic.
+	req2, err := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/version", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req2.Host = "late.gw.test"
+	resp2, err := srv.Client().Do(req2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp2.Body.Close()
+	if resp2.StatusCode != http.StatusUnauthorized {
+		t.Errorf("post-registration request = %d, want 401 (cluster hosts are never public)", resp2.StatusCode)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Red-team fix (defect 2026-09-04): gateway audit rows carry an action,
+// the required permission, and the caller's roles.
+// ---------------------------------------------------------------------------
+
+func TestGatewayAllowAuditRowCarriesActionRequiredAndRoles(t *testing.T) {
+	upstream, _, _ := newRecordingUpstream(t, http.StatusOK, []byte("ok"), nil)
+	registry := testRegistry("ray.cluster.test", upstream.URL, "tok")
+	local, token := newLocalRoleToken(t, "dev", core.LocalRoleDeveloper)
+	store := newMemStore(t)
+
+	h := NewHandler(NewServer(), HandlerOptions{Local: local, Registry: registry, Store: store})
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/jobs/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Host = "ray.cluster.test"
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("proxied GET = %d, want 200", resp.StatusCode)
+	}
+
+	rows, _, err := store.ListAudit(context.Background(), core.AuditFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An auditor's action-filtered view: gateway traffic must surface in
+	// it (pre-fix the rows had no action at all and dropped out).
+	var gatewayRows []controller.AuditRow
+	for _, row := range rows {
+		if row.Event.Action != nil && *row.Event.Action == gatewayAuditAction {
+			gatewayRows = append(gatewayRows, row)
+		}
+	}
+	if len(gatewayRows) == 0 {
+		t.Fatalf("no gateway rows in an action-filtered audit view; all rows: %+v", rows)
+	}
+	row := gatewayRows[0].Event
+	if row.Decision != core.AuditDecisionAllow {
+		t.Errorf("decision = %v, want allow", row.Decision)
+	}
+	if row.Required == nil || row.Required.Action != "read" || row.Required.Target != "job" {
+		t.Errorf("required = %+v, want {read job}", row.Required)
+	}
+	if len(row.GrantedRoles) != 1 || row.GrantedRoles[0] != "developer" {
+		t.Errorf("granted_roles = %v, want [developer]", row.GrantedRoles)
+	}
+}
+
+// The deny side: authorizeGatewayRequest's row must carry the synthetic
+// action too, so a deny filtered by action is attributable to the gateway.
+func TestGatewayDenyAuditRowCarriesAction(t *testing.T) {
+	upstream, _, _ := newRecordingUpstream(t, http.StatusOK, []byte("ok"), nil)
+	registry := testRegistry("ray.cluster.test", upstream.URL, "tok")
+	local, token := newLocalRoleToken(t, "view", core.LocalRoleViewer)
+	store := newMemStore(t)
+
+	h := NewHandler(NewServer(), HandlerOptions{Local: local, Registry: registry, Store: store})
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/jobs/", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Host = "ray.cluster.test"
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("viewer POST = %d, want 403", resp.StatusCode)
+	}
+
+	rows, _, err := store.ListAudit(context.Background(), core.AuditFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var deny *core.AuditEvent
+	for _, r := range rows {
+		if r.Event.Decision == core.AuditDecisionDeny {
+			e := r.Event
+			deny = &e
+		}
+	}
+	if deny == nil {
+		t.Fatal("no deny row persisted")
+	}
+	if deny.Action == nil || *deny.Action != gatewayAuditAction {
+		t.Errorf("deny action = %v, want %q", deny.Action, gatewayAuditAction)
+	}
+	if deny.Required == nil || deny.Required.Action != "write" || deny.Required.Target != "job" {
+		t.Errorf("deny required = %+v, want {write job}", deny.Required)
+	}
+	if len(deny.GrantedRoles) != 1 || deny.GrantedRoles[0] != "viewer" {
+		t.Errorf("deny granted_roles = %v, want [viewer]", deny.GrantedRoles)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Red-team fix (2026-09-12): Set-Cookie and WWW-Authenticate never cross
+// northbound from a cluster response.
+// ---------------------------------------------------------------------------
+
+func TestNorthboundStripsSetCookieAndWWWAuthenticate(t *testing.T) {
+	upstream, _, _ := newRecordingUpstream(t, http.StatusOK, []byte("ok"), map[string]string{
+		"Set-Cookie":       "session=hijacked; Domain=.example.com",
+		"WWW-Authenticate": `Basic realm="bifrost"`,
+		"Content-Type":     "text/plain",
+	})
+	registry := testRegistry("ray.cluster.test", upstream.URL, "tok")
+	local, token := newLocalRoleToken(t, "dev", core.LocalRoleDeveloper)
+
+	h := NewHandler(NewServer(), HandlerOptions{Local: local, Registry: registry})
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/jobs/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Host = "ray.cluster.test"
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("proxied GET = %d, want 200", resp.StatusCode)
+	}
+	if got := resp.Header.Values("Set-Cookie"); len(got) != 0 {
+		t.Errorf("Set-Cookie crossed northbound: %v — a hostile cluster could plant cookies on sibling/control-plane domains", got)
+	}
+	if got := resp.Header.Get("WWW-Authenticate"); got != "" {
+		t.Errorf("WWW-Authenticate crossed northbound: %q — a hostile cluster could pop a credential-harvesting Basic prompt", got)
+	}
+	if got := resp.Header.Get("Content-Type"); got != "text/plain" {
+		t.Errorf("Content-Type = %q, want preserved (only the dangerous headers are stripped)", got)
+	}
+}

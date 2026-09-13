@@ -174,6 +174,28 @@ func TestListAssignments_UpsertAndDelete(t *testing.T) {
 		mustHTTPError(t, err, 400)
 	}
 
+	// rbac.go's RoleAuditor doc: "scoped role assignments don't apply (the
+	// audit trail isn't project-scoped)" — enforced at ingress: auditor +
+	// project scope is a 400 and nothing is stored. Auditor at the global
+	// scope stays valid. (Isolated store: TestListAssignments_UpsertAndDelete
+	// asserts exact row counts.)
+	s2 := &Server{Store: newMemStore(t)}
+	if _, err := s2.UpsertAssignment(ctxWithIdentity(who), UpsertAssignmentRequestObject{
+		Principal: "carol", Body: &UpsertAssignment{Role: "auditor", Scope: "project:proj-a"},
+	}); err == nil {
+		t.Fatal("auditor with a project scope should be rejected")
+	} else {
+		mustHTTPError(t, err, 400)
+	}
+	if rows, err := s2.Store.ListRoleAssignments(context.Background(), strPtr("carol")); err != nil || len(rows) != 0 {
+		t.Errorf("rejected auditor assignment was stored: rows=%v err=%v", rows, err)
+	}
+	if _, err := s2.UpsertAssignment(ctxWithIdentity(who), UpsertAssignmentRequestObject{
+		Principal: "carol", Body: &UpsertAssignment{Role: "auditor", Scope: "*"},
+	}); err != nil {
+		t.Errorf("auditor at the global scope should be accepted: %v", err)
+	}
+
 	// Happy path: upsert, then it shows up in the list.
 	resp, err := s.UpsertAssignment(ctxWithIdentity(who), UpsertAssignmentRequestObject{
 		Principal: "alice", Body: &UpsertAssignment{Role: "operator", Scope: "project:proj-a"},

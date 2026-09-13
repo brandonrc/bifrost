@@ -203,6 +203,87 @@ func TestRevokeToken_SomeoneElsesTokenIs404(t *testing.T) {
 	mustHTTPError(t, err, 404)
 }
 
+// F10: an admin must not be able to disable or demote their OWN account —
+// the last-admin-self-lockout availability footgun. The refusal is a clean
+// 4xx, changes nothing, and leaves a deny audit row; other self-changes
+// (password) and other-admin targets stay allowed.
+func TestUpdateUser_SelfLockoutGuard(t *testing.T) {
+	s, store := newLocalServer(t)
+	// The admin identity's Owner() is its Subject, so seed a local user
+	// whose username matches the admin() identity ("root").
+	seedLocalUser(t, s, "root", "hunter2222222", core.LocalRoleAdmin)
+
+	disabled := true
+	_, err := s.UpdateUser(ctxWithIdentity(admin()), UpdateUserRequestObject{
+		Username: "root", Body: &UpdateUserRequest{Disabled: &disabled},
+	})
+	mustHTTPError(t, err, 409)
+
+	viewer := LocalRole("viewer")
+	_, err = s.UpdateUser(ctxWithIdentity(admin()), UpdateUserRequestObject{
+		Username: "root", Body: &UpdateUserRequest{Role: &viewer},
+	})
+	mustHTTPError(t, err, 409)
+
+	// The account is untouched.
+	u, gErr := store.GetLocalUser(t.Context(), "root")
+	if gErr != nil || u == nil {
+		t.Fatalf("get user: %v", gErr)
+	}
+	if u.Disabled || u.Role != core.LocalRoleAdmin {
+		t.Errorf("a refused self-change must not be applied: disabled=%v role=%s", u.Disabled, u.Role)
+	}
+
+	// The refusal is audit-logged as a denial.
+	rows, _, lErr := store.ListAudit(t.Context(), core.AuditFilter{})
+	if lErr != nil {
+		t.Fatalf("list audit: %v", lErr)
+	}
+	found := false
+	for _, r := range rows {
+		if r.Event.Decision == core.AuditDecisionDeny && r.Event.Reason != nil && *r.Event.Reason == "self_lockout_guard" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("no self_lockout_guard deny row in the audit trail")
+	}
+
+	// Changing your own password is not a lockout and stays allowed.
+	newPw := "hunter3333333"
+	if _, err := s.UpdateUser(ctxWithIdentity(admin()), UpdateUserRequestObject{
+		Username: "root", Body: &UpdateUserRequest{Password: &newPw},
+	}); err != nil {
+		t.Errorf("own password change: %v, want allowed", err)
+	}
+
+	// And a DIFFERENT admin's account remains fair game.
+	seedLocalUser(t, s, "other-admin", "hunter2222222", core.LocalRoleAdmin)
+	if _, err := s.UpdateUser(ctxWithIdentity(admin()), UpdateUserRequestObject{
+		Username: "other-admin", Body: &UpdateUserRequest{Role: &viewer, Disabled: &disabled},
+	}); err != nil {
+		t.Errorf("demoting another admin: %v, want allowed", err)
+	}
+}
+
+// F10: an OIDC-authenticated caller (no local user row) minting a PAT gets
+// a clean 4xx, not a 500 from wrapStoreErr(UnknownUser).
+func TestCreateToken_UnknownLocalUserIs4xxNot500(t *testing.T) {
+	s, _ := newLocalServer(t)
+	ctx := ctxWithIdentity(&auth.Identity{Subject: "oidc-subject-without-local-row"})
+	_, err := s.CreateToken(ctx, CreateTokenRequestObject{Body: &CreateTokenRequest{Label: "ci", ExpiresInDays: 7}})
+	if err == nil {
+		t.Fatal("expected an error for a caller with no local user row")
+	}
+	var he HTTPError
+	if !errorsAs(err, &he) {
+		t.Fatalf("error = %#v, want an HTTPError", err)
+	}
+	if he.Status < 400 || he.Status >= 500 {
+		t.Errorf("status = %d, want a clean 4xx (was a 500 via wrapStoreErr(UnknownUser))", he.Status)
+	}
+}
+
 // --- Logout ---
 
 func TestLogout_RequiresAuthentication(t *testing.T) {

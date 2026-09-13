@@ -113,16 +113,27 @@ func (gw *GatewayState) proxyUpgrade(w http.ResponseWriter, r *http.Request, clu
 	// HTTP proxy row, gateway.rs's ws.rs:489 comment): there is no
 	// status/latency to report until it closes, so this row carries
 	// method "WS" and no Status/LatencyMs, matching the Rust reference.
+	// Action/Required/GrantedRoles mirror the HTTP proxy's row (defect
+	// 2026-09-04 — see gateway.go's gatewayAuditAction): the required
+	// verb is the one authorizeGatewayRequest enforced for this GET
+	// upgrade.
 	clusterID := cluster.Id.String()
 	method := "WS"
 	path := r.URL.Path
+	action := gatewayAuditAction
 	EmitAudit(r.Context(), gw.Store, &core.AuditEvent{
 		Ts:       controller.NowUnix(),
 		Subject:  subject,
 		Decision: core.AuditDecisionAllow,
+		Action:   &action,
 		Cluster:  &clusterID,
 		Method:   &method,
 		Path:     &path,
+		Required: &core.AuditRequired{
+			Action: PermissionStr(requiredGatewayPermission(r.Method)),
+			Target: TargetStr(gatewayTarget(cluster)),
+		},
+		GrantedRoles: gatewayGrantedRoles(identity),
 	})
 
 	wsBridge(client, upstream, gw.Limits.WSIdleTimeout)

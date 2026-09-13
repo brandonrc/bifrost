@@ -11,6 +11,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"log/slog"
 	"net/http"
 
@@ -222,8 +223,9 @@ func (s *Server) auditJob(ctx context.Context, identity *auth.Identity, action, 
 // it). Write on job in the spec's project (authorizeJobInProject), then the
 // same completion and admission a cluster of the job's shape gets —
 // profile, defaults, spec validity, the project's allowlist (finishJobSpec),
-// quota and budget — over the derived ClusterSpec view, so a job cannot
-// claim what a cluster could not. Answers 201 with the job as recorded.
+// GPU tenant-isolation (#58), quota and budget — over the derived
+// ClusterSpec view, so a job cannot claim what a cluster could not. Answers
+// 201 with the job as recorded.
 func (s *Server) SubmitJob(ctx context.Context, req SubmitJobRequestObject) (SubmitJobResponseObject, error) {
 	identity, _ := IdentityFromContext(ctx)
 	if req.Body == nil {
@@ -261,6 +263,18 @@ func (s *Server) SubmitJob(ctx context.Context, req SubmitJobRequestObject) (Sub
 		return nil, ferr
 	}
 	view := provision.ClusterSpecForJob(id, &spec)
+	// GPU tenant-isolation admission (#58), the same rule CreateCluster
+	// applies after shape/profile resolution — over the derived ClusterSpec
+	// view, so a job cannot claim a fractional-GPU shape a same-shape
+	// cluster would be refused in a multi-tenant pool.
+	if verr := s.checkGpuTenantIsolation(ctx, spec.Project, &view); verr != nil {
+		var viol policy.GpuSharingViolation
+		if errors.As(verr, &viol) {
+			deny("gpu_tenant_isolation", http.StatusBadRequest)
+			return nil, badRequest(viol.Error())
+		}
+		return nil, verr
+	}
 	_, requested, derr := policy.ClusterDemand(&view)
 	if derr != nil {
 		deny("invalid_spec", http.StatusBadRequest)

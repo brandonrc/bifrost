@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/bifrost-compute/bifrost/internal/auth"
@@ -346,6 +347,15 @@ func TestGatewayAuthorizationIsProjectAndTargetScoped(t *testing.T) {
 	devGlobal := testIdentity("dev-x", auth.RoleDeveloper)
 	operator := testIdentity("op", auth.RoleOperator)
 	viewer := testIdentity("viewer", auth.RoleViewer)
+	// Global developers whose team-a membership is a scoped assignment of
+	// the named role — the red-team probe shapes. The tenant boundary is
+	// role-aware: only a covering assignment whose role licenses the
+	// request's (verb, target) crosses it.
+	devRoled := func(role auth.Role) *auth.Identity {
+		id := testIdentity("dev-scoped", auth.RoleDeveloper)
+		id.ProjectRoles = []auth.RoleScope{{Role: role, Scope: "project:team-a"}}
+		return id
+	}
 	jobsA := core.ClusterEndpoint{Id: "job-1", Hostname: "job-1.gw", ApiBaseUrl: "http://h:8265", Project: "team-a", Target: core.RegistryTargetJobs}
 	serveA := core.ClusterEndpoint{Id: "svc-1", Hostname: "svc-1.gw", ApiBaseUrl: "http://h:8000", Project: "team-a", Target: core.RegistryTargetServe}
 	static := core.ClusterEndpoint{Id: "s", Hostname: "s.gw", ApiBaseUrl: "http://h:8265"}
@@ -369,7 +379,20 @@ func TestGatewayAuthorizationIsProjectAndTargetScoped(t *testing.T) {
 		allowed  bool
 	}{
 		{"own project's dev reads jobs", devA, http.MethodGet, jobsA, true},
-		{"own project's dev submits", devA, http.MethodPost, jobsA, true},
+		// Red-team fix (gateway tenant split-brain): the boundary is
+		// role-aware — devA's operator@team-a carries no Write on Job, so a
+		// global developer holding it can no longer submit through team-a's
+		// gateway hostname, exactly as clusterTenantAccess refuses the same
+		// principal on the API side. Only a covering assignment whose role
+		// licenses the verb (developer@team-a) crosses.
+		{"global developer + operator member submits (refused)", devA, http.MethodPost, jobsA, false},
+		{"global developer + developer member submits", devRoled(auth.RoleDeveloper), http.MethodPost, jobsA, true},
+		{"global developer + viewer member submits (refused)", devRoled(auth.RoleViewer), http.MethodPost, jobsA, false},
+		{"global developer + viewer member reads", devRoled(auth.RoleViewer), http.MethodGet, jobsA, true},
+		// auditor@team-x can no longer be stored (UpsertAssignment refuses
+		// it), but a group-derived auditor grant can still exist — it
+		// licenses nothing on the job surface either way.
+		{"global developer + auditor member is refused", devRoled(auth.RoleAuditor), http.MethodGet, jobsA, false},
 		{"other project's dev is refused", devB, http.MethodGet, jobsA, false},
 		// Red-team case: a developer with ZERO project memberships must
 		// not reach another tenant's cluster through its hostname.
@@ -378,7 +401,8 @@ func TestGatewayAuthorizationIsProjectAndTargetScoped(t *testing.T) {
 		{"global operator reads jobs", operator, http.MethodGet, jobsA, false},
 		{"global operator cannot submit", operator, http.MethodPost, jobsA, false},
 		{"viewer reads jobs", viewer, http.MethodGet, jobsA, false},
-		{"own project's dev calls serve", devA, http.MethodPost, serveA, true},
+		{"own project's dev calls serve", devRoled(auth.RoleDeveloper), http.MethodPost, serveA, true},
+		{"operator member cannot write serve", devA, http.MethodPost, serveA, false},
 		{"other project's dev refused on serve", devB, http.MethodPost, serveA, false},
 		{"operator reads serve", operator, http.MethodGet, serveA, false},
 		{"static entry keeps the global rule for dev", devB, http.MethodGet, static, true},
@@ -409,6 +433,69 @@ func okOr(t *testing.T, err error) int {
 		return http.StatusOK
 	}
 	return statusOf(t, err)
+}
+
+// A job is admitted by exactly the GPU tenant-isolation rules a same-shape
+// cluster is (#58, F1): SubmitJob used to skip CheckClusterGpuIsolation
+// entirely, so a fractional GPU a multi-tenant pool would refuse at cluster
+// creation sailed through as a job. Mirror of
+// clusters_test.go's TestCreateCluster_FractionalGPURejectedInMultiTenantPool.
+func TestSubmitJobAppliesGpuTenantIsolation(t *testing.T) {
+	store := controller.NewMemoryStore()
+	ctx := context.Background()
+	if _, err := store.UpsertPool(ctx, "gpu-pool", core.PoolSpec{Name: "gpu-pool", Cohort: "c", Flavors: []core.FlavorSpec{{Name: "f", Resources: map[string]string{"nvidia.com/gpu": "8"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertAllocation(ctx, core.AllocationSpec{Pool: "gpu-pool", Project: "proj-a", Namespace: "ns-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertAllocation(ctx, core.AllocationSpec{Pool: "gpu-pool", Project: "proj-b", Namespace: "ns-b"}); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{Store: store}
+	admin := testIdentity("admin", auth.RoleAdmin)
+
+	submitWithGpu := func(jobID, gpu string) error {
+		body := jobBodyFor("proj-a")
+		body.Id = strPtr(jobID)
+		body.Spec.WorkerGroups = &[]WorkerGroup{{Name: "w", Cpu: "1", Memory: "2Gi", Gpu: &gpu, MinReplicas: 0, MaxReplicas: 1}}
+		_, err := s.SubmitJob(ctxWithIdentity(admin), SubmitJobRequestObject{Body: &body})
+		return err
+	}
+
+	// The fractional request is refused with the same 400 class the cluster
+	// path returns, naming tenant isolation in the message — and nothing is
+	// persisted.
+	err := submitWithGpu("job-frac", "0.5")
+	mustHTTPError(t, err, http.StatusBadRequest)
+	var he HTTPError
+	_ = errorsAs(err, &he)
+	if !strings.Contains(he.Message, "tenant isolation") {
+		t.Errorf("message = %q, want the tenant-isolation refusal", he.Message)
+	}
+	if j, _ := store.GetRayJob(ctx, "job-frac"); j != nil {
+		t.Fatal("an isolation-rejected job must not be persisted")
+	}
+
+	// The whole-GPU shape a cluster create would admit is admitted as a job.
+	if err := submitWithGpu("job-whole", "1"); err != nil {
+		t.Errorf("whole-GPU job in a multi-tenant pool: %v, want admitted", err)
+	}
+
+	// A single-tenant pool places no fractional restriction at all.
+	store2 := controller.NewMemoryStore()
+	if _, err := store2.UpsertPool(ctx, "solo-pool", core.PoolSpec{Name: "solo-pool", Cohort: "c", Flavors: []core.FlavorSpec{{Name: "f", Resources: map[string]string{"nvidia.com/gpu": "8"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store2.UpsertAllocation(ctx, core.AllocationSpec{Pool: "solo-pool", Project: "proj-solo", Namespace: "ns-solo"}); err != nil {
+		t.Fatal(err)
+	}
+	s2 := &Server{Store: store2}
+	body := jobBodyFor("proj-solo")
+	body.Spec.WorkerGroups = &[]WorkerGroup{{Name: "w", Cpu: "1", Memory: "2Gi", Gpu: strPtr("0.5"), MinReplicas: 0, MaxReplicas: 1}}
+	if _, err := s2.SubmitJob(ctxWithIdentity(admin), SubmitJobRequestObject{Body: &body}); err != nil {
+		t.Errorf("fractional GPU in a single-tenant pool: %v, want admitted", err)
+	}
 }
 
 // Jobs are admitted against the same project quota and budget as clusters,

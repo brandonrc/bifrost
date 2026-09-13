@@ -65,6 +65,70 @@ func TestRenderAuditCSV_QuotesCommasQuotesAndNewlines(t *testing.T) {
 	}
 }
 
+// F7: cells that spreadsheets would evaluate as formulas (=, +, -, @
+// prefixes) are neutralized — single-quote-prefixed and quoted — so an
+// attacker-influenced subject/path can't become a live formula in the
+// exported CSV. Values merely CONTAINING those characters stay verbatim.
+func TestRenderAuditCSV_EscapesFormulaInjection(t *testing.T) {
+	for _, adversarial := range []string{
+		"=cmd|'/c calc'!A1",
+		"+1-202-555-0100",
+		"-2+3",
+		"@SUM(A1:A10)",
+		"=HYPERLINK(\"https://evil.example\",\"click\")",
+	} {
+		e := auditTestEvent(strPtr(adversarial), nil)
+		path := adversarial
+		e.Path = &path
+		csv := renderAuditCSV([]controller.AuditRow{{Seq: 1, Event: e}})
+		want := "\"" + "'" + strings.ReplaceAll(adversarial, "\"", "\"\"") + "\""
+		// subject and path both carry the value; both must be escaped.
+		if got := strings.Count(csv, want); got != 2 {
+			t.Errorf("%q: escaped cell appears %d times, want 2 (subject + path)\ncsv: %s", adversarial, got, csv)
+		}
+		if strings.Contains(csv, ","+adversarial+",") {
+			t.Errorf("%q exported unescaped — a spreadsheet would evaluate it", adversarial)
+		}
+	}
+
+	// Non-leading occurrences are inert and must not be altered.
+	e := auditTestEvent(strPtr("a=b@c,d"), nil)
+	csv := renderAuditCSV([]controller.AuditRow{{Seq: 1, Event: e}})
+	if !strings.Contains(csv, "\"a=b@c,d\"") {
+		t.Errorf("inert value was mangled: %s", csv)
+	}
+}
+
+// F7 remainder (red-team, 2026-09-12): spreadsheet parsers trim leading
+// whitespace before formula detection, so a formula char behind spaces,
+// tabs or CRs must ALSO be neutralized — "\t=cmd|..." used to slip
+// through the first-byte check.
+func TestRenderAuditCSV_EscapesWhitespacePrefixedFormula(t *testing.T) {
+	for _, adversarial := range []string{
+		"\t=cmd|'/c calc'!A1",
+		" =1+1",
+		"\r@SUM(A1:A10)",
+		" \t +cmd",
+	} {
+		var out strings.Builder
+		csvField(&out, adversarial)
+		want := "\"" + "'" + adversarial + "\""
+		if out.String() != want {
+			t.Errorf("csvField(%q) = %q, want %q (escaped and force-quoted)", adversarial, out.String(), want)
+		}
+	}
+
+	// Whitespace alone is not a formula trigger: an all-whitespace or
+	// plain value passes through verbatim.
+	for _, inert := range []string{" \t ", "plain-value", "a = b"} {
+		var out strings.Builder
+		csvField(&out, inert)
+		if out.String() != inert {
+			t.Errorf("csvField(%q) = %q, want verbatim (no formula char present)", inert, out.String())
+		}
+	}
+}
+
 // --- Handler-level branch coverage ---
 
 func auditor() *auth.Identity { return testIdentity("checker", auth.RoleAuditor) }

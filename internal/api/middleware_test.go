@@ -35,14 +35,13 @@ func captureLogs(t *testing.T) *bytes.Buffer {
 }
 
 // Port of auth_layer.rs's public_allowlist_is_narrow test: the exact
-// exemption list, nothing broader.
+// exemption list, nothing broader. The reference's /docs entries are gone
+// (F10): nothing serves them, so they are refused like everything else.
 func TestIsPublicAllowlistIsNarrow(t *testing.T) {
 	for _, p := range []string{
 		"/healthz",
 		"/api/v1/version",
 		SpecPath,
-		"/docs",
-		"/docs/x",
 		"/api/v1/auth/login",
 		"/api/v1/auth/providers",
 	} {
@@ -53,6 +52,8 @@ func TestIsPublicAllowlistIsNarrow(t *testing.T) {
 	for _, p := range []string{
 		"/api/jobs/",
 		"/api/v1/authz/check",
+		"/docs",
+		"/docs/x",
 		"/docsx",
 		"/",
 		"/api/v1/auth/tokens",
