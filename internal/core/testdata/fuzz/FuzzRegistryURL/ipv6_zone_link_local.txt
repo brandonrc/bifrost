@@ -1,0 +1,2 @@
+go test fuzz v1
+string("http://[fe80::1%25eth0]:8265")

@@ -1,0 +1,87 @@
+name: fuzz
+on:
+  push: { branches: [main] }
+  pull_request:
+  schedule:
+    # Nightly deep run (10 min/target, matrixed so legs run in parallel).
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+env:
+  # Race detector on, matching ci.yml's race-tests posture.
+  CGO_ENABLED: "1"
+jobs:
+  smoke:
+    # Every PR/push: ALL targets, 30s each (~5 min total including builds) —
+    # under the ~6 min budget, so no path filtering: the fuzzed packages are
+    # core parsing boundaries that most changes can reach transitively, and a
+    # path filter would silently skip exactly the cross-package PRs that
+    # matter. -parallel is left at the default (GOMAXPROCS, 2 on the standard
+    # runners).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - name: fuzz smoke (30s per target, race on)
+        run: |
+          set -e
+          for t in \
+            internal/auth:FuzzRSAPublicKeyFromJWK \
+            internal/auth:FuzzSanitizeClaim \
+            internal/auth:FuzzIdentityFromClaims \
+            internal/auth:FuzzValidateToken \
+            internal/api:FuzzValidateRequests \
+            internal/core:FuzzByHostname \
+            internal/core:FuzzRegistryURL \
+            internal/core:FuzzStorageSourceJSON \
+            internal/policy:FuzzQuantity ; do
+            pkg="${t%%:*}"; fn="${t##*:}"
+            go test -race -run="$fn" -fuzz="$fn" -fuzztime=30s "./$pkg/"
+          done
+      - name: Upload crashers (new testdata seeds) on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashers-smoke
+          path: internal/**/testdata/fuzz/
+          if-no-files-found: ignore
+  nightly:
+    # Deep runs: one matrix leg per target so 10 min/target stays ~10-15 min
+    # of wall clock. GOCACHE is pointed into the workspace so the generated
+    # (non-crashing) corpus is collectable alongside any crashers.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - internal/auth:FuzzRSAPublicKeyFromJWK
+          - internal/auth:FuzzSanitizeClaim
+          - internal/auth:FuzzIdentityFromClaims
+          - internal/auth:FuzzValidateToken
+          - internal/api:FuzzValidateRequests
+          - internal/core:FuzzByHostname
+          - internal/core:FuzzRegistryURL
+          - internal/core:FuzzStorageSourceJSON
+          - internal/policy:FuzzQuantity
+    runs-on: ubuntu-latest
+    env:
+      GOCACHE: ${{ github.workspace }}/.gocache
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - id: slug
+        run: echo "name=$(echo '${{ matrix.target }}' | tr '/:' '--')" >> "$GITHUB_OUTPUT"
+      - name: fuzz 10m
+        run: |
+          pkg="${{ matrix.target }}"; fn="${pkg##*:}"; pkg="${pkg%%:*}"
+          go test -race -run="$fn" -fuzz="$fn" -fuzztime=600s "./$pkg/"
+      - name: Upload generated corpus + crashers on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-corpus-${{ steps.slug.outputs.name }}
+          path: |
+            .gocache/fuzz/
+            internal/**/testdata/fuzz/
+          if-no-files-found: ignore
