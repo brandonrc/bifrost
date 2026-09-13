@@ -25,14 +25,10 @@
 //     collapse to the SAME wire response is the API layer's (Task 12) HTTP
 //     body: every Kind except TtlTooLong maps to one 401
 //     "invalid_credentials" (ADR-0011: no user enumeration in the
-//     response). That collapse does not close every side channel by
-//     itself: Locked/Disabled return before paying a bcrypt in Login's
-//     lock-check ordering below, while a wrong password pays one full
-//     verify (~200ms at cost 12) — so response TIMING still distinguishes
-//     "locked" from "wrong password" even when the body doesn't. This
-//     ordering is ported verbatim from the Rust reference (a deliberate
-//     tradeoff there, not a Bifrost regression); closing the timing
-//     channel too is not attempted by either implementation.
+//     response). Response TIMING collapses too: every failure path — unknown
+//     user, disabled, locked, wrong password — pays exactly one bcrypt
+//     compare (audit F5: the locked short-circuit used to skip the compare,
+//     a timing oracle distinguishing "locked" from "wrong password").
 //
 // LocalUserStore below is a consumer-defined interface scoped to exactly
 // what LocalAuthenticator calls, NOT internal/controller's full Store
@@ -76,6 +72,12 @@ const bcryptCost = 12
 //
 // Reference: the predecessor's auth crate, src/local.rs:33 (DUMMY_HASH).
 const dummyHash = "$2b$12$dcjUjjUwxXC4Z9wsZzBD3.8Ec1/3r8C.XkqTVfQsgyrNz9sJGUt.K"
+
+// loginVerify is the bcrypt compare Login runs on every path that touches
+// a password. It is a package-level variable purely as a test seam (the
+// timing-parity tests count invocations to prove every failure path pays
+// one compare); production code never reassigns it.
+var loginVerify = VerifyPassword
 
 // HashPassword hashes password with bcrypt at bcryptCost.
 //
@@ -525,8 +527,11 @@ func (a *LocalAuthenticator) Store() LocalUserStore { return a.store }
 
 // Login authenticates a username/password. Enforces disabled -> locked ->
 // password, in that order; unknown users run the dummy-hash verify so
-// every failure path costs one bcrypt. On success the lockout counters
-// clear and a login token (TTL loginTTLSecs) is stored.
+// every failure path costs one bcrypt — and so do the disabled and locked
+// short-circuits (F5: an early return before the compare is a timing
+// oracle distinguishing the account's state from a wrong password). On
+// success the lockout counters clear and a login token (TTL loginTTLSecs)
+// is stored.
 //
 // Reference: the predecessor's auth crate, src/local.rs:210-252 (LocalAuthenticator::login).
 func (a *LocalAuthenticator) Login(ctx context.Context, username, password string) (*LoginOutcome, error) {
@@ -537,23 +542,26 @@ func (a *LocalAuthenticator) Login(ctx context.Context, username, password strin
 	if user == nil {
 		// Constant-time dummy verify: unknown users cost the same bcrypt
 		// as known ones (no user-exists timing oracle).
-		_ = VerifyPassword(password, dummyHash)
+		_ = loginVerify(password, dummyHash)
 		return nil, LocalAuthError{Kind: LocalAuthErrInvalidCredentials}
 	}
 	if user.Disabled {
 		// Still pay the bcrypt — disabled users are indistinguishable
 		// from wrong passwords on the wire and in timing.
-		_ = VerifyPassword(password, user.PasswordHash)
+		_ = loginVerify(password, user.PasswordHash)
 		return nil, LocalAuthError{Kind: LocalAuthErrDisabled}
 	}
 	now := nowUnix()
 	if user.LockedUntil != nil && *user.LockedUntil > now {
-		// Refuse without verifying: the lock short-circuits, and no
-		// failure is recorded while locked (the store's counter reset
-		// when the lock tripped).
+		// Refuse without recording a failure (the store's counter reset
+		// when the lock tripped), but still pay the bcrypt — a locked
+		// account that skips the compare answers measurably faster than a
+		// wrong password, and that timing gap is an account-state oracle
+		// (F5). The semantics are unchanged: locked stays refused.
+		_ = loginVerify(password, user.PasswordHash)
 		return nil, LocalAuthError{Kind: LocalAuthErrLocked}
 	}
-	if !VerifyPassword(password, user.PasswordHash) {
+	if !loginVerify(password, user.PasswordHash) {
 		if err := a.store.RecordLoginFailure(ctx, username); err != nil {
 			return nil, LocalAuthError{Kind: LocalAuthErrBackend, Message: err.Error(), Source: err}
 		}

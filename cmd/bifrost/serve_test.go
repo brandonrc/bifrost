@@ -1,13 +1,80 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/bifrost-compute/bifrost/internal/api"
 )
+
+// captureServeLogs redirects the default slog logger into a buffer for the
+// duration of a test (mirrors captureLogs in internal/auth's
+// validator_test.go).
+func captureServeLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
+
+// F2 regression: the http.Server runServe listens on must carry the
+// Slowloris guards (ReadHeaderTimeout, IdleTimeout) and must NOT carry
+// whole-request ReadTimeout/WriteTimeout, which would kill the gateway's
+// long-lived WebSocket bridges.
+func TestNewHTTPServerTimeouts(t *testing.T) {
+	srv := newHTTPServer("127.0.0.1:8484", http.NewServeMux())
+	if srv.ReadHeaderTimeout != 10*time.Second {
+		t.Errorf("ReadHeaderTimeout = %v, want 10s", srv.ReadHeaderTimeout)
+	}
+	if srv.IdleTimeout != 120*time.Second {
+		t.Errorf("IdleTimeout = %v, want 120s", srv.IdleTimeout)
+	}
+	if srv.ReadTimeout != 0 {
+		t.Errorf("ReadTimeout = %v, want 0 (a total read deadline would kill WebSocket bridges)", srv.ReadTimeout)
+	}
+	if srv.WriteTimeout != 0 {
+		t.Errorf("WriteTimeout = %v, want 0 (a total write deadline would kill WebSocket bridges)", srv.WriteTimeout)
+	}
+}
+
+// F8 regression: with local auth on a non-loopback bind (plain HTTP only —
+// no TLS exists in the binary), startup warns that credentials cross the
+// wire in cleartext. Loopback binds and OIDC-only deployments stay silent.
+func TestWarnIfCleartextLocalAuth(t *testing.T) {
+	cases := []struct {
+		name        string
+		bind        string
+		localAuth   bool
+		wantWarning bool
+	}{
+		{"non-loopback + local auth -> warns", "0.0.0.0:8484", true, true},
+		{"non-loopback IP + local auth -> warns", "203.0.113.5:8484", true, true},
+		{"loopback + local auth -> silent", "127.0.0.1:8484", true, false},
+		{"non-loopback + OIDC only -> silent", "0.0.0.0:8484", false, false},
+		{"loopback + no auth -> silent", "127.0.0.1:8484", false, false},
+		// An unparseable host resolves to a nil IP — NOT provably loopback,
+		// so the warning fires (matching the guard's fail-closed posture).
+		{"unparseable bind + local auth -> warns", "not-an-address", true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			buf := captureServeLogs(t)
+			warnIfCleartextLocalAuth(bindIPFor(tc.bind), tc.localAuth)
+			got := strings.Contains(buf.String(), "cleartext")
+			if got != tc.wantWarning {
+				t.Fatalf("warning fired = %v, want %v (logs: %q)", got, tc.wantWarning, buf.String())
+			}
+		})
+	}
+}
 
 // TestBuildServerGatewayOnly is the smoke test the task brief asked for:
 // serve builds a working handler without opening any socket (buildServer

@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
@@ -460,6 +462,60 @@ func TestRoleChangesApplyLive(t *testing.T) {
 	id = auth.AuthenticateToken(ctx, outcome.Token.Token)
 	if id == nil || len(id.Roles) != 1 || id.Roles[0] != RoleAdmin {
 		t.Fatalf("expected admin role after promotion, got %v", id)
+	}
+}
+
+// F5: the locked short-circuit must pay the same bcrypt compare as a wrong
+// password — otherwise response timing distinguishes "locked" from "wrong
+// password" even though the wire bodies are identical. The loginVerify
+// seam counts compares; the hash is minted at bcrypt.MinCost so the test
+// does not pay production cost for the five lockout-tripping failures.
+func TestLockedAccountStillPaysTheBcrypt(t *testing.T) {
+	store := newFakeLocalStore()
+	hash, err := HashPasswordWithCost("pw", bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	store.createLocalUser("alice", nil, hash, core.LocalRoleAdmin)
+	a := NewLocalAuthenticator(store, 3600, 90)
+	ctx := context.Background()
+
+	for i := uint32(0); i < fakeLockoutThreshold; i++ {
+		if _, err := a.Login(ctx, "alice", "wrong"); err == nil {
+			t.Fatalf("attempt %d: expected failure", i)
+		}
+	}
+
+	calls := 0
+	orig := loginVerify
+	loginVerify = func(password, hash string) bool { calls++; return orig(password, hash) }
+	defer func() { loginVerify = orig }()
+
+	// Locked: refused, no failure recorded — but exactly one compare runs.
+	_, err = a.Login(ctx, "alice", "pw")
+	var lae LocalAuthError
+	if !errors.As(err, &lae) || lae.Kind != LocalAuthErrLocked {
+		t.Fatalf("expected locked, got %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("locked login ran %d compares, want exactly 1 (timing parity with wrong-password)", calls)
+	}
+	user, _ := store.GetLocalUser(ctx, "alice")
+	if user.FailedLogins != 0 || user.LockedUntil == nil {
+		t.Fatalf("lockout semantics changed: %+v", user)
+	}
+
+	// Wrong password after an unlock: also exactly one compare.
+	if err := store.RecordLoginSuccess(ctx, "alice"); err != nil {
+		t.Fatalf("unlock: %v", err)
+	}
+	calls = 0
+	_, err = a.Login(ctx, "alice", "wrong")
+	if !errors.As(err, &lae) || lae.Kind != LocalAuthErrInvalidCredentials {
+		t.Fatalf("expected invalid credentials, got %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("wrong-password login ran %d compares, want exactly 1", calls)
 	}
 }
 

@@ -34,6 +34,9 @@ type testIdp struct {
 	priv   *rsa.PrivateKey
 	kid    string
 	hits   atomic.Int32 // JWKS fetch count, for the cooldown test
+	// emptyJWKS makes /jwks answer 200 with a valid-but-empty key set
+	// (the wholesale-replace regression test).
+	emptyJWKS atomic.Bool
 }
 
 func newTestIdp(t *testing.T) *testIdp {
@@ -53,6 +56,10 @@ func newTestIdp(t *testing.T) *testIdp {
 	})
 	mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
 		idp.hits.Add(1)
+		if idp.emptyJWKS.Load() {
+			_ = json.NewEncoder(w).Encode(map[string]any{"keys": []any{}})
+			return
+		}
 		pub := idp.priv.PublicKey
 		jwk := map[string]string{
 			"kty": "RSA",
@@ -564,5 +571,104 @@ func TestValidateResolvesRolesFromGroups(t *testing.T) {
 	}
 	if id3.IsAuthorized() {
 		t.Fatal("expected deny by default for an unmapped group")
+	}
+}
+
+// F3b regression: the JWKS fetch body is bounded. A hostile or compromised
+// IdP returning an arbitrarily large body must fail validation cleanly
+// (AuthErrJwks) instead of being read into memory without limit.
+func TestJWKSFetchBodyIsBounded(t *testing.T) {
+	var issuer string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"issuer":   issuer,
+			"jwks_uri": issuer + "/jwks",
+		})
+	})
+	mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Well past the 1 MiB cap; a compliant document is a few KiB.
+		_, _ = w.Write([]byte(`{"keys":[` + strings.Repeat(" ", maxJWKSBytes+1024) + `]}`))
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	issuer = server.URL
+
+	cfg := AuthConfig{Issuer: issuer, Audience: "bifrost"}
+	_, err := Discover(context.Background(), cfg, IdpClient(), true)
+	if err == nil {
+		t.Fatal("expected the oversized JWKS document to be rejected")
+	}
+	if authErrKind(t, err) != AuthErrJwks {
+		t.Fatalf("expected AuthErrJwks, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("expected a size-limit message, got %q", err.Error())
+	}
+}
+
+// The cap is not a hair trigger: a real JWKS document well under 1 MiB
+// still loads and validates tokens.
+func TestJWKSFetchUnderLimitStillWorks(t *testing.T) {
+	idp := newTestIdp(t)
+	v := discoverT(t, idp, RoleMappings{Developer: []string{"/ml-eng"}})
+	tok := idp.token(t, []string{"/ml-eng"}, "bifrost", 5*time.Minute)
+	if _, err := v.Validate(context.Background(), tok); err != nil {
+		t.Fatalf("validate under-limit JWKS: %v", err)
+	}
+}
+
+// Empty-JWKS regression: a SUCCESSFUL JWKS fetch yielding zero usable keys
+// must not empty the key cache — the keys are kept on a fetch error, and a
+// valid-but-empty document (an IdP mid-rotation or a misconfigured
+// provider answering 200 with "keys":[]) is no grounds to 401 every
+// previously-issued token until the next refresh. Before the fix, the
+// empty document replaced the cache wholesale.
+func TestEmptyJWKSRefreshKeepsPreviousKeys(t *testing.T) {
+	idp := newTestIdp(t)
+	v := discoverT(t, idp, RoleMappings{Developer: []string{"/ml-eng"}})
+	tok := idp.token(t, []string{"/ml-eng"}, "bifrost", 5*time.Minute)
+	if _, err := v.Validate(context.Background(), tok); err != nil {
+		t.Fatalf("validate before the empty JWKS: %v", err)
+	}
+
+	// The IdP starts serving a valid-but-empty JWKS document. Force a
+	// refresh past the cooldown (unknown-kid path) — a token whose kid is
+	// unknown triggers the fetch; it must come back AuthErrUnknownKeyID
+	// (empty document yields no new keys) while the cache keeps the old
+	// key set.
+	idp.emptyJWKS.Store(true)
+	v.refreshCooldown = time.Millisecond
+	v.lastRefresh = time.Now().Add(-time.Second)
+	unknownKidTok := idp.signRawKid(t, "rotated-away", jwt.MapClaims{
+		"sub": "u", "iss": idp.issuer, "aud": "bifrost",
+		"exp": time.Now().Add(5 * time.Minute).Unix(), "groups": []string{"/ml-eng"},
+	})
+	if _, err := v.Validate(context.Background(), unknownKidTok); authErrKind(t, err) != AuthErrUnknownKeyID {
+		t.Fatalf("expected AuthErrUnknownKeyID against the empty JWKS, got %v", err)
+	}
+
+	// The previously-issued token must still validate — the empty
+	// document did not flush the cache.
+	if _, err := v.Validate(context.Background(), tok); err != nil {
+		t.Fatalf("previously-issued token rejected after an empty JWKS refresh: %v", err)
+	}
+
+	// And when the IdP serves real keys again, the next refresh recovers
+	// (rotation still works across the empty window).
+	idp.emptyJWKS.Store(false)
+	v.lastRefresh = time.Now().Add(-time.Second)
+	if _, err := v.Validate(context.Background(), unknownKidTok); authErrKind(t, err) != AuthErrUnknownKeyID {
+		t.Fatalf("kid %q is signed by the same key but with an unknown kid — expected AuthErrUnknownKeyID, got %v", "rotated-away", err)
+	}
+	if _, err := v.Validate(context.Background(), tok); err != nil {
+		t.Fatalf("validate after keys returned: %v", err)
+	}
+	v.keysMu.RLock()
+	n := len(v.keys)
+	v.keysMu.RUnlock()
+	if n != 1 {
+		t.Fatalf("expected the refreshed cache to hold the IdP's key again, got %d keys", n)
 	}
 }
