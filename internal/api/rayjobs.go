@@ -133,6 +133,16 @@ func (s *Server) finishJobSpec(ctx context.Context, id core.ClusterId, spec *cor
 	if aerr := admission.Check(&view); aerr != nil {
 		return aerr.reason, badRequest(aerr.message)
 	}
+	// runtime_env governance (#53): the spec's runtime_env_yaml rides
+	// verbatim into the RayJob CR, so it is parsed and checked against the
+	// platform rule set here, before the spec is ever persisted. The
+	// --allow-ungoverned-runtime-env serve flag restores the pre-#53
+	// verbatim passthrough for upgraders.
+	if !s.RuntimeEnvUngoverned {
+		if verr := (RuntimeEnvPolicy{}).Validate(spec.RuntimeEnvYaml); verr != nil {
+			return "runtime_env_rejected", badRequest(verr.Error())
+		}
+	}
 	// Storage (requirement 12): names are resolved against the catalog after
 	// admission, exactly as CreateCluster does, and the resolution rides the
 	// job spec so a later catalog edit is never retroactive.

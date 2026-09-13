@@ -62,6 +62,7 @@ type serveOptions struct {
 	GatewayDomain           string
 	GatewayExternalBase     string
 	ServicesPerProject      int
+	RuntimeEnvUngoverned    bool
 }
 
 func newServeCmd() *cobra.Command {
@@ -114,6 +115,10 @@ func newServeCmd() *cobra.Command {
 		"Scheme (and optional prefix) clients reach the gateway through, e.g. https://, used to build gateway_url. Empty = not reported")
 	f.IntVar(&opts.ServicesPerProject, "services-per-project", 1,
 		"Cap on concurrently deployed services per project (requirement 2); deploys beyond it answer 409")
+	f.BoolVar(&opts.RuntimeEnvUngoverned, "allow-ungoverned-runtime-env", false,
+		"DANGER: pass runtime_env_yaml verbatim into the RayJob CR without the #53 governance validation "+
+			"(arbitrary pip indexes, interpreters, per-worker images and remote URIs become reachable from cluster nodes). "+
+			"Pre-#53 behavior; an escape hatch for upgraders only")
 	f.BoolVar(&opts.LocalAuth, "local-auth", false,
 		"Enable local (IdP-free) username/password auth (ADR-0011); counts as configured authentication "+
 			"for the fail-closed non-loopback rule")
@@ -226,6 +231,7 @@ func buildServer(ctx context.Context, opts serveOptions) (*builtServer, error) {
 		GatewayDomain:        opts.GatewayDomain,
 		GatewayExternalBase:  opts.GatewayExternalBase,
 		ServicesPerProject:   opts.ServicesPerProject,
+		RuntimeEnvUngoverned: opts.RuntimeEnvUngoverned,
 		Admission: api.Admission{
 			AllowedImagePrefixes: api.ParseImagePrefixes(opts.AllowedImages),
 			MaxWorkers:           opts.MaxWorkers,

