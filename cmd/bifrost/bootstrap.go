@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -61,8 +60,12 @@ func bootstrapLocalAdmin(ctx context.Context, store controller.Store, dbPath str
 		if err := os.WriteFile(pwPath, []byte(password+"\n"), 0o600); err != nil {
 			return err
 		}
+		// The password value is never logged — only the 0600 file's path.
 		slog.Warn("local 'admin' password written (0600)", "path", pwPath)
+		return nil
 	}
-	slog.Warn(fmt.Sprintf("local auth bootstrap — admin password (shown once): %s", password))
+	slog.Warn("local 'admin' bootstrapped with a generated password that was NOT persisted " +
+		"(no SQLite --db path to write it beside, and the password is never logged); " +
+		"set " + localAdminPasswordEnv + " or use --store sqlite to make the initial password retrievable")
 	return nil
 }

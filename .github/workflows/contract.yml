@@ -82,13 +82,16 @@ jobs:
             cat > clusters.json <<EOF
           {"clusters": [{"id": "demo", "hostname": "demo.ray.test", "api_base_url": "http://127.0.0.1:8265", "auth_token": "$RAY_CONTRACT_TOKEN"}]}
           EOF
-            EXTRA_FLAGS="--allow-insecure-transport"
+            EXTRA_FLAGS="--allow-insecure-transport --allow-private-endpoints"
           else
             cat > clusters.json <<'EOF'
           {"clusters": [{"id": "demo", "hostname": "demo.ray.test", "api_base_url": "http://127.0.0.1:8265"}]}
           EOF
-            EXTRA_FLAGS=""
+            EXTRA_FLAGS="--allow-private-endpoints"
           fi
+          # Both legs point the registry at a loopback literal IP (the local
+          # ray head): F6 refuses those by default, so the replay opts in
+          # with --allow-private-endpoints explicitly.
           # Reconciled against cmd/bifrost (Wave 1 T15): `bifrost serve`
           # really does take --bind/--registry/--dev-allow-unauthenticated/
           # --allow-insecure-transport with exactly these names, and the

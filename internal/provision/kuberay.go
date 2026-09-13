@@ -61,8 +61,11 @@ const (
 	ClusterIDLabel = "bifrost.dev/cluster-id"
 	// OwnerLabel is stamped on the RayCluster and its head/worker pods
 	// recording the cluster's authenticated owner (tier-2 owned session
-	// clusters). Value is core.ClusterSpec.Owner. Frozen-contract label
-	// key (see bifrost-api openapi.json ClusterSpec.owner description).
+	// clusters). Value is core.ClusterSpec.Owner rewritten by
+	// ownerLabelValue (F9 — IdP usernames are not always valid RFC 1123
+	// label values); the raw owner rides in OwnerRawAnnotation.
+	// Frozen-contract label key (see bifrost-api openapi.json
+	// ClusterSpec.owner description).
 	OwnerLabel = "bifrost.dev/owner"
 	// ProjectLabel is stamped on a RayService so the live client can read
 	// the owning project back (requirement 2: project-scoped services)
@@ -152,12 +155,18 @@ func RayClusterForScheduled(id core.ClusterId, spec *core.ClusterSpec, autoscali
 	// Stamp the owner (tier-2 owned session clusters) for attribution and
 	// so the per-owner ingress policy has a label to key on. Only when
 	// set — ownerless clusters (admin/service paths) carry no owner
-	// label.
+	// label. The label value goes through ownerLabelValue (F9): IdP
+	// usernames are not RFC 1123 labels, and the NetworkPolicy selector
+	// rewrites with the same helper so the two keep matching. The raw
+	// owner is kept in OwnerRawAnnotation for observability.
 	if spec.Owner != nil {
-		labels[OwnerLabel] = *spec.Owner
+		labels[OwnerLabel] = ownerLabelValue(*spec.Owner)
 	}
 	annotations := map[string]string{
 		GenerationAnnotation: strconv.FormatUint(generation, 10),
+	}
+	if spec.Owner != nil {
+		annotations[OwnerRawAnnotation] = *spec.Owner
 	}
 	if queue != nil {
 		labels[QueueLabel] = queue.QueueName
@@ -608,9 +617,9 @@ func podTemplate(clusterID, containerName, image, cpu, memory string, gpu *strin
 	// Stamp the owner onto every pod (tier-2 attribution). The per-owner
 	// ingress policy keys on the notebook pod's owner label, not this
 	// one — this label makes the cluster's pods self-describe who owns
-	// them.
+	// them. ownerLabelValue (F9) keeps it a valid RFC 1123 label value.
 	if owner != nil {
-		podLabels[OwnerLabel] = *owner
+		podLabels[OwnerLabel] = ownerLabelValue(*owner)
 	}
 	tmpl := corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{Labels: podLabels},
@@ -1002,6 +1011,12 @@ func TenantAllowNetworkPolicy() *networkingv1.NetworkPolicy {
 // singleuser pod) — to the Ray client (:10001) and dashboard (:8265) ports,
 // and to nothing else. When owner is nil (ownerless clusters) only the
 // intra-cluster allow is emitted. Ported from kuberay.rs:536-582.
+//
+// The selector value is rewritten with ownerLabelValue (F9) — the same
+// helper that stamps the RayCluster/pod labels — so an IdP username that
+// is not a valid label value neither wedges the apply nor desynchronizes
+// selector from label. (The hub stamping notebook pods must apply the same
+// mapping for rewritten owners.)
 func ClusterAllowNetworkPolicy(id string, owner *string) *networkingv1.NetworkPolicy {
 	sameCluster := &metav1.LabelSelector{MatchLabels: map[string]string{ClusterIDLabel: id}}
 	ingress := []networkingv1.NetworkPolicyIngressRule{
@@ -1016,7 +1031,7 @@ func ClusterAllowNetworkPolicy(id string, owner *string) *networkingv1.NetworkPo
 			From: []networkingv1.NetworkPolicyPeer{
 				{
 					NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": NotebookNamespace}},
-					PodSelector:       &metav1.LabelSelector{MatchLabels: map[string]string{OwnerLabel: *owner}},
+					PodSelector:       &metav1.LabelSelector{MatchLabels: map[string]string{OwnerLabel: ownerLabelValue(*owner)}},
 				},
 			},
 			Ports: []networkingv1.NetworkPolicyPort{tcpPort(10001), tcpPort(8265)},

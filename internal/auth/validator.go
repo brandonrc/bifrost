@@ -162,6 +162,12 @@ func DiscoverMetadata(ctx context.Context, client *http.Client, issuer string) (
 // cannot drive a refresh request flood at the IdP.
 const DefaultRefreshCooldown = 30 * time.Second
 
+// maxJWKSBytes bounds the JWKS document body read in refreshJWKS (F3b): an
+// unbounded read would let a malicious or compromised IdP exhaust memory
+// with an arbitrarily large response. 1 MiB is generous — a real JWKS
+// document carrying a handful of RSA keys is a few KiB.
+const maxJWKSBytes = 1 << 20
+
 // Validator validates Bearer JWTs against the issuer's JWKS.
 //
 // Keys are cached; an unknown kid triggers at most one JWKS refresh per
@@ -288,7 +294,10 @@ func Discover(ctx context.Context, config AuthConfig, client *http.Client, allow
 // refreshCooldown. The cooldown is claimed on a time basis alone —
 // independent of whether the last fetch yielded keys (#28) — and the lock
 // is released before the network call so a hung JWKS endpoint can't park
-// every caller behind the mutex (#29).
+// every caller behind the mutex (#29). A fetch ERROR keeps the old keys,
+// and so does a successful fetch yielding zero usable keys: a
+// valid-but-empty JWKS document must not 401 every previously-issued
+// token until the next refresh.
 func (v *Validator) refreshJWKS(ctx context.Context) error {
 	v.refreshMu.Lock()
 	if time.Since(v.lastRefresh) < v.refreshCooldown {
@@ -318,9 +327,15 @@ func (v *Validator) refreshJWKS(ctx context.Context) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxJWKSBytes+1))
 	if err != nil {
 		return AuthError{Kind: AuthErrJwks, Message: err.Error(), Source: err}
+	}
+	if len(body) > maxJWKSBytes {
+		return AuthError{
+			Kind:    AuthErrJwks,
+			Message: fmt.Sprintf("JWKS document exceeds the %d-byte limit", maxJWKSBytes),
+		}
 	}
 	if resp.StatusCode != http.StatusOK {
 		return AuthError{
@@ -355,6 +370,20 @@ func (v *Validator) refreshJWKS(ctx context.Context) error {
 			continue
 		}
 		keys[jwk.Kid] = pub
+	}
+
+	if len(keys) == 0 {
+		// A successful fetch that yields zero usable keys must NOT empty
+		// the cache: the keys are kept on a fetch ERROR, and a
+		// valid-but-empty JWKS document (an IdP mid-rotation, or a
+		// misconfigured/rolled-back provider returning 200 with "keys":
+		// []) deserves the same treatment — replacing wholesale would
+		// 401 every previously-issued token until the next refresh
+		// (red-team finding). Keep the old keys; a genuinely rotated-out
+		// kid still surfaces as AuthErrUnknownKeyID after the refresh.
+		slog.Warn("JWKS refresh returned zero usable keys; keeping the previous key set",
+			"jwks_uri", v.jwksURI)
+		return nil
 	}
 
 	slog.Info("JWKS refreshed", "keys", len(keys))

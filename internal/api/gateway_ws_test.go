@@ -379,6 +379,16 @@ func TestWSBridgeEmitsAllowAuditRow(t *testing.T) {
 			if row.Event.Cluster == nil || *row.Event.Cluster != "c1" {
 				t.Errorf("cluster = %v, want c1", row.Event.Cluster)
 			}
+			// Defect 2026-09-04: the WS allow row carries the synthetic
+			// action and the enforced permission, like the HTTP proxy row
+			// (dev mode here — no identity in context, so granted_roles
+			// stays empty).
+			if row.Event.Action == nil || *row.Event.Action != gatewayAuditAction {
+				t.Errorf("action = %v, want %q", row.Event.Action, gatewayAuditAction)
+			}
+			if row.Event.Required == nil || row.Event.Required.Action != "read" || row.Event.Required.Target != "job" {
+				t.Errorf("required = %+v, want {read job}", row.Event.Required)
+			}
 		}
 	}
 	if !found {

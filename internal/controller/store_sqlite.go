@@ -787,7 +787,10 @@ func (s *SqliteStore) GetPool(ctx context.Context, name string) (*StoredPool, er
 }
 
 func (s *SqliteStore) ListPools(ctx context.Context) ([]StoredPool, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT "+poolColumns+" FROM pools")
+	// ORDER BY name: ListPools must be deterministic across backends —
+	// first-match consumers (GPU tenancy admission checks, queue
+	// assignment) rely on seeing the same first pool on every call.
+	rows, err := s.db.QueryContext(ctx, "SELECT "+poolColumns+" FROM pools ORDER BY name")
 	if err != nil {
 		return nil, storeErrorf("list pools: %v", err)
 	}

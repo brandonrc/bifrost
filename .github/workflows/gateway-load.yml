@@ -1,0 +1,87 @@
+# Gateway p99 load gate: the ADR-0005 rig (scripts/gateway-load.sh) used to
+# be manual-only — evidence existed, but nothing stopped a gateway-path
+# change from regressing tail latency until someone re-ran it by hand. This
+# runs the rig nightly and on PRs that touch the gateway, and fails if the
+# measured gateway-added p99 delta exceeds the threshold below.
+name: gateway-load
+on:
+  schedule:
+    - cron: "43 3 * * *"
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - "internal/api/gateway*"
+      - "cmd/gateway-load/**"
+      - "scripts/gateway-load.sh"
+      - "scripts/render_gateway_load_adr.py"
+      - ".github/workflows/gateway-load.yml"
+concurrency:
+  group: gateway-load-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CGO_ENABLED: "0"
+  # Gate threshold for (gateway p99) - (baseline p99), milliseconds.
+  # ADR-0005's frozen baseline measured 0.964 ms (2.306 vs 1.343) at
+  # N=20000 c=48 on an Apple-silicon Mac. Shared CI runners are far noisier,
+  # so this carries ~10x headroom over the ADR number: loose enough not to
+  # flake on runner jitter, tight enough to catch the regression class this
+  # rig already caught once — the missing MaxIdleConnsPerHost blew p99/max
+  # out to 50-150 ms with 20-40% errors (see the ADR's "Finding fixed"
+  # section). The errors==0 assertion below is the other half of that gate.
+  GATEWAY_P99_DELTA_THRESHOLD_MS: "10"
+
+jobs:
+  p99-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - name: Run the load rig
+        # N=20000/c=32: the ADR's 20000-request run finished in under a
+        # second of measured time on a laptop; doubling the script default
+        # keeps the gate statistically meaningful while the whole job stays
+        # dominated by `go build`, well inside the 15-minute budget.
+        run: |
+          GATEWAY_LOAD_WRITE_ADR=0 \
+          GATEWAY_LOAD_OUT_DIR="$PWD/gateway-load-results" \
+            scripts/gateway-load.sh 20000 32
+      - name: Gate on the p99 delta
+        env:
+          RESULTS: gateway-load-results
+        run: |
+          python3 - <<'EOF'
+          import json, os, sys
+
+          with open(os.path.join(os.environ["RESULTS"], "baseline.json")) as f:
+              baseline = json.load(f)
+          with open(os.path.join(os.environ["RESULTS"], "gateway.json")) as f:
+              gateway = json.load(f)
+
+          threshold = float(os.environ["GATEWAY_P99_DELTA_THRESHOLD_MS"])
+          delta = gateway["p99_ms"] - baseline["p99_ms"]
+          errors = baseline["errors"] + gateway["errors"]
+
+          print(f"baseline p99: {baseline['p99_ms']:.3f} ms")
+          print(f"gateway  p99: {gateway['p99_ms']:.3f} ms")
+          print(f"delta: {delta:.3f} ms (threshold {threshold} ms)")
+          print(f"errors: {errors}")
+
+          failed = False
+          if errors:
+              print(f"::error::{errors} request errors — the connection-churn regression class (ADR-0005) fails on errors before latency")
+              failed = True
+          if delta > threshold:
+              print(f"::error::gateway p99 delta {delta:.3f} ms exceeds threshold {threshold} ms (ADR-0005 baseline: 0.964 ms)")
+              failed = True
+          sys.exit(1 if failed else 0)
+          EOF
+      - name: Upload bench JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-load-results
+          path: gateway-load-results/
+          if-no-files-found: error

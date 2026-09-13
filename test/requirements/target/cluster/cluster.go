@@ -462,6 +462,55 @@ func (tg *target) RestartControlPlane(ctx context.Context) error {
 	return errors.New("control plane did not answer /healthz within 3m of restart")
 }
 
+// --- req.StoreDestroyer -------------------------------------------------
+
+// DestroyStore is the store-loss chaos drill: it scales the control plane
+// to zero, deletes and re-creates its data PVC empty, and brings it back —
+// the deployment's database is simply gone when it starts, which is the
+// failure shape a lost or wiped volume produces. Because the wipe takes the
+// users table with it, every cached bearer is dropped and the suite's
+// principals are re-seeded before returning, so later tests in the process
+// still log in. Returns once /healthz answers again.
+func (tg *target) DestroyStore(ctx context.Context) error {
+	if tg.s.k8s == nil {
+		return errors.New("no Kubernetes client; cannot destroy the control plane's store")
+	}
+	if err := tg.s.k8s.destroyStore(ctx, tg.s.cpSel); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(3 * time.Minute)
+	healthy := false
+	for !healthy && time.Now().Before(deadline) {
+		resp, err := tg.s.http.Get(tg.s.base + "/healthz")
+		if err == nil {
+			_ = resp.Body.Close()
+			healthy = resp.StatusCode == http.StatusOK
+		}
+		if healthy {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+	if !healthy {
+		return errors.New("control plane did not answer /healthz within 3m of store loss")
+	}
+	// Tokens minted pre-wipe are store-backed; every one of them is dead.
+	tg.s.tokens.Range(func(k, _ any) bool {
+		tg.s.tokens.Delete(k)
+		return true
+	})
+	seedCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if err := tg.s.seed(seedCtx); err != nil {
+		return fmt.Errorf("re-seeding principals after store loss: %w", err)
+	}
+	return nil
+}
+
 // --- req.PodRunner ----------------------------------------------------
 
 func (tg *target) ProbeNamespace() string { return tg.s.probeNS }
@@ -481,7 +530,8 @@ func (tg *target) RunPod(ctx context.Context, spec req.PodSpec) (req.PodResult, 
 }
 
 var (
-	_ req.Target    = (*target)(nil)
-	_ req.Restarter = (*target)(nil)
-	_ req.PodRunner = (*target)(nil)
+	_ req.Target         = (*target)(nil)
+	_ req.Restarter      = (*target)(nil)
+	_ req.StoreDestroyer = (*target)(nil)
+	_ req.PodRunner      = (*target)(nil)
 )

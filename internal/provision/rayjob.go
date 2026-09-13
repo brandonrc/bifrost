@@ -127,7 +127,7 @@ func RayJobForScheduled(id core.ClusterId, spec *core.RayJobSpec, generation uin
 func submitterTemplate(id string, spec *core.RayJobSpec, sched Scheduling) *corev1.PodTemplateSpec {
 	labels := map[string]string{ClusterIDLabel: id}
 	if spec.Owner != nil {
-		labels[OwnerLabel] = *spec.Owner
+		labels[OwnerLabel] = ownerLabelValue(*spec.Owner)
 	}
 	tmpl := &corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{Labels: labels},

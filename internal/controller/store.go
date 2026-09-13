@@ -892,6 +892,10 @@ type Store interface {
 	// the spec actually changes.
 	UpsertPool(ctx context.Context, name string, spec core.PoolSpec) (uint64, error)
 	GetPool(ctx context.Context, name string) (*StoredPool, error)
+	// ListPools lists every pool, ordered by name. The order is part of
+	// the contract: first-match consumers (the GPU tenancy admission
+	// check, queue assignment) must see the same first pool no matter
+	// which backend serves the call.
 	ListPools(ctx context.Context) ([]StoredPool, error)
 	// DeletePool hard-deletes a pool. Errors naming the missing pool when
 	// it does not exist.

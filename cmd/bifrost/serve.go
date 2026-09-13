@@ -50,6 +50,7 @@ type serveOptions struct {
 	AuthConfig              string
 	DevAllowUnauthenticated bool
 	AllowInsecureTransport  bool
+	AllowPrivateEndpoints   bool
 	StoreKind               string
 	DB                      string
 	Namespace               string
@@ -81,6 +82,8 @@ func newServeCmd() *cobra.Command {
 		"DANGER: serve without authentication on a non-loopback address. Refused by default")
 	f.BoolVar(&opts.AllowInsecureTransport, "allow-insecure-transport", false,
 		"DANGER: permit auth tokens over cleartext http:// southbound (local dev only)")
+	f.BoolVar(&opts.AllowPrivateEndpoints, "allow-private-endpoints", false,
+		"DANGER: permit registry api_base_urls at loopback/unspecified/RFC1918/ULA literal IPs (local dev only)")
 	f.StringVar(&opts.StoreKind, "store", "memory", "Desired-state store backend: memory, sqlite, or postgres")
 	f.StringVar(&opts.DB, "db", "", "Store DSN: a SQLite file path (--store sqlite) or a postgres:// URL (--store postgres)")
 	f.StringVar(&opts.Namespace, "namespace", "",
@@ -157,7 +160,10 @@ func buildServer(ctx context.Context, opts serveOptions) (*builtServer, error) {
 
 	registry := &core.ClusterRegistry{}
 	if opts.Registry != "" {
-		reg, err := loadRegistry(opts.Registry, opts.AllowInsecureTransport)
+		reg, err := loadRegistry(opts.Registry, core.ValidateOptions{
+			AllowInsecureTransport: opts.AllowInsecureTransport,
+			AllowPrivateEndpoints:  opts.AllowPrivateEndpoints,
+		})
 		if err != nil {
 			return fail(err)
 		}
@@ -274,6 +280,43 @@ func bindIPFor(bind string) net.IP {
 	return net.ParseIP(host)
 }
 
+// HTTP server timeouts. ReadHeaderTimeout and IdleTimeout bound
+// Slowloris-style connection hoarding (F2). ReadTimeout and WriteTimeout
+// are deliberately NOT set: they are whole-request deadlines that would
+// kill the gateway's long-lived WebSocket bridges
+// (internal/api/gateway_ws.go), which stay open for the life of a job.
+const (
+	httpReadHeaderTimeout = 10 * time.Second
+	httpIdleTimeout       = 120 * time.Second
+)
+
+// newHTTPServer builds the one http.Server runServe listens on, factored
+// out so serve_test.go can pin the timeout configuration without opening
+// a socket.
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: httpReadHeaderTimeout,
+		IdleTimeout:       httpIdleTimeout,
+	}
+}
+
+// warnIfCleartextLocalAuth is the F8 TLS-posture warning: the binary serves
+// plain HTTP only (no TLS config exists), so with local auth on a
+// non-loopback bind, login passwords and PATs cross the network in
+// cleartext unless an ingress terminates TLS. This is a warning, not a
+// refusal — ingress termination is a legitimate deployment, and
+// CheckBindAllowed already owns the fail-closed decision.
+func warnIfCleartextLocalAuth(bindIP net.IP, localAuthEnabled bool) {
+	if !localAuthEnabled || (bindIP != nil && bindIP.IsLoopback()) {
+		return
+	}
+	slog.Warn("local auth is enabled on a non-loopback bind and bifrost serves plain HTTP only: " +
+		"login passwords and tokens will cross the network in cleartext — " +
+		"terminate TLS at an ingress in front of bifrost")
+}
+
 // runServe is serve's production entry point: build the handler, enforce
 // the bind-time fail-closed guard (CheckBindAllowed — internal/api's
 // guard, called correctly so its error aborts startup before any socket
@@ -299,10 +342,11 @@ func runServe(ctx context.Context, opts serveOptions) error {
 	if err := api.CheckBindAllowed(bindIPFor(opts.Bind), authConfigured, opts.DevAllowUnauthenticated); err != nil {
 		return err
 	}
+	warnIfCleartextLocalAuth(bindIPFor(opts.Bind), built.local != nil)
 
 	go built.app.RunLoops(ctx)
 
-	srv := &http.Server{Addr: opts.Bind, Handler: built.app.Handler}
+	srv := newHTTPServer(opts.Bind, built.app.Handler)
 	serveErr := make(chan error, 1)
 	go func() {
 		slog.Info("bifrost serve listening", "bind", opts.Bind)

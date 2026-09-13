@@ -222,34 +222,19 @@ func hasRole(id *auth.Identity, roles ...auth.Role) bool {
 // assignment (NOT the global "*" scope) covers project with a role that
 // grants (action, target). This is the "the assignment itself licenses
 // the verb" half of the rule (a project-scoped developer may submit where
-// a global developer may not reach); it is NOT "project membership" —
-// see projectScopedAssignmentCovers.
+// a global developer may not reach). It is deliberately the ONLY
+// project-membership test the authorization layer uses: a role-agnostic
+// "any covering assignment counts as membership" check once sat next to
+// it (the gateway's tenant boundary) and let a global developer submit
+// jobs to a cluster the API layer would refuse — membership that the
+// covering role cannot exercise on the target is not membership for
+// authorization purposes.
 func projectAssignmentGrants(ctx context.Context, store controller.Store, identity *auth.Identity, project string, action auth.PermissionType, target auth.Target) bool {
 	if identity == nil {
 		return false
 	}
 	for _, a := range EffectiveAssignments(ctx, store, identity) {
 		if a.Scope != auth.GlobalScope && auth.ScopeCovers(a.Scope, project) && a.Role.Grants(action, target) {
-			return true
-		}
-	}
-	return false
-}
-
-// projectScopedAssignmentCovers reports whether the identity holds ANY
-// effective project-scoped assignment covering project — project
-// membership in this tree's RBAC model: the scoped binding defines where
-// the caller operates (readScope's pinned edge case), while their global
-// roles decide what they may do there. Deliberately role-agnostic: the
-// r03 principal "dev-a" is a global developer holding operator on
-// team-a, and must reach team-a's surfaces as a member (the operator
-// grant does not itself carry Write-on-Job).
-func projectScopedAssignmentCovers(ctx context.Context, store controller.Store, identity *auth.Identity, project string) bool {
-	if identity == nil {
-		return false
-	}
-	for _, a := range EffectiveAssignments(ctx, store, identity) {
-		if a.Scope != auth.GlobalScope && auth.ScopeCovers(a.Scope, project) {
 			return true
 		}
 	}

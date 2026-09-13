@@ -24,8 +24,9 @@
 // requires (required_permission/target_for_path collapse to a fixed
 // Target::Job here — the whole cluster-host surface IS the proxied Ray
 // job surface) AND sit inside the target entry's tenant boundary
-// (admin/owner/project-member — see authorizeGatewayRequest) before the
-// request is allowed to fall through to the gateway at all.
+// (admin/owner/holder of a project assignment whose role licenses the
+// verb — see authorizeGatewayRequest) before the request is allowed to
+// fall through to the gateway at all.
 package api
 
 import (
@@ -43,15 +44,16 @@ import (
 )
 
 // isPublic mirrors auth_layer.rs's is_public: the narrow allowlist
-// reachable without a bearer token. Exact matches only for everything
-// except the Swagger UI's own asset tree — matching the Rust comment
-// verbatim: "everything else under /api/v1/auth/ requires an identity."
+// reachable without a bearer token. Exact matches only — matching the Rust
+// comment verbatim: "everything else under /api/v1/auth/ requires an
+// identity." The reference also exempted /docs and /docs/* for a Swagger
+// UI; nothing in this server serves those paths (server.go mounts only the
+// spec at SpecPath), so the dead entries were dropped (F10) rather than
+// left standing as unauthenticated attack surface.
 func isPublic(path string) bool {
 	return path == "/healthz" ||
 		path == "/api/v1/version" ||
 		path == SpecPath ||
-		path == "/docs" ||
-		strings.HasPrefix(path, "/docs/") ||
 		path == "/api/v1/auth/login" ||
 		path == "/api/v1/auth/providers"
 }
@@ -154,10 +156,7 @@ func requiredGatewayPermission(method string) auth.PermissionType {
 // from authz.go — only the denial's field population differs.
 func authorizeGatewayRequest(store controller.Store, identity *auth.Identity, r *http.Request, endpoint core.ClusterEndpoint) error {
 	required := requiredGatewayPermission(r.Method)
-	target := auth.TargetJob
-	if endpoint.Target == core.RegistryTargetServe {
-		target = auth.TargetService
-	}
+	target := gatewayTarget(&endpoint)
 	permitted, within := gatewayDecision(r.Context(), store, identity, required, target, endpoint)
 	if permitted && within {
 		return nil
@@ -172,11 +171,13 @@ func authorizeGatewayRequest(store controller.Store, identity *auth.Identity, r 
 	status := uint16(http.StatusForbidden)
 	method := r.Method
 	path := r.URL.Path
+	action := gatewayAuditAction
 	EmitAudit(r.Context(), store, &core.AuditEvent{
 		Ts:           controller.NowUnix(),
 		Subject:      &subject,
 		Decision:     core.AuditDecisionDeny,
 		Reason:       &reason,
+		Action:       &action,
 		Method:       &method,
 		Path:         &path,
 		Status:       &status,
@@ -195,11 +196,14 @@ func authorizeGatewayRequest(store controller.Store, identity *auth.Identity, r 
 //     grants it (a project-scoped developer may submit where a global
 //     developer cannot reach);
 //   - within: the tenant boundary — Admin, the recorded owner of a
-//     store-backed cluster row, or a project member (ANY project-scoped
-//     assignment covering the project — membership is role-agnostic here,
-//     matching the control-plane routes: the assignment defines where the
-//     caller operates, their global roles what they may do). A global
-//     role alone never crosses the tenant boundary.
+//     store-backed cluster row, or a project-scoped assignment covering
+//     the project WHOSE ROLE GRANTS this request's (verb, target). The
+//     boundary is role-aware, matching the control plane's own
+//     clusterTenantAccess (authz.go): a role-agnostic membership check
+//     (any covering assignment, even auditor) used to let a global
+//     developer submit jobs to a cluster the API layer would refuse them
+//     — the gateway and the control plane must agree on what membership
+//     means. A global role alone never crosses the tenant boundary.
 //
 // The project/owner come from the store row when one exists (a `jobs`
 // entry may front a lifecycle cluster even via a static registry entry
@@ -231,10 +235,15 @@ func gatewayDecision(ctx context.Context, store controller.Store, identity *auth
 	if project == "" && owner == nil {
 		return identity.Permits(required, target), true
 	}
-	member := projectScopedAssignmentCovers(ctx, store, identity, project)
-	permitted = identity.Permits(required, target) ||
-		projectAssignmentGrants(ctx, store, identity, project, required, target)
-	within = hasRole(identity, auth.RoleAdmin) || member ||
+	// One assignment evaluation feeds both conditions (grant is the
+	// role-aware tenant check AND the scoped-permission half of
+	// permitted), so the decision costs a single ListRoleAssignments read.
+	var grant bool
+	if project != "" {
+		grant = projectAssignmentGrants(ctx, store, identity, project, required, target)
+	}
+	permitted = identity.Permits(required, target) || grant
+	within = hasRole(identity, auth.RoleAdmin) || grant ||
 		(owner != nil && *owner == identity.Owner())
 	return permitted, within
 }
@@ -275,6 +284,31 @@ func IdentityFromContext(ctx context.Context) (*auth.Identity, bool) {
 	return id, ok
 }
 
+// gatewayEndpointContextKey carries RequireAuth's registry resolution down
+// to HostGateway (gateway.go). RequireAuth resolves the request's Host to
+// a registry entry ONCE — to decide allowlist suppression and gateway
+// authorization — and pins the outcome here; HostGateway consumes the pin
+// instead of re-resolving. Without the pin, a dynamic entry registered
+// between the two lookups flips a request already admitted as
+// control-plane traffic (e.g. a public-path 200) into "proxied southbound
+// with the cluster token injected" mid-request (red-team TOCTOU finding).
+type gatewayEndpointContextKey struct{}
+
+// pinnedGatewayEndpoint is the pinned resolution outcome: ok distinguishes
+// "checked, not a cluster host" (fall through, do NOT re-resolve) from
+// "no pin present" (HostGateway's fallback lookup — see
+// gatewayEndpointForRequest).
+type pinnedGatewayEndpoint struct {
+	endpoint core.ClusterEndpoint
+	ok       bool
+}
+
+// pinGatewayEndpoint returns r with the registry resolution attached.
+func pinGatewayEndpoint(r *http.Request, endpoint core.ClusterEndpoint, ok bool) *http.Request {
+	return r.WithContext(context.WithValue(
+		r.Context(), gatewayEndpointContextKey{}, pinnedGatewayEndpoint{endpoint: endpoint, ok: ok}))
+}
+
 type bearerTokenContextKey struct{}
 
 // BearerTokenFromContext returns the raw bearer token RequireAuth
@@ -308,11 +342,14 @@ var (
 // debug (#23); the fail-closed non-loopback refusal logs at Warn,
 // matching lib.rs's `tracing::warn!`.
 //
-// TODO(T11/T12): once AuthState carries a persisted audit sink (the
-// store-backed AuditEvent the Rust reference writes via
-// crate::audit::emit), route these through it too — this slog record is
-// the interim signal until that plumbing (ClusterRegistry/Store-backed
-// handlers) exists.
+// These rows stay slog-only BY DECISION, though the durable sink now
+// exists (AuthState.Store -> EmitAudit -> the store's hash-chained
+// RecordAudit, wired in internal/app's New): this middleware answers
+// UNAUTHENTICATED traffic, so persisting every refusal would let any
+// anonymous client append unbounded rows to the audit table. The
+// authenticated denials — host-is-cluster authorization failures — do
+// persist through EmitAudit (authorizeGatewayRequest above), where the
+// caller's identity is proven and the row is attributable.
 func auditDenial(level slog.Level, r *http.Request, reason string) {
 	slog.LogAttrs(r.Context(), level, "api: access denied",
 		slog.String("decision", "deny"),
@@ -338,11 +375,17 @@ func auditDenial(level slog.Level, r *http.Request, reason string) {
 func RequireAuth(state AuthState) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Resolve the host->cluster mapping ONCE, up front, and pin it
+			// on the request context for HostGateway (see
+			// gatewayEndpointContextKey) — every pass-through below serves
+			// the pinned request so both layers see the same decision even
+			// if the registry changes mid-request.
+			endpoint, onClusterHost := clusterForRequest(state.Registry, r)
+			r = pinGatewayEndpoint(r, endpoint, onClusterHost)
 			if !state.configured() {
 				next.ServeHTTP(w, r)
 				return
 			}
-			endpoint, onClusterHost := clusterForRequest(state.Registry, r)
 			if !onClusterHost && isPublic(r.URL.Path) {
 				next.ServeHTTP(w, r)
 				return

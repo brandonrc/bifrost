@@ -727,7 +727,10 @@ func (s *PostgresStore) GetPool(ctx context.Context, name string) (*StoredPool, 
 }
 
 func (s *PostgresStore) ListPools(ctx context.Context) ([]StoredPool, error) {
-	rows, err := s.pool.Query(ctx, "SELECT "+poolColumns+" FROM pools")
+	// ORDER BY name: ListPools must be deterministic across backends —
+	// first-match consumers (GPU tenancy admission checks, queue
+	// assignment) rely on seeing the same first pool on every call.
+	rows, err := s.pool.Query(ctx, "SELECT "+poolColumns+" FROM pools ORDER BY name")
 	if err != nil {
 		return nil, storeErrorf("list pools: %v", err)
 	}

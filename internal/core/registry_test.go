@@ -114,17 +114,17 @@ func TestDebugRedactsAuthToken(t *testing.T) {
 
 func TestValidateAcceptsGoodRegistryAndRejectsCleartextToken(t *testing.T) {
 	r := testRegistry() // http:// + token
-	err, ok := r.Validate(false).(RegistryError)
+	err, ok := r.Validate(ValidateOptions{}).(RegistryError)
 	if !ok || err.Kind != RegistryErrCleartextToken {
-		t.Fatalf("expected CleartextToken error, got %v", r.Validate(false))
+		t.Fatalf("expected CleartextToken error, got %v", r.Validate(ValidateOptions{}))
 	}
-	if err := r.Validate(true); err != nil {
+	if err := r.Validate(ValidateOptions{AllowInsecureTransport: true}); err != nil {
 		t.Fatalf("dev override should permit http+token: %v", err)
 	}
 
 	https := testRegistry()
 	https.Clusters[0].ApiBaseUrl = "https://demo-head-svc:8265"
-	if err := https.Validate(false); err != nil {
+	if err := https.Validate(ValidateOptions{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -136,8 +136,8 @@ func TestValidateRejectsDuplicatesAndBadUrls(t *testing.T) {
 		Hostname:   "DEMO.ray.example.com", // case-insensitive dup
 		ApiBaseUrl: "https://x:1",
 	})
-	if err, ok := dup.Validate(true).(RegistryError); !ok || err.Kind != RegistryErrDuplicateHostname {
-		t.Fatalf("expected DuplicateHostname error, got %v", dup.Validate(true))
+	if err, ok := dup.Validate(ValidateOptions{AllowInsecureTransport: true}).(RegistryError); !ok || err.Kind != RegistryErrDuplicateHostname {
+		t.Fatalf("expected DuplicateHostname error, got %v", dup.Validate(ValidateOptions{AllowInsecureTransport: true}))
 	}
 
 	dupId := testRegistry()
@@ -146,8 +146,8 @@ func TestValidateRejectsDuplicatesAndBadUrls(t *testing.T) {
 		Hostname:   "other.example.com",
 		ApiBaseUrl: "https://x:1",
 	})
-	if err, ok := dupId.Validate(true).(RegistryError); !ok || err.Kind != RegistryErrDuplicateId {
-		t.Fatalf("expected DuplicateId error, got %v", dupId.Validate(true))
+	if err, ok := dupId.Validate(ValidateOptions{AllowInsecureTransport: true}).(RegistryError); !ok || err.Kind != RegistryErrDuplicateId {
+		t.Fatalf("expected DuplicateId error, got %v", dupId.Validate(ValidateOptions{AllowInsecureTransport: true}))
 	}
 
 	for _, url := range []string{
@@ -159,21 +159,23 @@ func TestValidateRejectsDuplicatesAndBadUrls(t *testing.T) {
 	} {
 		bad := testRegistry()
 		bad.Clusters[0].ApiBaseUrl = url
-		if err, ok := bad.Validate(true).(RegistryError); !ok || err.Kind != RegistryErrInvalidUrl {
-			t.Fatalf("%s should be rejected as InvalidUrl, got %v", url, bad.Validate(true))
+		if err, ok := bad.Validate(ValidateOptions{AllowInsecureTransport: true}).(RegistryError); !ok || err.Kind != RegistryErrInvalidUrl {
+			t.Fatalf("%s should be rejected as InvalidUrl, got %v", url, bad.Validate(ValidateOptions{AllowInsecureTransport: true}))
 		}
 	}
 
 	badHost := testRegistry()
 	badHost.Clusters[0].Hostname = "demo host"
-	if err, ok := badHost.Validate(true).(RegistryError); !ok || err.Kind != RegistryErrInvalidHostname {
-		t.Fatalf("expected InvalidHostname error, got %v", badHost.Validate(true))
+	if err, ok := badHost.Validate(ValidateOptions{AllowInsecureTransport: true}).(RegistryError); !ok || err.Kind != RegistryErrInvalidHostname {
+		t.Fatalf("expected InvalidHostname error, got %v", badHost.Validate(ValidateOptions{AllowInsecureTransport: true}))
 	}
 }
 
 func TestValidateRejectsLinkLocalAndCgnatLiteralIps(t *testing.T) {
 	// #2: cloud metadata endpoints and overlay meshes must never be
-	// registered as cluster heads.
+	// registered as cluster heads — denied outright, no opt-in. The
+	// v4-mapped IPv6 forms regress the To4-dispatch ordering (a text-based
+	// ":" dispatch let ::ffff:169.254.169.254 slip through as "IPv6").
 	for _, url := range []string{
 		"http://169.254.169.254:8265",
 		"https://169.254.0.1",
@@ -181,28 +183,161 @@ func TestValidateRejectsLinkLocalAndCgnatLiteralIps(t *testing.T) {
 		"http://100.127.255.254",
 		"http://[fe80::1]:8265",
 		"http://[febf::ffff]:8265",
+		"http://[::ffff:169.254.169.254]:8265",
+		"http://[::ffff:100.64.0.1]:8265",
+		// Fuzz-found regressions: a query glued to the host, and an IPv6
+		// zone qualifier, both used to fail ParseIP and smuggle the literal
+		// through as a "DNS name".
+		"http://169.254.169.254?x",
+		"http://100.64.0.1?",
+		"http://[fe80::1%25eth0]:8265",
+		"http://[fe80::1%eth0]:8265",
 	} {
 		bad := testRegistry()
 		bad.Clusters[0].ApiBaseUrl = url
 		bad.Clusters[0].AuthToken = nil
-		if err, ok := bad.Validate(true).(RegistryError); !ok || err.Kind != RegistryErrInvalidUrl {
-			t.Fatalf("%s should be rejected, got %v", url, bad.Validate(true))
+		for _, opts := range []ValidateOptions{{}, {AllowPrivateEndpoints: true}} {
+			if err, ok := bad.Validate(opts).(RegistryError); !ok || err.Kind != RegistryErrInvalidUrl {
+				t.Fatalf("%s should be rejected (opts %+v), got %v", url, opts, bad.Validate(opts))
+			}
 		}
 	}
-	// Ordinary private/loopback IPs (in-cluster heads, dev setups) and
-	// DNS names (residual risk, documented on Validate) still pass.
+}
+
+func TestValidateRejectsPrivateLoopbackLiteralIpsUnlessOptedIn(t *testing.T) {
+	// F6: loopback, unspecified, RFC 1918 and ULA literal IPs are dev-only
+	// southbound endpoints — refused by default, permitted only under the
+	// explicit private-endpoints override (a local `ray start --head`).
 	for _, url := range []string{
-		"http://10.0.0.5:8265",
 		"http://127.0.0.1:8265",
-		"http://100.63.255.255:8265",
+		"http://127.1.2.3:8265",
+		"http://0.0.0.0:8265",
+		"http://10.0.0.5:8265",
+		"http://172.16.0.1:8265",
+		"http://172.31.255.255:8265",
+		"http://192.168.1.10:8265",
+		"http://[::1]:8265",
+		"http://[::]:8265",
 		"https://[fd00::1]:8265",
+		"http://[::ffff:127.0.0.1]:8265",
+	} {
+		r := testRegistry()
+		r.Clusters[0].ApiBaseUrl = url
+		r.Clusters[0].AuthToken = nil
+		if err, ok := r.Validate(ValidateOptions{}).(RegistryError); !ok || err.Kind != RegistryErrInvalidUrl {
+			t.Fatalf("%s should be refused by default, got %v", url, r.Validate(ValidateOptions{}))
+		}
+		if err := r.Validate(ValidateOptions{AllowPrivateEndpoints: true}); err != nil {
+			t.Fatalf("%s should pass under the opt-in, got %v", url, err)
+		}
+	}
+	// Just outside the gated ranges, and DNS names (residual risk,
+	// documented on Validate), pass with no override.
+	for _, url := range []string{
+		"http://172.15.255.255:8265",
+		"http://172.32.0.1:8265",
+		"http://192.167.1.1:8265",
+		"http://100.63.255.255:8265",
 		"http://demo-head-svc:8265",
 	} {
 		ok := testRegistry()
 		ok.Clusters[0].ApiBaseUrl = url
 		ok.Clusters[0].AuthToken = nil
-		if err := ok.Validate(false); err != nil {
+		if err := ok.Validate(ValidateOptions{}); err != nil {
 			t.Fatalf("%s should pass, got %v", url, err)
+		}
+	}
+}
+
+func TestValidateAndUpsertRejectEmptyHostAndNumericHostForms(t *testing.T) {
+	// Empty-host authorities (http://:8265) passed the non-empty-authority
+	// check while Go's dialer read the empty host as LOCALHOST — a
+	// loopback-deny bypass in both Validate and Upsert (red-team finding,
+	// verified live against a 127.0.0.1 listener). Percent-encoded hosts
+	// (%31%36%39.254.169.254) collapse to the same empty host once the
+	// zone-qualifier cut runs at the '%'. Trailing-dot FQDN forms of
+	// literals and inet_aton-shaped numerics parse as "DNS names" for
+	// net.ParseIP but are read as IPs by cgo-resolver builds and
+	// dnsmasq-style upstreams — all rejected outright, under every option
+	// set and by Upsert.
+	var re RegistryError
+	for _, url := range []string{
+		"http://:8265/",
+		"http://:8265",
+		"https://:1",
+		"http://%31%36%39.254.169.254/",
+		"http://169.254.169.254./",
+		"http://127.0.0.1./",
+		"http://10.0.0.5./",
+		"http://127.1./",              // dot-trimmed two-part inet_aton (127.0.0.1)
+		"http://2852039166/",          // 169.254.169.254 as a decimal uint32
+		"http://0xa9fea9fe/",          // 169.254.169.254 as hex
+		"http://0251.0376.0251.0376/", // 169.254.169.254 in octal quads
+		"http://169.254.43518/",       // 169.254.169.254 as two-part inet_aton
+		"http://2130706433/",          // 127.0.0.1 as a decimal uint32
+		"http://127.1/",               // 127.0.0.1 in two-part form
+		"http://0x7f000001/",          // 127.0.0.1 as hex
+		"http://0x7f.1/",              // 127.0.0.1, mixed hex/two-part
+		"http://0177.0.0.1/",          // 127.0.0.1 in octal quads
+		"http://0/",                   // 0.0.0.0, single decimal part
+		"http://00.0x1/",              // mixed octal/hex parts
+	} {
+		r := testRegistry()
+		r.Clusters[0].ApiBaseUrl = url
+		r.Clusters[0].AuthToken = nil
+		for _, opts := range []ValidateOptions{
+			{},
+			{AllowPrivateEndpoints: true},
+			{AllowInsecureTransport: true},
+			{AllowPrivateEndpoints: true, AllowInsecureTransport: true},
+		} {
+			err := r.Validate(opts)
+			if e, ok := err.(RegistryError); !ok || e.Kind != RegistryErrInvalidUrl {
+				t.Fatalf("%s should be rejected (opts %+v), got %v", url, opts, err)
+			}
+		}
+		reg := &ClusterRegistry{}
+		bad := dynamicEndpoint("c1")
+		bad.ApiBaseUrl = url
+		if err := reg.Upsert(bad); !errors.As(err, &re) || re.Kind != RegistryErrInvalidUrl {
+			t.Fatalf("%s should be rejected by Upsert, got %v", url, err)
+		}
+		if _, ok := reg.ByID("c1"); ok {
+			t.Fatalf("%s: refused entry must not be registered", url)
+		}
+	}
+}
+
+func TestValidateAndUpsertAcceptNonNumericDnsNames(t *testing.T) {
+	// The inet_aton screen must be a real inet_aton parser, not a charset
+	// heuristic: bare hex letters without a 0x prefix are not numeric, so
+	// single-letter and a-f-only hostnames (a, x, dead.beef, fade) are
+	// ordinary DNS names and must keep validating. A charset check on
+	// [0-9a-fA-FxX.] false-positived on these and broke cmd/bifrost
+	// fixtures (http://a:8265).
+	for _, url := range []string{
+		"http://a:8265",
+		"https://a:8265",
+		"http://b:8265",
+		"https://x:1",
+		"http://dead.beef:8265",
+		"http://xa:8265",
+		"http://fade:8265",
+		"http://0x:8265",        // bare 0x prefix with no digits: not numeric
+		"http://08:8265",        // leading 0 but not octal: glibc fails the parse
+		"http://1.2.3.4.5:8265", // five parts: beyond inet_aton's four
+	} {
+		r := testRegistry()
+		r.Clusters[0].ApiBaseUrl = url
+		r.Clusters[0].AuthToken = nil
+		if err := r.Validate(ValidateOptions{}); err != nil {
+			t.Fatalf("%s should pass Validate, got %v", url, err)
+		}
+		reg := &ClusterRegistry{}
+		ep := dynamicEndpoint("c1")
+		ep.ApiBaseUrl = url
+		if err := reg.Upsert(ep); err != nil {
+			t.Fatalf("%s should be accepted by Upsert, got %v", url, err)
 		}
 	}
 }
@@ -430,6 +565,57 @@ func TestUpsertReplacesByIdButRefusesDynamicHostnameCollision(t *testing.T) {
 	var re RegistryError
 	if err := r.Upsert(collide); !errors.As(err, &re) || re.Kind != RegistryErrDuplicateHostname {
 		t.Fatalf("two dynamic entries on one hostname: %v", err)
+	}
+}
+
+func TestUpsertValidatesApiBaseUrl(t *testing.T) {
+	// F6: dynamic entries come from the controller at run time and never
+	// passed Validate — Upsert is their only validation gate. Scheme,
+	// userinfo and fragment rules match the static path; literal IPs in
+	// link-local/CGNAT/loopback/unspecified ranges are refused (a dynamic
+	// endpoint pointing at the gateway host itself is never legitimate).
+	var re RegistryError
+	for _, url := range []string{
+		"ftp://c1-head-svc:8265",
+		"c1-head-svc:8265",
+		"http://user:pw@c1-head-svc:8265",
+		"http://c1-head-svc:8265/x#frag",
+		"http://169.254.169.254:8265",
+		"http://169.254.169.254?x",
+		"http://100.64.0.1:8265",
+		"http://[fe80::1]:8265",
+		"http://[fe80::1%25eth0]:8265",
+		"http://127.0.0.1:8265",
+		"http://[::1]:8265",
+		"http://0.0.0.0:8265",
+	} {
+		r := &ClusterRegistry{}
+		bad := dynamicEndpoint("c1")
+		bad.ApiBaseUrl = url
+		if err := r.Upsert(bad); !errors.As(err, &re) || re.Kind != RegistryErrInvalidUrl {
+			t.Fatalf("%s should be rejected as InvalidUrl, got %v", url, err)
+		}
+		if _, ok := r.ByID("c1"); ok {
+			t.Fatalf("%s: refused entry must not be registered", url)
+		}
+	}
+	// Cluster-internal DNS names (the controller's <head-svc>.<ns>.svc
+	// form) and cluster-private literal IPs (a head observed at a pod IP)
+	// must keep working.
+	for _, url := range []string{
+		"http://c1-head-svc.ray.svc.cluster.local:8265",
+		"http://c1-head-svc:8265",
+		"https://c1-head-svc:8265",
+		"http://10.1.2.3:8265",
+		"http://192.168.1.10:8265",
+		"http://[fd00::1]:8265",
+	} {
+		r := &ClusterRegistry{}
+		ep := dynamicEndpoint("c1")
+		ep.ApiBaseUrl = url
+		if err := r.Upsert(ep); err != nil {
+			t.Fatalf("%s should be accepted, got %v", url, err)
+		}
 	}
 }
 

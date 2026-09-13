@@ -57,6 +57,18 @@ type Restarter interface {
 	RestartControlPlane(ctx context.Context) error
 }
 
+// StoreDestroyer is implemented by targets that can destroy the control
+// plane's persistent store out from under it and bring the control plane
+// back on an empty one — the store-loss chaos drill, a step beyond
+// Restarter's pod kill. Tests gate on NeedsCapability(t, tgt, "store-loss")
+// and then type-assert; inproc has no durable store to destroy.
+type StoreDestroyer interface {
+	// DestroyStore destroys the store, restarts the control plane onto the
+	// now-empty one, and returns once the API answers again with the
+	// suite's principals usable (a wipe takes the users table with it).
+	DestroyStore(ctx context.Context) error
+}
+
 // PodSpec describes a probe pod a PodRunner runs on the target's cluster.
 // With Detach=false the pod runs to completion (Succeeded/Failed); with
 // Detach=true RunPod returns as soon as the pod is Running, with its IP.

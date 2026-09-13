@@ -31,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bifrost-compute/bifrost/internal/auth"
 	"github.com/bifrost-compute/bifrost/internal/controller"
 	"github.com/bifrost-compute/bifrost/internal/core"
 )
@@ -163,6 +164,39 @@ func buildSouthboundGatewayClient(maxInflight int64) *http.Client {
 	}
 }
 
+// gatewayAuditAction is the synthetic Action stamped on every gateway
+// audit row — allow rows from proxy/proxyUpgrade and deny rows from
+// authorizeGatewayRequest alike. Defect
+// docs/defects/2026-09-04-gateway-audit-rows-have-no-action-or-roles.md:
+// gateway rows carried no action and empty granted_roles, so an auditor's
+// action-filtered query silently omitted ALL gateway traffic — the
+// requests that actually run work on a cluster. The read/write verb and
+// the fronted target live in the row's Required field; GrantedRoles names
+// the caller's roles (the same grantedRoleStrs(identity.Roles) convention
+// the API-side rows use).
+const gatewayAuditAction = "gateway_request"
+
+// gatewayTarget maps an entry to the RBAC target it fronts: a `serve`
+// entry fronts a Serve application (auth.TargetService); anything else
+// fronts the Ray Jobs API (auth.TargetJob) — the same mapping
+// authorizeGatewayRequest enforces against.
+func gatewayTarget(cluster *core.ClusterEndpoint) auth.Target {
+	if cluster.Target == core.RegistryTargetServe {
+		return auth.TargetService
+	}
+	return auth.TargetJob
+}
+
+// gatewayGrantedRoles is the GrantedRoles payload for a gateway audit
+// row: the caller's roles, empty for an unauthenticated (dev mode)
+// caller — identitySubject's roles-side counterpart.
+func gatewayGrantedRoles(identity *auth.Identity) []string {
+	if identity == nil {
+		return []string{}
+	}
+	return grantedRoleStrs(identity.Roles)
+}
+
 // tryAcquire takes one of Limits.MaxInflight permits, bounding peak
 // buffered-body memory and upstream fan-out (#30) — the same
 // try_acquire_owned() semantics as gateway.rs's inflight semaphore:
@@ -187,6 +221,20 @@ func (gw *GatewayState) clusterForHost(host string) (core.ClusterEndpoint, bool)
 	return gw.Registry.ByHostname(host)
 }
 
+// gatewayEndpointForRequest returns the registry resolution RequireAuth
+// pinned on the request context (middleware.go's
+// gatewayEndpointContextKey) — the single-lookup contract that keeps the
+// auth layer and the gateway from disagreeing about a host that a
+// dynamic registration flipped mid-request. When no pin is present
+// (HostGateway composed without RequireAuth in front — tests and custom
+// stacks), it falls back to a live lookup.
+func (gw *GatewayState) gatewayEndpointForRequest(r *http.Request) (core.ClusterEndpoint, bool) {
+	if pinned, ok := r.Context().Value(gatewayEndpointContextKey{}).(pinnedGatewayEndpoint); ok {
+		return pinned.endpoint, pinned.ok
+	}
+	return gw.clusterForHost(r.Host)
+}
+
 // HostGateway is the federating gateway's dispatch middleware
 // (gateway.rs's host_gateway). It MUST be installed directly in front of
 // route matching (server.go's NewHandler) so a cluster hostname can
@@ -195,7 +243,7 @@ func (gw *GatewayState) clusterForHost(host string) (core.ClusterEndpoint, bool)
 // request falls through to next (the control-plane mux) unchanged.
 func (gw *GatewayState) HostGateway(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cluster, ok := gw.clusterForHost(r.Host)
+		cluster, ok := gw.gatewayEndpointForRequest(r)
 		if !ok {
 			next.ServeHTTP(w, r)
 			return
@@ -281,15 +329,22 @@ func (gw *GatewayState) proxy(w http.ResponseWriter, r *http.Request, cluster *c
 	status := uint16(resp.StatusCode)
 	latencyMs := uint64(time.Since(started).Milliseconds())
 	clusterID := cluster.Id.String()
+	action := gatewayAuditAction
 	EmitAudit(r.Context(), gw.Store, &core.AuditEvent{
 		Ts:        controller.NowUnix(),
 		Subject:   subject,
 		Decision:  core.AuditDecisionAllow,
+		Action:    &action,
 		Cluster:   &clusterID,
 		Method:    &method,
 		Path:      &path,
 		Status:    &status,
 		LatencyMs: &latencyMs,
+		Required: &core.AuditRequired{
+			Action: PermissionStr(requiredGatewayPermission(r.Method)),
+			Target: TargetStr(gatewayTarget(cluster)),
+		},
+		GrantedRoles: gatewayGrantedRoles(identity),
 	})
 
 	for name, values := range northboundGatewayHeaders(resp.Header) {
@@ -377,16 +432,22 @@ func southboundGatewayHeaders(inbound http.Header) http.Header {
 
 // northboundGatewayHeaders copies the cluster's response headers back to
 // the caller, dropping hop-by-hop/Connection-nominated headers and
-// headers that leak internal cluster topology: Location (a 3xx is never
-// followed southbound, so its internal service name/IP has no northbound
-// use — #32) and Server (advertises the Ray/dashboard version — #32).
+// headers that leak internal cluster topology or let a hostile cluster
+// reach across origins: Location (a 3xx is never followed southbound, so
+// its internal service name/IP has no northbound use — #32) and Server
+// (advertises the Ray/dashboard version — #32); Set-Cookie (a cluster
+// could otherwise toss cookies onto sibling gateway hostnames or the
+// control-plane domain, which share a parent domain under the gateway
+// DNS suffix) and WWW-Authenticate (a cluster could otherwise pop a
+// browser Basic-auth prompt that harvests control-plane credentials).
 // Ported from gateway.rs's proxy() response-header loop.
 func northboundGatewayHeaders(upstream http.Header) http.Header {
 	nominated := gatewayConnectionNominated(upstream)
 	out := make(http.Header, len(upstream))
 	for name, values := range upstream {
 		lower := strings.ToLower(name)
-		if isGatewayHopByHop(lower) || nominated[lower] || lower == "location" || lower == "server" {
+		if isGatewayHopByHop(lower) || nominated[lower] || lower == "location" || lower == "server" ||
+			lower == "set-cookie" || lower == "www-authenticate" {
 			continue
 		}
 		out[name] = append([]string(nil), values...)

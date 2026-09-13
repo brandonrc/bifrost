@@ -22,6 +22,15 @@ name: Publish
 # registry, both digest-pinned in the Dockerfile itself). Single-arch amd64,
 # matching where this is deployed.
 #
+# SUPPLY CHAIN: after each push, both images are scanned by Trivy (fails the
+# run on fixable HIGH/CRITICAL), signed keyless with cosign (OIDC identity of
+# the workflow run, logged to Rekor — verify with
+# `cosign verify ghcr.io/<owner>/bifrost@sha256:...`), given an SPDX SBOM as a
+# workflow artifact, and attested for build provenance (visible under
+# https://github.com/<org>/<repo>/attestations). Everything operates on the
+# pushed digest, so it covers sha-<short> and latest alike. No secrets are
+# configured anywhere for this: GITHUB_TOKEN pushes, OIDC signs.
+#
 # WHAT THE PULL-BACK BELOW DOES AND DOESN'T PROVE. It proves the push
 # succeeded, the tag resolves on the registry, and auth works. It does NOT
 # prove byte-level fidelity to a separate build: `docker rmi` only untags, and
@@ -54,6 +63,15 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # id-token: the OIDC token cosign keyless signing and the provenance
+      # attestation exchange for a Fulcio certificate / GitHub attestation.
+      # No signing key material is stored anywhere — the identity is the
+      # workflow run itself (repo + ref + commit), verifiable with
+      # `cosign verify` against the public Rekor transparency log.
+      id-token: write
+      # attestations: write the build-provenance attestation to GHCR via
+      # actions/attest-build-provenance (push-to-registry: true).
+      attestations: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -115,6 +133,82 @@ jobs:
             echo "ok: uid=$uid, statically linked"
           '
 
+      # Everything below works on the DIGEST, not the tags. sha-<short> and
+      # latest are two names for one object; the digest is the object, so a
+      # scan, signature or attestation against it covers both tags, and none
+      # of these steps can be confused by a tag that moved between push and
+      # scan.
+      - name: Resolve pushed digest
+        id: img
+        run: |
+          SHORT=${GITHUB_SHA::7}
+          REF=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:sha-${SHORT}")
+          [ -n "$REF" ] || { echo "FAIL: no RepoDigest for $IMAGE:sha-${SHORT}"; exit 1; }
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "digest=${REF##*@}" >> "$GITHUB_OUTPUT"
+
+      # Gate, then sign: a signature on an image with a known HIGH/CRITICAL
+      # hole would attest to the wrong thing. ignore-unfixed so the gate is
+      # about vulnerabilities a base-image bump can actually fix — without it
+      # the lane burns red for weeks on upstream CVEs with no patch, which is
+      # how teams learn to merge through red gates.
+      #
+      # Trivy runs as a PINNED BINARY, not aquasecurity/trivy-action or
+      # setup-trivy. In March 2026 (CVE-2026-33634) an attacker force-pushed
+      # 76 of trivy-action's 77 mutable version tags — 0.28.0 among them —
+      # and every setup-trivy tag to credential-stealing malware, and shipped
+      # a malicious trivy v0.69.4 release. The scanner in this pipeline runs
+      # right after `docker login`, so a compromised scanner inherits a live
+      # packages:write token: exactly the blast radius that incident had. The
+      # binary here comes from an immutable GitHub release (assets cannot be
+      # swapped after publish) and is verified against the release's own
+      # checksums before it ever executes. Bump TRIVY_VERSION deliberately;
+      # never float it.
+      - name: Install Trivy (pinned, checksum-verified)
+        env:
+          TRIVY_VERSION: 0.71.2
+        run: |
+          cd "$RUNNER_TEMP"
+          base="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"
+          tarball="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl -sSfL -o checksums.txt "${base}/trivy_${TRIVY_VERSION}_checksums.txt"
+          curl -sSfL -o "$tarball" "${base}/${tarball}"
+          grep "  ${tarball}\$" checksums.txt | sha256sum --check
+          tar -xzf "$tarball" trivy
+          ./trivy version
+
+      - name: Vulnerability scan (fails on HIGH/CRITICAL)
+        run: |
+          "$RUNNER_TEMP/trivy" image \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --exit-code 1 \
+            "${{ steps.img.outputs.ref }}"
+
+      - uses: sigstore/cosign-installer@v3
+
+      # Keyless: the OIDC identity of this workflow run is bound into a
+      # short-lived Fulcio certificate and logged to Rekor. There is no key
+      # to rotate, leak, or find in a junior dev's home directory.
+      - name: Sign image (cosign keyless)
+        run: cosign sign --yes "${{ steps.img.outputs.ref }}"
+
+      # SBOM as a workflow artifact. anchore/sbom-action is the maintained
+      # name for anchore/syft-action; it uploads the artifact itself
+      # (upload-artifact defaults to true) under artifact-name.
+      - name: Generate SBOM (SPDX)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ steps.img.outputs.ref }}
+          artifact-name: sbom-bifrost.spdx.json
+
+      - name: Build-provenance attestation
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/bifrost
+          subject-digest: ${{ steps.img.outputs.digest }}
+          push-to-registry: true
+
   # The requirement suite as an image (Dockerfile.test), so the cluster can run
   # the same lane the grace script runs from a laptop. Separate job, same
   # commit: the two images are versioned together, and a deployment pins the
@@ -123,6 +217,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -165,3 +261,58 @@ jobs:
             'set -- /usr/local/lib/bifrost-requirements/*.test; echo $#')
           echo "packages: $count"
           [ "$count" -ge 12 ] || { echo "FAIL: expected at least 12 test binaries"; exit 1; }
+
+      # Same supply-chain treatment as the control-plane image, for the same
+      # reason: the in-cluster CronJob pulls this image by tag, and a scanned,
+      # signed, attested digest is the difference between "the suite image"
+      # and "whatever was on the runner that night". See the publish job for
+      # the full rationale; comments here stay terse.
+      - name: Resolve pushed digest
+        id: img
+        env:
+          TEST_IMAGE: ghcr.io/${{ github.repository_owner }}/bifrost-test
+        run: |
+          SHORT=${GITHUB_SHA::7}
+          REF=$(docker inspect --format '{{index .RepoDigests 0}}' "$TEST_IMAGE:sha-${SHORT}")
+          [ -n "$REF" ] || { echo "FAIL: no RepoDigest for $TEST_IMAGE:sha-${SHORT}"; exit 1; }
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "digest=${REF##*@}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Trivy (pinned, checksum-verified)
+        env:
+          TRIVY_VERSION: 0.71.2
+        run: |
+          cd "$RUNNER_TEMP"
+          base="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"
+          tarball="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl -sSfL -o checksums.txt "${base}/trivy_${TRIVY_VERSION}_checksums.txt"
+          curl -sSfL -o "$tarball" "${base}/${tarball}"
+          grep "  ${tarball}\$" checksums.txt | sha256sum --check
+          tar -xzf "$tarball" trivy
+          ./trivy version
+
+      - name: Vulnerability scan (fails on HIGH/CRITICAL)
+        run: |
+          "$RUNNER_TEMP/trivy" image \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --exit-code 1 \
+            "${{ steps.img.outputs.ref }}"
+
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Sign image (cosign keyless)
+        run: cosign sign --yes "${{ steps.img.outputs.ref }}"
+
+      - name: Generate SBOM (SPDX)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ steps.img.outputs.ref }}
+          artifact-name: sbom-bifrost-test.spdx.json
+
+      - name: Build-provenance attestation
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/bifrost-test
+          subject-digest: ${{ steps.img.outputs.digest }}
+          push-to-registry: true

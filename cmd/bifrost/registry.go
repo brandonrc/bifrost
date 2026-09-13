@@ -31,7 +31,7 @@ import (
 // refusal) — the Rust predecessor never called ClusterRegistry::validate itself
 // (it's a load-time gate), and neither does any internal/api caller in
 // this Go port, so the CLI is the one place it must run.
-func loadRegistry(path string, allowInsecureTransport bool) (*core.ClusterRegistry, error) {
+func loadRegistry(path string, opts core.ValidateOptions) (*core.ClusterRegistry, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -56,7 +56,7 @@ func loadRegistry(path string, allowInsecureTransport bool) (*core.ClusterRegist
 	if err := reg.ResolveAuthTokens(); err != nil {
 		return nil, fmt.Errorf("invalid registry %s: %w", path, err)
 	}
-	if err := reg.Validate(allowInsecureTransport); err != nil {
+	if err := reg.Validate(opts); err != nil {
 		return nil, fmt.Errorf("invalid registry %s: %w", path, err)
 	}
 	return &reg, nil

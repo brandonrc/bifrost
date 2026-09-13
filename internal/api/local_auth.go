@@ -137,8 +137,19 @@ func (s *Server) CreateToken(ctx context.Context, req CreateTokenRequestObject) 
 	minted, record, ierr := local.IssueToken(ctx, identity.Subject, req.Body.Label, uint64(req.Body.ExpiresInDays))
 	if ierr != nil {
 		var authErr auth.LocalAuthError
-		if errors.As(ierr, &authErr) && authErr.Kind == auth.LocalAuthErrTTLTooLong {
-			return nil, badRequest("expires_in_days must be between 1 and the server maximum (90)")
+		if errors.As(ierr, &authErr) {
+			switch authErr.Kind {
+			case auth.LocalAuthErrTTLTooLong:
+				return nil, badRequest("expires_in_days must be between 1 and the server maximum (90)")
+			case auth.LocalAuthErrUnknownUser:
+				// An OIDC-authenticated caller without a local user row:
+				// a clean 4xx, not a 500 — the caller's identity is fine,
+				// it just has no local account to hang a PAT on (F10).
+				return nil, conflict("no local user for this identity; personal access tokens require a local account")
+			case auth.LocalAuthErrInvalidCredentials, auth.LocalAuthErrLocked,
+				auth.LocalAuthErrDisabled, auth.LocalAuthErrBackend:
+				// fall through to the store-error mapping below
+			}
 		}
 		return nil, wrapStoreErr(ierr)
 	}
@@ -325,8 +336,11 @@ func (s *Server) CreateUser(ctx context.Context, req CreateUserRequestObject) (C
 }
 
 // UpdateUser updates a local user's role, disabled flag, and/or password.
-// Admin-only; 404 for an unknown user. Changing your OWN role/disabled is
-// allowed in v0 (no footgun guard) but is audit-logged loudly.
+// Admin-only; 404 for an unknown user. An admin may not disable or demote
+// their OWN account (F10 self-lockout guard: the last/only admin locking
+// themselves out is an availability incident, and it is always reversible
+// by having a DIFFERENT admin make the change); the refusal is
+// audit-logged like any other denial.
 func (s *Server) UpdateUser(ctx context.Context, req UpdateUserRequestObject) (UpdateUserResponseObject, error) {
 	if _, err := s.requireLocal(); err != nil {
 		return nil, err
@@ -357,6 +371,28 @@ func (s *Server) UpdateUser(ctx context.Context, req UpdateUserRequestObject) (U
 			return nil, badRequest("invalid role")
 		}
 		role = r
+	}
+
+	// Self-lockout guard (F10): refusing to disable or demote the caller's
+	// own account. Password changes on self stay allowed.
+	if identity != nil && req.Username == identity.Owner() {
+		demoting := body.Role != nil && role != core.LocalRoleAdmin
+		disabling := body.Disabled != nil && *body.Disabled
+		if demoting || disabling {
+			action := "update_user"
+			method := "PUT"
+			path := "/api/v1/auth/users/" + req.Username
+			reason := "self_lockout_guard"
+			status := uint16(http.StatusConflict)
+			EmitAudit(ctx, s.Store, &core.AuditEvent{
+				Ts: controller.NowUnix(), Subject: identitySubject(identity), Decision: core.AuditDecisionDeny,
+				Reason: &reason, Action: &action, Method: &method, Path: &path, Status: &status,
+			})
+			return nil, conflict("refusing to disable or demote your own account; ask another admin")
+		}
+	}
+
+	if body.Role != nil {
 		if err := s.Store.SetLocalUserRole(ctx, req.Username, role); err != nil {
 			return nil, wrapStoreErr(err)
 		}

@@ -194,13 +194,24 @@ func (s *Server) UpsertAssignment(ctx context.Context, req UpsertAssignmentReque
 	if req.Body == nil {
 		return nil, HTTPError{Status: http.StatusBadRequest, Code: "bad_request", Message: "missing request body"}
 	}
-	if _, ok := auth.ParseRole(req.Body.Role); !ok {
+	role, ok := auth.ParseRole(req.Body.Role)
+	if !ok {
 		return nil, HTTPError{Status: http.StatusBadRequest, Code: "bad_request",
 			Message: fmt.Sprintf("unknown role %q (viewer|developer|operator|admin)", req.Body.Role)}
 	}
 	if !auth.ValidScope(req.Body.Scope) {
 		return nil, HTTPError{Status: http.StatusBadRequest, Code: "bad_request",
 			Message: fmt.Sprintf("invalid scope %q (\"*\" or \"project:<name>\")", req.Body.Scope)}
+	}
+	// Auditor is read-only on the audit surface and nothing else
+	// (rbac.go's RoleAuditor doc: "scoped role assignments don't apply —
+	// the audit trail isn't project-scoped"). Enforce that at ingress:
+	// a stored auditor@project row would be dead weight on the API side
+	// while misleading its writer into believing compliance access was
+	// granted.
+	if role == auth.RoleAuditor && req.Body.Scope != auth.GlobalScope {
+		return nil, HTTPError{Status: http.StatusBadRequest, Code: "bad_request",
+			Message: "auditor does not take project-scoped assignments (scope must be \"*\")"}
 	}
 	// #88: assignments are matched at evaluation time against BOTH the
 	// token sub (opaque Keycloak UUID) and preferred_username. A

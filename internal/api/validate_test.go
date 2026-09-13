@@ -59,9 +59,9 @@ func TestValidRequestBodyReachesHandler(t *testing.T) {
 
 // Non-contract paths are not the validator's business: whatever the mux
 // behind it answers (200 for the spec itself, 404 for /docs — this Go
-// server mounts no swagger UI; /docs is carried in the auth allowlist only
-// for a reverse-proxied one, per server.go's SpecPath doc comment), the
-// validator itself must never turn a path it doesn't own into a 400.
+// server mounts no swagger UI and /docs is no longer in the auth allowlist
+// either, F10), the validator itself must never turn a path it doesn't own
+// into a 400.
 func TestValidatorPassesThroughNonContractPaths(t *testing.T) {
 	h, _ := apitest.NewServer()
 	for _, p := range []string{api.SpecPath, "/docs"} {

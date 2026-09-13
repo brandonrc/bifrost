@@ -189,6 +189,78 @@ type HandlerOptions struct {
 	StrictMiddlewares []StrictMiddlewareFunc
 }
 
+// maxControlPlaneBodyBytes bounds request bodies on the control-plane API
+// routes (F3a). The gateway path caps its own buffered bodies at 64 MiB
+// (GatewayLimits.MaxBodyBytes — job submissions can carry runtime-env
+// uploads), but the generated API routes decode JSON bodies with no cap at
+// all, so an oversized POST to a public route like /api/v1/auth/login is
+// otherwise a straight memory-amplification vector. 4 MiB is far above any
+// legitimate control-plane payload (cluster/job specs, policy documents).
+const maxControlPlaneBodyBytes int64 = 4 << 20 // 4 MiB
+
+// capControlPlaneBody installs http.MaxBytesReader around every request
+// that reaches the control-plane routes. NewHandler installs it INSIDE the
+// gateway dispatch (HostGateway), so proxied cluster-host traffic keeps the
+// gateway's own 64 MiB buffered-body cap and is never touched by this one.
+// An oversized body fails the JSON decode with "http: request body too
+// large", which the strict server's RequestErrorHandlerFunc renders as the
+// canonical 400 bad_request — a clean 4xx, no memory blowup.
+func capControlPlaneBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, maxControlPlaneBodyBytes)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// maxControlPlaneInflight bounds concurrent in-flight control-plane
+// requests (F2 remainder — the slow-body Slowloris gap). The gateway has
+// its own inflight cap (GatewayLimits.MaxInflight, 64), but the
+// control-plane routes had none: newHTTPServer (cmd/bifrost/serve.go)
+// sets ReadHeaderTimeout/IdleTimeout only, so a client that sends headers
+// fast and then drips a large body pins a goroutine and an fd
+// indefinitely — and a whole-request Read/WriteTimeout is NOT an option,
+// because it would kill the gateway's long-lived websocket bridges. 256
+// is 4× the gateway's cap: control-plane requests are small JSON calls
+// with no streaming surface, so 256 concurrent is far above any
+// legitimate load, while capping the goroutine+fd hoard a slow-body
+// flood can accumulate at a value the process absorbs trivially.
+//
+// Residual exposure, documented rather than silently accepted: within a
+// held permit a body may still drip forever (no body-read deadline —
+// impractical without a whole-request deadline, which the WS bridges
+// rule out). The semaphore converts that unbounded hoard into a bounded
+// one plus clean 503s; an L4/L7 proxy in front remains the right place
+// for a true body-drip deadline.
+const maxControlPlaneInflight int64 = 256
+
+// errControlPlaneBusy backs the 503 emitted when the control-plane
+// inflight semaphore is exhausted (same status/code shape as the
+// gateway's errGatewayBusy, distinct message).
+var errControlPlaneBusy = HTTPError{Status: http.StatusServiceUnavailable, Code: "service_unavailable", Message: "control plane busy: too many inflight requests"}
+
+// capControlPlaneInflight wraps the control-plane routes with a
+// permits-sized semaphore: excess requests are refused immediately (503)
+// rather than queueing, since a queue behind the cap is itself a DoS
+// surface. NewHandler installs it INSIDE the gateway dispatch — cluster-
+// host traffic is governed by the gateway's own semaphore and never pays
+// for this one. Excess requests are refused BEFORE their bodies are
+// read, which is exactly the slow-body case this exists for.
+func capControlPlaneInflight(permits int64, next http.Handler) http.Handler {
+	sem := make(chan struct{}, permits)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case sem <- struct{}{}:
+			defer func() { <-sem }()
+		default:
+			WriteError(w, r, errControlPlaneBusy)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // NewHandler builds the full Bifrost API http.Handler: the generated
 // routes plus SpecPath, with the federating gateway (T13, gateway.go)
 // spliced in directly ahead of route matching, wrapped by the
@@ -218,6 +290,15 @@ func NewHandler(server StrictServerInterface, opts HandlerOptions) http.Handler 
 	// missing token is 401, not 400) and inside the gateway (a cluster
 	// host is never a contract path).
 	h = ValidateRequests(h)
+
+	// Control-plane body cap (F3a), login rate limit (F5), and inflight
+	// semaphore (F2 remainder): all wrap the control-plane routes only,
+	// installed here so the gateway's HostGateway layer (immediately
+	// outside) proxies cluster-host traffic with its own limits and never
+	// sees any of these guards.
+	h = capControlPlaneInflight(maxControlPlaneInflight, h)
+	h = capControlPlaneBody(h)
+	h = newLoginRateLimiter(defaultLoginRatePerMinute, defaultLoginBurst).middleware(h)
 
 	// The federating gateway sits directly in front of route matching:
 	// a Host matching a registered cluster is proxied here and never

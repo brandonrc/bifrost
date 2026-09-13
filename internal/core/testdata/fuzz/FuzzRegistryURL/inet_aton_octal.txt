@@ -1,0 +1,2 @@
+go test fuzz v1
+string("http://0251.0376.0251.0376/")

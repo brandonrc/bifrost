@@ -31,6 +31,12 @@
 # docs/adr/0005-gateway-p99-evidence.md by this script.
 #
 # Usage: scripts/gateway-load.sh [N] [CONCURRENCY]
+#
+# CI knobs (env; the manual workflow is unchanged):
+#   GATEWAY_LOAD_WRITE_ADR=0   skip regenerating docs/adr/0005 (CI measures
+#                              and gates; it must not rewrite the ADR)
+#   GATEWAY_LOAD_OUT_DIR=DIR   also copy baseline.json / gateway.json there
+#                              (the workflow uploads them as artifacts)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -38,6 +44,8 @@ cd "$ROOT"
 
 N="${1:-5000}"
 C="${2:-32}"
+WRITE_ADR="${GATEWAY_LOAD_WRITE_ADR:-1}"
+OUT_DIR="${GATEWAY_LOAD_OUT_DIR:-}"
 
 WORKDIR="$(mktemp -d)"
 trap 'cleanup' EXIT
@@ -78,8 +86,12 @@ EOF
 
 echo "== starting bifrost serve (gateway) =="
 GATEWAY_BIND="127.0.0.1:18485"
+# --allow-private-endpoints: the registry above deliberately points at the
+# loopback fake upstream (F6 refuses private-literal api_base_urls by
+# default; this is a local dev harness).
 "$WORKDIR/bifrost" serve --store memory --bind "$GATEWAY_BIND" \
   --registry "$WORKDIR/clusters.json" --dev-allow-unauthenticated \
+  --allow-private-endpoints \
   > "$WORKDIR/gateway.log" 2>&1 &
 GATEWAY_PID=$!
 for _ in $(seq 1 50); do
@@ -101,12 +113,20 @@ echo "== through gateway (n=$N c=$C) =="
 "$WORKDIR/gateway-load" bench --dial "$GATEWAY_BIND" --host "$CLUSTER_HOST" --path /api/version \
   -n "$N" -c "$C" --label through-bifrost-gateway | tee "$WORKDIR/gateway.json"
 
-echo "== writing docs/adr/0005-gateway-p99-evidence.md =="
-python3 "$ROOT/scripts/render_gateway_load_adr.py" \
-  --baseline "$WORKDIR/baseline.json" \
-  --gateway "$WORKDIR/gateway.json" \
-  --n "$N" --concurrency "$C" \
-  --go-version "$(go version | awk '{print $3}')" \
-  --out "$ROOT/docs/adr/0005-gateway-p99-evidence.md"
+if [ -n "$OUT_DIR" ]; then
+  mkdir -p "$OUT_DIR"
+  cp "$WORKDIR/baseline.json" "$OUT_DIR/baseline.json"
+  cp "$WORKDIR/gateway.json" "$OUT_DIR/gateway.json"
+fi
+
+if [ "$WRITE_ADR" = "1" ]; then
+  echo "== writing docs/adr/0005-gateway-p99-evidence.md =="
+  python3 "$ROOT/scripts/render_gateway_load_adr.py" \
+    --baseline "$WORKDIR/baseline.json" \
+    --gateway "$WORKDIR/gateway.json" \
+    --n "$N" --concurrency "$C" \
+    --go-version "$(go version | awk '{print $3}')" \
+    --out "$ROOT/docs/adr/0005-gateway-p99-evidence.md"
+fi
 
 echo "== done =="

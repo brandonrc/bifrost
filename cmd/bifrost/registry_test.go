@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/bifrost-compute/bifrost/internal/core"
 )
 
 func writeTemp(t *testing.T, name, content string) string {
@@ -16,14 +18,14 @@ func writeTemp(t *testing.T, name, content string) string {
 }
 
 func TestLoadRegistryMissingFile(t *testing.T) {
-	if _, err := loadRegistry("/nonexistent/clusters.json", false); err == nil {
+	if _, err := loadRegistry("/nonexistent/clusters.json", core.ValidateOptions{}); err == nil {
 		t.Fatal("expected an error for a missing registry file")
 	}
 }
 
 func TestLoadRegistryInvalidJSON(t *testing.T) {
 	path := writeTemp(t, "bad.json", `{"clusters": not json}`)
-	if _, err := loadRegistry(path, false); err == nil {
+	if _, err := loadRegistry(path, core.ValidateOptions{}); err == nil {
 		t.Fatal("expected an error for invalid JSON")
 	}
 }
@@ -32,7 +34,7 @@ func TestLoadRegistryValidFile(t *testing.T) {
 	path := writeTemp(t, "ok.json", `{"clusters": [
 		{"id": "a", "hostname": "a.test", "api_base_url": "http://a:8265"}
 	]}`)
-	reg, err := loadRegistry(path, false)
+	reg, err := loadRegistry(path, core.ValidateOptions{})
 	if err != nil {
 		t.Fatalf("loadRegistry: %v", err)
 	}
@@ -51,12 +53,12 @@ func TestLoadRegistryResolvesAuthTokenEnv(t *testing.T) {
 	]}`)
 
 	_ = os.Unsetenv(envVar)
-	if _, err := loadRegistry(path, false); err == nil {
+	if _, err := loadRegistry(path, core.ValidateOptions{}); err == nil {
 		t.Fatal("expected an error when the env var naming the token is unset")
 	}
 
 	t.Setenv(envVar, "cli-env-secret")
-	reg, err := loadRegistry(path, false)
+	reg, err := loadRegistry(path, core.ValidateOptions{})
 	if err != nil {
 		t.Fatalf("loadRegistry: %v", err)
 	}
@@ -72,7 +74,7 @@ func TestLoadRegistryRejectsConflictingTokenSources(t *testing.T) {
 	path := writeTemp(t, "both.json", `{"clusters": [
 		{"id": "a", "hostname": "a.test", "api_base_url": "http://a:8265", "auth_token": "secret", "auth_token_env": "SOME_VAR"}
 	]}`)
-	if _, err := loadRegistry(path, false); err == nil {
+	if _, err := loadRegistry(path, core.ValidateOptions{}); err == nil {
 		t.Fatal("expected an error for both auth_token and auth_token_env set")
 	}
 }
@@ -81,10 +83,10 @@ func TestLoadRegistryRejectsCleartextTokenWithoutOverride(t *testing.T) {
 	path := writeTemp(t, "cleartext.json", `{"clusters": [
 		{"id": "a", "hostname": "a.test", "api_base_url": "http://a:8265", "auth_token": "secret"}
 	]}`)
-	if _, err := loadRegistry(path, false); err == nil {
+	if _, err := loadRegistry(path, core.ValidateOptions{}); err == nil {
 		t.Fatal("expected Validate to refuse a plaintext token over http:// without --allow-insecure-transport")
 	}
-	if _, err := loadRegistry(path, true); err != nil {
+	if _, err := loadRegistry(path, core.ValidateOptions{AllowInsecureTransport: true}); err != nil {
 		t.Fatalf("with --allow-insecure-transport: %v", err)
 	}
 }
@@ -94,7 +96,22 @@ func TestLoadRegistryRejectsDuplicateIds(t *testing.T) {
 		{"id": "a", "hostname": "a.test", "api_base_url": "http://a:8265"},
 		{"id": "a", "hostname": "b.test", "api_base_url": "http://b:8265"}
 	]}`)
-	if _, err := loadRegistry(path, false); err == nil {
+	if _, err := loadRegistry(path, core.ValidateOptions{}); err == nil {
 		t.Fatal("expected Validate to refuse a duplicate cluster id")
+	}
+}
+
+// F6: a static entry pointing at a literal loopback/private IP (the local
+// `ray start --head` dev workflow) loads only under the explicit
+// --allow-private-endpoints opt-in.
+func TestLoadRegistryPrivateEndpointRequiresOptIn(t *testing.T) {
+	path := writeTemp(t, "loopback.json", `{"clusters": [
+		{"id": "a", "hostname": "a.test", "api_base_url": "http://127.0.0.1:8265"}
+	]}`)
+	if _, err := loadRegistry(path, core.ValidateOptions{}); err == nil {
+		t.Fatal("expected Validate to refuse a loopback literal IP without --allow-private-endpoints")
+	}
+	if _, err := loadRegistry(path, core.ValidateOptions{AllowPrivateEndpoints: true}); err != nil {
+		t.Fatalf("with --allow-private-endpoints: %v", err)
 	}
 }

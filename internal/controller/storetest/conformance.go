@@ -46,6 +46,7 @@ package storetest
 import (
 	"context"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -625,7 +626,9 @@ func runPoolConformance(t *testing.T, store controller.Store) {
 	})
 
 	t.Run("ListPoolsSeesAll", func(t *testing.T) {
-		// store.rs:341-354.
+		// store.rs:341-354. The order is asserted, not sorted away: gpu
+		// was upserted first (runPoolConformance's fixture), cpu second,
+		// and ListPools must come back name-ordered regardless.
 		if _, err := store.UpsertPool(ctx, "cpu", poolSpecFixture("cpu", 1.0)); err != nil {
 			t.Fatalf("upsert cpu pool: %v", err)
 		}
@@ -637,9 +640,30 @@ func runPoolConformance(t *testing.T, store controller.Store) {
 		for i, p := range pools {
 			names[i] = p.Name
 		}
-		sort.Strings(names)
 		if !reflect.DeepEqual(names, []string{"cpu", "gpu"}) {
-			t.Fatalf("names = %v, want [cpu gpu]", names)
+			t.Fatalf("names = %v, want [cpu gpu] (name-ordered)", names)
+		}
+	})
+
+	t.Run("ListPoolsIsNameOrdered", func(t *testing.T) {
+		// First-match consumers (GPU tenancy admission checks, queue
+		// assignment) need ListPools to be deterministic: every backend
+		// must return pools name-ordered, however they were inserted.
+		for _, name := range []string{"pool-zeta", "pool-alpha", "pool-mid"} {
+			if _, err := store.UpsertPool(ctx, name, poolSpecFixture(name, 1.0)); err != nil {
+				t.Fatalf("upsert %s: %v", name, err)
+			}
+		}
+		pools, err := store.ListPools(ctx)
+		if err != nil {
+			t.Fatalf("list pools: %v", err)
+		}
+		names := make([]string, len(pools))
+		for i, p := range pools {
+			names[i] = p.Name
+		}
+		if !slices.IsSorted(names) {
+			t.Fatalf("ListPools order = %v, want name-sorted", names)
 		}
 	})
 
