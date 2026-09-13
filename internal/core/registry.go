@@ -160,9 +160,37 @@ func stamp(c ClusterEndpoint, source string) ClusterEndpoint {
 // file is the operator's override, and first-match-wins misrouting is the
 // exact failure Validate guards against), and one whose hostname another
 // dynamic entry already routes. Hostnames compare case-insensitively.
+//
+// ApiBaseUrl is validated too (F6): scheme restricted to http/https, no
+// userinfo/fragment, and literal IPs in link-local/CGNAT/loopback/
+// unspecified ranges refused — a runtime-registered endpoint that points
+// at the gateway host itself or a metadata endpoint is never legitimate.
+// Hosts that only some resolver would read as a literal (an empty host —
+// dialed as localhost by Go's dialer — trailing-dot FQDN forms, and
+// inet_aton-shaped numerics) are refused outright as well.
+// Cluster-internal DNS names (the controller's <head-svc>.<ns>.svc form)
+// and RFC 1918/ULA literals pass: a head observed at a cluster-private pod
+// IP is a real endpoint, and Validate's operator opt-in does not apply to
+// runtime state.
 func (r *ClusterRegistry) Upsert(c ClusterEndpoint) error {
 	if c.Hostname == "" || hasInvalidHostnameChar(c.Hostname) {
 		return RegistryError{Kind: RegistryErrInvalidHostname, Id: string(c.Id), Hostname: c.Hostname}
+	}
+	invalid := func(reason string) error {
+		return RegistryError{Kind: RegistryErrInvalidUrl, Id: string(c.Id), Url: c.ApiBaseUrl, Reason: reason}
+	}
+	reason, authority := urlShapeError(c.ApiBaseUrl)
+	if reason != "" {
+		return invalid(reason)
+	}
+	if ip := net.ParseIP(authorityHost(authority)); ip != nil {
+		if isDeniedSouthboundIP(ip) {
+			return invalid("literal IP in a link-local/CGNAT range (169.254.0.0/16, " +
+				"100.64.0.0/10, fe80::/10) is not a cluster endpoint")
+		}
+		if ip.IsLoopback() || ip.IsUnspecified() {
+			return invalid("literal loopback/unspecified IP is not a dynamic cluster endpoint")
+		}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -382,17 +410,38 @@ func (r *ClusterRegistry) TokenSourceNotes() []TokenSourceNote {
 	return notes
 }
 
+// ValidateOptions carries Validate's explicit danger overrides. Both
+// default to the safe posture; the CLI surfaces them as DANGER flags.
+type ValidateOptions struct {
+	// AllowInsecureTransport permits a static auth token over cleartext
+	// http:// southbound (local dev only).
+	AllowInsecureTransport bool
+	// AllowPrivateEndpoints permits api_base_urls whose host is a literal
+	// IP in a loopback, unspecified, RFC 1918, or ULA (fc00::/7) range
+	// (F6). Dev workflows legitimately point a static entry at a local
+	// `ray start --head` on 127.0.0.1; in production a private-literal
+	// southbound URL is an SSRF posture gap, so the allowance is an
+	// explicit opt-in, never the default. Link-local/CGNAT ranges stay
+	// denied under the opt-in — those never name a Ray head.
+	AllowPrivateEndpoints bool
+}
+
 // Validate validates the registry as security-sensitive input (issues
-// #2/#8): duplicate hostnames/ids fail fast (first-match-wins
+// #2/#8, F6): duplicate hostnames/ids fail fast (first-match-wins
 // misrouting), URLs are scheme-restricted with no userinfo/fragment,
-// literal-IP hosts in link-local/CGNAT ranges are refused (SSRF: cloud
-// metadata endpoints, overlay meshes), and a static token over cleartext
-// http is rejected unless explicitly overridden.
+// literal-IP hosts in link-local/CGNAT ranges are refused outright (SSRF:
+// cloud metadata endpoints, overlay meshes), literal-IP hosts in
+// loopback/unspecified/private ranges are refused unless explicitly
+// opted in, and a static token over cleartext http is rejected unless
+// explicitly overridden.
 //
 // Residual risk: DNS-named api_base_urls pass unchecked — resolving them
 // at validation can't defeat DNS rebinding, so name-based SSRF screening
-// is accepted as out of scope. Only literal IPs are denied.
-func (r *ClusterRegistry) Validate(allowInsecureTransport bool) error {
+// is accepted as out of scope. Only literal IPs are denied (in any
+// resolver-recognized notation: trailing-dot FQDN forms and
+// inet_aton-shaped numeric hosts are refused as URLs outright, see
+// urlShapeError).
+func (r *ClusterRegistry) Validate(opts ValidateOptions) error {
 	hostnames := map[string]struct{}{}
 	ids := map[string]struct{}{}
 	for _, c := range r.Clusters {
@@ -412,48 +461,154 @@ func (r *ClusterRegistry) Validate(allowInsecureTransport bool) error {
 			return RegistryError{Kind: RegistryErrInvalidHostname, Id: string(c.Id), Hostname: c.Hostname}
 		}
 
-		isHttps := strings.HasPrefix(c.ApiBaseUrl, "https://")
 		isHttp := strings.HasPrefix(c.ApiBaseUrl, "http://")
 		invalid := func(reason string) error {
 			return RegistryError{Kind: RegistryErrInvalidUrl, Id: string(c.Id), Url: c.ApiBaseUrl, Reason: reason}
 		}
-		if !isHttps && !isHttp {
-			return invalid("scheme must be http or https")
+		reason, authority := urlShapeError(c.ApiBaseUrl)
+		if reason != "" {
+			return invalid(reason)
 		}
-		rest := ""
-		if idx := strings.Index(c.ApiBaseUrl, "://"); idx >= 0 {
-			rest = c.ApiBaseUrl[idx+3:]
-		}
-		authority := rest
-		if idx := strings.Index(rest, "/"); idx >= 0 {
-			authority = rest[:idx]
-		}
-		if authority == "" {
-			return invalid("missing host")
-		}
-		if strings.Contains(authority, "@") {
-			return invalid("userinfo not allowed")
-		}
-		if strings.Contains(c.ApiBaseUrl, "#") {
-			return invalid("fragment not allowed")
-		}
-		// SSRF posture (#2): literal IPs in link-local/CGNAT ranges never
-		// name a Ray head — they name cloud metadata endpoints
-		// (169.254.169.254) or overlay meshes. DNS names pass through
-		// (see the doc comment for the residual risk).
+		// SSRF posture (#2/F6): literal IPs never need to name a Ray head.
+		// Link-local/CGNAT ranges name cloud metadata endpoints
+		// (169.254.169.254) or overlay meshes — denied outright. Loopback,
+		// unspecified and RFC 1918/ULA ranges are dev-only (a local
+		// `ray start --head`) — denied unless the operator opted in.
+		// DNS names pass through (see the doc comment for the residual
+		// risk).
 		hostStr := authorityHost(authority)
 		if ip := net.ParseIP(hostStr); ip != nil {
-			if isDeniedSouthboundIP(hostStr, ip) {
+			if isDeniedSouthboundIP(ip) {
 				return invalid(
 					"literal IP in a link-local/CGNAT range (169.254.0.0/16, " +
 						"100.64.0.0/10, fe80::/10) is not a cluster endpoint")
 			}
+			if !opts.AllowPrivateEndpoints && isPrivateSouthboundIP(ip) {
+				return invalid(
+					"literal IP in a loopback/unspecified/private range — " +
+						"pass an explicit private-endpoints override for local dev")
+			}
 		}
-		if c.AuthToken != nil && isHttp && !allowInsecureTransport {
+		if c.AuthToken != nil && isHttp && !opts.AllowInsecureTransport {
 			return RegistryError{Kind: RegistryErrCleartextToken, Id: string(c.Id)}
 		}
 	}
 	return nil
+}
+
+// urlShapeError validates an api_base_url's scheme and authority, shared
+// by Validate (static entries) and Upsert (dynamic entries). Returns a
+// non-empty rejection reason, or "" plus the URL's authority.
+func urlShapeError(rawurl string) (string, string) {
+	if !strings.HasPrefix(rawurl, "https://") && !strings.HasPrefix(rawurl, "http://") {
+		return "scheme must be http or https", ""
+	}
+	rest := rawurl[strings.Index(rawurl, "://")+3:]
+	authority := rest
+	// The authority ends at the first of '/', '?', '#'. Without the '?' cut,
+	// a query glued to the host (http://169.254.169.254?x) failed ParseIP
+	// and slipped a denylisted literal past the IP checks below as a "DNS
+	// name", while the HTTP client still dialed the literal.
+	if idx := strings.IndexAny(rest, "/?#"); idx >= 0 {
+		authority = rest[:idx]
+	}
+	if authority == "" {
+		return "missing host", ""
+	}
+	if strings.Contains(authority, "@") {
+		return "userinfo not allowed", ""
+	}
+	if strings.Contains(rawurl, "#") {
+		return "fragment not allowed", ""
+	}
+	host := authorityHost(authority)
+	if host == "" {
+		// http://:8265 — a port with no host. The authority is non-empty
+		// so it survived the check above, but Go's dialer reads an empty
+		// host as LOCALHOST: this form dialed a 127.0.0.1 listener while
+		// passing every literal-IP screen (net.ParseIP("") is nil).
+		// Percent-encoded hosts (%31%36%39...) collapse to "" the same
+		// way once the zone-qualifier cut runs at the '%'.
+		return "missing host", ""
+	}
+	if net.ParseIP(host) == nil {
+		// Not a literal IP as far as ParseIP is concerned — it had better
+		// be a real DNS name then. Two numeric notations that resolvers
+		// and dialers OTHER than Go's pure-Go resolver (cgo builds,
+		// dnsmasq-style upstreams) can read as IPs are refused outright:
+		//
+		//  - trailing-dot FQDN forms of a literal (169.254.169.254.) —
+		//    many resolvers strip the root dot and return the literal;
+		//  - hosts a libc inet_aton would parse as an IP (2130706433,
+		//    0x7f000001, 127.1, 0251.0376.0251.0376, 169.254.43518).
+		trimmed := strings.TrimRight(host, ".")
+		if trimmed != host && net.ParseIP(trimmed) != nil {
+			return "trailing-dot FQDN form of a literal IP is not a cluster endpoint", ""
+		}
+		// The inet_aton check runs on the dot-trimmed host as well: a
+		// resolver that strips the root dot before parsing would read
+		// 127.1. as 127.0.0.1.
+		if isInetAtonShapedHost(trimmed) {
+			return "host is an inet_aton-style numeric form (e.g. 2130706433, 0x7f000001, 127.1), not a DNS name", ""
+		}
+	}
+	return "", authority
+}
+
+// isInetAtonShapedHost reports whether host parses as an IPv4 literal
+// under classic libc inet_aton semantics: 1-4 dot-separated parts, each
+// part decimal digits, octal (a leading 0), or hex (a 0x/0X prefix) —
+// 2130706433, 0x7f000001, 0177.0.0.1 and 127.1 are all 127.0.0.1 there.
+// Go's pure-Go resolver has no inet_aton semantics, but cgo-resolver
+// builds and dnsmasq-style upstreams do, so such a host can dial a
+// literal IP while net.ParseIP sees a DNS name; rejecting the class
+// removes the dependence on which resolver the deployed binary uses.
+//
+// Bare hex letters without a 0x prefix are NOT numeric under inet_aton,
+// so ordinary DNS names like "a", "dead.beef" or "xa" are unaffected.
+func isInetAtonShapedHost(host string) bool {
+	parts := strings.Split(host, ".")
+	if len(parts) > 4 {
+		return false
+	}
+	for _, p := range parts {
+		if !isInetAtonPart(p) {
+			return false
+		}
+	}
+	return true
+}
+
+// isInetAtonPart reports whether one dot-separated part parses
+// numerically under inet_aton rules: hex with a 0x/0X prefix, octal with
+// a leading 0 (a part starting with 0 followed by an 8 or 9 is NOT
+// numeric — glibc fails the whole parse on it), otherwise decimal.
+func isInetAtonPart(p string) bool {
+	if p == "" {
+		return false
+	}
+	if strings.HasPrefix(p, "0x") || strings.HasPrefix(p, "0X") {
+		rest := p[2:]
+		if rest == "" {
+			return false
+		}
+		for i := 0; i < len(rest); i++ {
+			c := rest[i]
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+				return false
+			}
+		}
+		return true
+	}
+	if len(p) > 1 && p[0] == '0' {
+		for i := 1; i < len(p); i++ {
+			if p[i] < '0' || p[i] > '7' {
+				return false
+			}
+		}
+		return true
+	}
+	return isAllDigits(p)
 }
 
 func hasInvalidHostnameChar(h string) bool {
@@ -489,19 +644,26 @@ func stripPort(host string) string {
 
 // authorityHost extracts the host portion of a URL authority:
 // [fe80::1]:8265 yields fe80::1, host:8265 yields host, host yields host.
-// Userinfo is already rejected by Validate before this runs.
+// Userinfo is already rejected by Validate before this runs. An IPv6 zone
+// qualifier (%eth0, percent-encoded or not) is stripped: it is an interface
+// selector, not part of the host identity — without stripping, ParseIP
+// failed on [fe80::1%25eth0] and the link-local deny was dodged.
 func authorityHost(authority string) string {
-	if strings.HasPrefix(authority, "[") {
-		rest := authority[1:]
+	host := authority
+	if strings.HasPrefix(host, "[") {
+		rest := host[1:]
 		if idx := strings.Index(rest, "]"); idx >= 0 {
-			return rest[:idx]
+			host = rest[:idx]
+		} else {
+			host = rest
 		}
-		return rest
+	} else if idx := strings.Index(host, ":"); idx >= 0 {
+		host = host[:idx]
 	}
-	if idx := strings.Index(authority, ":"); idx >= 0 {
-		return authority[:idx]
+	if idx := strings.IndexByte(host, '%'); idx >= 0 {
+		host = host[:idx]
 	}
-	return authority
+	return host
 }
 
 func isAllDigits(s string) bool {
@@ -513,34 +675,54 @@ func isAllDigits(s string) bool {
 	return true
 }
 
-// isDeniedSouthboundIP is the literal-IP denylist for southbound
-// api_base_urls (issue #2 remainder): link-local and CGNAT ranges never
-// name a Ray head — they name cloud metadata endpoints (169.254.169.254)
-// or overlay meshes (Tailscale etc.). Computed from octets rather than
-// net.IP's is_* helpers so the ranges are explicit and stable. hostStr is
-// the pre-parse text form, used (like the Rust reference's string-based
-// dispatch) to tell an IPv6 literal from an IPv4 one.
-func isDeniedSouthboundIP(hostStr string, ip net.IP) bool {
-	if strings.Contains(hostStr, ":") {
-		ip16 := ip.To16()
-		if ip16 == nil {
-			return false
+// isDeniedSouthboundIP is the unconditional literal-IP denylist for
+// southbound api_base_urls (issue #2 remainder): link-local and CGNAT
+// ranges never name a Ray head — they name cloud metadata endpoints
+// (169.254.169.254) or overlay meshes (Tailscale etc.). Computed from
+// octets rather than net.IP's is_* helpers so the ranges are explicit and
+// stable. The To4 dispatch runs first so an IPv4-mapped IPv6 literal
+// (::ffff:169.254.169.254) cannot bypass the v4 ranges.
+func isDeniedSouthboundIP(ip net.IP) bool {
+	if v4 := ip.To4(); v4 != nil {
+		// 169.254.0.0/16 link-local (includes cloud metadata 169.254.169.254).
+		if v4[0] == 169 && v4[1] == 254 {
+			return true
 		}
-		// fe80::/10 link-local.
-		seg0 := uint16(ip16[0])<<8 | uint16(ip16[1])
-		return seg0&0xffc0 == 0xfe80
-	}
-	v4 := ip.To4()
-	if v4 == nil {
+		// 100.64.0.0/10 CGNAT / overlay meshes.
+		if v4[0] == 100 && v4[1] >= 64 && v4[1] < 128 {
+			return true
+		}
 		return false
 	}
-	// 169.254.0.0/16 link-local (includes cloud metadata 169.254.169.254).
-	if v4[0] == 169 && v4[1] == 254 {
+	ip16 := ip.To16()
+	if ip16 == nil {
+		return false
+	}
+	// fe80::/10 link-local.
+	seg0 := uint16(ip16[0])<<8 | uint16(ip16[1])
+	return seg0&0xffc0 == 0xfe80
+}
+
+// isPrivateSouthboundIP reports whether ip names a local or private
+// endpoint (F6): loopback (127.0.0.0/8, ::1), unspecified (0.0.0.0, ::),
+// RFC 1918 private ranges, or ULA (fc00::/7). Static entries carrying one
+// are refused unless the operator opted in (ValidateOptions.
+// AllowPrivateEndpoints); a DNS name resolving to one passes, per
+// Validate's documented residual risk.
+func isPrivateSouthboundIP(ip net.IP) bool {
+	// IsLoopback/IsUnspecified see through IPv4-mapped IPv6 forms.
+	if ip.IsLoopback() || ip.IsUnspecified() {
 		return true
 	}
-	// 100.64.0.0/10 CGNAT / overlay meshes.
-	if v4[0] == 100 && v4[1] >= 64 && v4[1] < 128 {
-		return true
+	if v4 := ip.To4(); v4 != nil {
+		// 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16.
+		return v4[0] == 10 ||
+			(v4[0] == 172 && v4[1] >= 16 && v4[1] < 32) ||
+			(v4[0] == 192 && v4[1] == 168)
+	}
+	if ip16 := ip.To16(); ip16 != nil {
+		// fc00::/7 unique-local.
+		return ip16[0]&0xfe == 0xfc
 	}
 	return false
 }
