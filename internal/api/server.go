@@ -107,6 +107,13 @@ type Server struct {
 	// tests can point it at an httptest server without a real network.
 	ObsHTTPClient *http.Client
 
+	// RuntimeEnvUngoverned disables the runtime_env_yaml admission
+	// validation (#53), restoring the pre-#53 verbatim passthrough into
+	// the RayJob CR. Set only via the --allow-ungoverned-runtime-env
+	// DANGER flag; the governed default refuses arbitrary pip indexes,
+	// interpreters, per-worker images, and remote working_dir URIs.
+	RuntimeEnvUngoverned bool
+
 	// admitMu guards admitLocks (issue #44's per-project admission lock —
 	// see clusters.go's withProjectAdmitLock doc comment for what this
 	// does and does NOT cover).

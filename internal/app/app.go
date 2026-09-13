@@ -59,6 +59,10 @@ type Config struct {
 	// (plan ruling D8: one per project, 409 beyond); <= 0 means the
 	// default of 1.
 	ServicesPerProject int
+	// RuntimeEnvUngoverned disables the runtime_env_yaml admission
+	// validation (#53), restoring the pre-#53 verbatim passthrough. Set
+	// only via the --allow-ungoverned-runtime-env DANGER flag.
+	RuntimeEnvUngoverned bool
 }
 
 // App is a wired control plane that has not yet opened a socket.
@@ -91,6 +95,7 @@ func New(cfg Config) (*App, error) {
 		GatewayDomain:       cfg.GatewayDomain,
 		GatewayExternalBase: cfg.GatewayExternalBase,
 		ServicesPerProject:  cfg.ServicesPerProject,
+		RuntimeEnvUngoverned: cfg.RuntimeEnvUngoverned,
 	}
 	handler := api.NewHandler(server, api.HandlerOptions{
 		Validator:            cfg.Validator,
