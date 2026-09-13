@@ -190,6 +190,15 @@ func (tg *target) Has(capability string) bool {
 	// the .invalid domain). Every other L3 capability is absent.
 	return capability == "gateway" && tg.gatewayDomain != ""
 }
+
+// DestroyStore is never meaningful on inproc: its store is in-process
+// memory, so there is no volume to lose. It exists so a test that
+// type-asserts req.StoreDestroyer without gating on the store-loss
+// capability gets a clear not-supported error instead of a panic.
+func (tg *target) DestroyStore(context.Context) error {
+	return fmt.Errorf("inproc target: no durable store to destroy")
+}
+
 func (tg *target) BaseURL() string { return tg.srv.URL }
 func (tg *target) Authorize(r *http.Request) {
 	if tok := tg.token(context.Background()); tok != "" {

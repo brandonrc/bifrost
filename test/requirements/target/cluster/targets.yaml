@@ -14,18 +14,22 @@
 #             the control plane runs with --ray-autoscaling, so a cluster's
 #             worker count is the KubeRay autoscaler's to change (ADR-0007)
 #             and r06's autoscale test can watch it act
+#   store-loss
+#             tests may destroy the control plane's store behind its back
+#             (scale-to-zero + delete/re-create the data PVC) and watch it
+#             recover. kind only: on grace that wipes a real deployment.
 kind:
   namespace: bifrost
   probeNamespace: jupyter
   contexts: ["^kind-"]
-  capabilities: [calico, probes, restart, gateway]
+  capabilities: [calico, probes, restart, gateway, store-loss]
 # The same kind cluster, control plane started with --ray-autoscaling (the
 # l3-kind "autoscaling" shard patches the Deployment before the suite runs).
 kind-autoscaling:
   namespace: bifrost
   probeNamespace: jupyter
   contexts: ["^kind-"]
-  capabilities: [calico, probes, restart, gateway, autoscaling]
+  capabilities: [calico, probes, restart, gateway, autoscaling, store-loss]
 grace:
   namespace: bifrost
   probeNamespace: jupyter

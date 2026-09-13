@@ -11,6 +11,7 @@ import (
 	"time"
 
 	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -315,6 +316,122 @@ func (h *k8sHandle) restart(ctx context.Context, selector string) error {
 			if old[p.Name] {
 				continue
 			}
+			for _, c := range p.Status.Conditions {
+				if c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue {
+					return true, nil
+				}
+			}
+		}
+		return false, nil
+	})
+}
+
+// destroyStore scales the control-plane deployment to zero, deletes its
+// data PVC and re-creates it empty, then scales back and waits for a fresh
+// Ready pod. This is the store-loss drill's only workable shape on this
+// deployment: the image ships no shell (UBI9-micro) and the root fs is
+// read-only, so the SQLite file cannot be removed from inside the pod —
+// the volume has to go away. The PVC name and replica count are read from
+// the live deployment, not assumed.
+func (h *k8sHandle) destroyStore(ctx context.Context, selector string) error {
+	sel, err := labels.Parse(selector)
+	if err != nil {
+		return fmt.Errorf("control-plane selector %q: %w", selector, err)
+	}
+	listOpts := []ctrlclient.ListOption{ctrlclient.InNamespace(h.ns), ctrlclient.MatchingLabelsSelector{Selector: sel}}
+
+	var deploys appsv1.DeploymentList
+	if err := h.raw.List(ctx, &deploys, listOpts...); err != nil {
+		return err
+	}
+	if len(deploys.Items) != 1 {
+		return fmt.Errorf("%d control-plane deployments match %q in %s, want exactly 1", len(deploys.Items), selector, h.ns)
+	}
+	dep := &deploys.Items[0]
+	replicas := int32(1)
+	if dep.Spec.Replicas != nil {
+		replicas = *dep.Spec.Replicas
+	}
+	pvcName := ""
+	for _, v := range dep.Spec.Template.Spec.Volumes {
+		if v.PersistentVolumeClaim != nil {
+			pvcName = v.PersistentVolumeClaim.ClaimName
+			break
+		}
+	}
+	if pvcName == "" {
+		return fmt.Errorf("control-plane deployment %s mounts no PVC; its store is not durable on this target", dep.Name)
+	}
+
+	zero := int32(0)
+	dep.Spec.Replicas = &zero
+	if err := h.raw.Update(ctx, dep); err != nil {
+		return fmt.Errorf("scale %s to 0: %w", dep.Name, err)
+	}
+	// From here the deployment must come back no matter how the wipe goes.
+	restore := func() error {
+		var cur appsv1.Deployment
+		if err := h.raw.Get(ctx, ctrlclient.ObjectKey{Namespace: h.ns, Name: dep.Name}, &cur); err != nil {
+			return err
+		}
+		cur.Spec.Replicas = &replicas
+		return h.raw.Update(ctx, &cur)
+	}
+	failed := true
+	defer func() {
+		if failed {
+			_ = restore()
+		}
+	}()
+
+	err = wait.PollUntilContextTimeout(ctx, 2*time.Second, 3*time.Minute, true, func(ctx context.Context) (bool, error) {
+		var pods corev1.PodList
+		if err := h.raw.List(ctx, &pods, listOpts...); err != nil {
+			return false, nil //nolint:nilerr // transient API errors during teardown are expected
+		}
+		return len(pods.Items) == 0, nil
+	})
+	if err != nil {
+		return fmt.Errorf("control-plane pods still present after scale-to-0: %w", err)
+	}
+
+	var pvc corev1.PersistentVolumeClaim
+	if err := h.raw.Get(ctx, ctrlclient.ObjectKey{Namespace: h.ns, Name: pvcName}, &pvc); err != nil {
+		return fmt.Errorf("get PVC %s: %w", pvcName, err)
+	}
+	spec := *pvc.Spec.DeepCopy()
+	spec.VolumeName = "" // unbind: the replacement must dynamically provision
+	if err := h.raw.Delete(ctx, &pvc); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete PVC %s: %w", pvcName, err)
+	}
+	err = wait.PollUntilContextTimeout(ctx, 2*time.Second, 3*time.Minute, true, func(ctx context.Context) (bool, error) {
+		err := h.raw.Get(ctx, ctrlclient.ObjectKey{Namespace: h.ns, Name: pvcName}, &corev1.PersistentVolumeClaim{})
+		if apierrors.IsNotFound(err) {
+			return true, nil
+		}
+		return false, nil //nolint:nilerr // deletion (pvc-protection finalizer) still pending
+	})
+	if err != nil {
+		return fmt.Errorf("PVC %s still present after delete: %w", pvcName, err)
+	}
+	fresh := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: pvcName, Namespace: h.ns, Labels: pvc.Labels},
+		Spec:       spec,
+	}
+	if err := h.raw.Create(ctx, fresh); err != nil {
+		return fmt.Errorf("re-create PVC %s: %w", pvcName, err)
+	}
+
+	if err := restore(); err != nil {
+		return fmt.Errorf("scale %s back to %d: %w", dep.Name, replicas, err)
+	}
+	failed = false
+	return wait.PollUntilContextTimeout(ctx, 2*time.Second, 3*time.Minute, true, func(ctx context.Context) (bool, error) {
+		var pods corev1.PodList
+		if err := h.raw.List(ctx, &pods, listOpts...); err != nil {
+			return false, nil //nolint:nilerr // transient API errors during scale-up are expected
+		}
+		for _, p := range pods.Items {
 			for _, c := range p.Status.Conditions {
 				if c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue {
 					return true, nil
