@@ -110,6 +110,11 @@ def main():
     lines.append(f"- N = {args.n} requests, concurrency = {args.concurrency}")
     lines.append(f"- Go: `{args.go_version}`, OS: `{platform.platform()}`")
     lines.append("- Reproduce: `scripts/gateway-load.sh [N] [CONCURRENCY]`")
+    lines.append(
+        "- CI: `.github/workflows/gateway-load.yml` runs this rig nightly and on "
+        "gateway-path PRs, gating the p99 delta at 10 ms (~10x the measured "
+        "baseline below) — the rig is no longer manual-only."
+    )
     lines.append("")
     lines.append("## Finding fixed while building this rig")
     lines.append("")

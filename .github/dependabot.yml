@@ -1,0 +1,46 @@
+# Dependency-update automation. Weekly, Monday mornings UTC, ahead of the
+# Monday contract lane so a green contract run on a dependency bump means
+# something.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 10
+    groups:
+      # ADR-0003: the Kubernetes client libraries are pinned and upgraded as
+      # ONE coherent set — k8s.io/* minor versions are released together and
+      # controller-runtime declares which set it works with, so bumping
+      # client-go without apimachinery (or against controller-runtime's
+      # declared set) is how you get a module graph that compiles and a
+      # controller that misbehaves. KubeRay's ray-operator joins the group
+      # because it is built against a specific client-go set and drags it
+      # along transitively.
+      k8s-set:
+        patterns:
+          - "k8s.io/*"
+          - "sigs.k8s.io/*"
+          - "github.com/ray-project/kuberay/*"
+      # golang.org/x/* move together more often than not (x/net revs usually
+      # want matching x/crypto/x/text/x/sys); grouping them keeps the PR
+      # count down without mixing them into the k8s set, which they are not
+      # coupled to.
+      golang-x:
+        patterns:
+          - "golang.org/x/*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Etc/UTC
+    # Actions are pinned by major-version tag throughout .github/workflows/
+    # (checkout@v4, codeql-action@v3, ...), so dependabot only proposes
+    # major bumps; minor/patch arrive by the tag moving. The point of this
+    # entry is to catch the majors.

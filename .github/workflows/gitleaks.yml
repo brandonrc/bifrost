@@ -1,0 +1,54 @@
+# Secrets scanning: gitleaks over the full git history on every push to main
+# and every PR. A secret that was committed and then deleted is still a
+# secret, which is why the checkout is full-depth and the scan walks history
+# rather than the worktree.
+#
+# WHY THE BINARY AND NOT gitleaks/gitleaks-action: the action requires a
+# GITLEAKS_LICENSE secret for repositories under an organization (free for
+# personal accounts, paid for orgs), and this repo publishes its images under
+# an owner that may move to one. The binary is the same engine with no
+# license surface, pinned to a release and its SHA-256 below so a tampered
+# or yanked upstream release fails closed instead of silently scanning with
+# different rules.
+#
+# REPO SETTINGS: none. GITHUB_TOKEN is not used; the scan is local.
+#
+# Allowlisting: if a finding is a test fixture rather than a live secret,
+# add a .gitleaks.toml at the repo root with an [allowlist] entry — do NOT
+# weaken this workflow to make a fixture pass.
+name: gitleaks
+on:
+  push: { branches: [main] }
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    env:
+      GITLEAKS_VERSION: 8.28.0
+      # SHA-256 of gitleaks_8.28.0_linux_x64.tar.gz from the release page.
+      # Bump both together.
+      GITLEAKS_SHA256: a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: the point of the lane is secrets in past commits.
+          fetch-depth: 0
+
+      - name: Install gitleaks (pinned + checksum-verified)
+        run: |
+          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfL -o "$tarball" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${tarball}"
+          echo "${GITLEAKS_SHA256}  ${tarball}" | sha256sum --check
+          tar -xzf "$tarball" gitleaks
+          ./gitleaks version
+
+      # `git` mode walks history; --redact keeps the secret itself out of the
+      # log so a leaked value does not get a second leak into the Actions UI.
+      # Exit code is 1 on findings, which is the gate.
+      - name: Scan history for secrets
+        run: ./gitleaks git --redact --verbose .

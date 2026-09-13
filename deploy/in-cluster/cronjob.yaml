@@ -52,10 +52,29 @@ spec:
               type: RuntimeDefault
           containers:
             - name: reqrun
-              # Pin the tag that matches the deployed control plane: a suite
-              # from a later commit can assert behaviour the running image does
-              # not have yet, and the failure then reads as a regression.
-              image: ghcr.io/bifrost-compute/bifrost-test:latest
+              # WHY :latest AND NOT A PINNED sha-<short>: publish.yml pushes
+              # both tags on every merge to main, and there is no release
+              # automation that would rewrite this file — a pinned tag here
+              # would freeze the suite at whatever commit someone last edited
+              # by hand, testing a control plane that has since moved on. This
+              # CronJob's purpose is to exercise the CURRENT build nightly, so
+              # floating is the intent, not the oversight. The integrity floor
+              # is upstream: every published image is Trivy-scanned
+              # (HIGH/CRITICAL gate), cosign-signed keyless and attested (see
+              # publish.yml), so the tag resolves to a scanned, signed object.
+              #
+              # KNOWN TRADE-OFF: IfNotPresent plus :latest means a node that
+              # already holds an image under that tag reuses its cached copy
+              # rather than pulling the night's build — the suite can silently
+              # test yesterday's image. The fix (imagePullPolicy: Always, or
+              # release automation rewriting this to the fresh sha-<short>)
+              # belongs to whoever owns the deployment; documenting it here is
+              # deliberate so the next reader does not have to rediscover it.
+              # A deployment that needs an immutable pin should use the
+              # sha-<short> tag matching the deployed control plane: a suite
+              # from a later commit can assert behaviour the running image
+              # does not have yet, and the failure then reads as a regression.
+              image: ghcr.io/brandonrc/bifrost-test:latest
               imagePullPolicy: IfNotPresent
               env:
                 # The targets.yaml target: its capabilities decide which tests

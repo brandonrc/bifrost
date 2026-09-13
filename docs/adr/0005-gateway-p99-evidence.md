@@ -28,6 +28,7 @@ Instead this rig isolates the part of the question that *is* answerable locally 
 - N = 20000 requests, concurrency = 48
 - Go: `go1.26.2`, OS: `macOS-26.3.1-arm64-arm-64bit`
 - Reproduce: `scripts/gateway-load.sh [N] [CONCURRENCY]`
+- CI: `.github/workflows/gateway-load.yml` runs this rig nightly and on gateway-path PRs, gating the p99 delta at 10 ms (~10x the measured baseline below) — the rig is no longer manual-only.
 
 ## Finding fixed while building this rig
 

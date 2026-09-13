@@ -1,0 +1,49 @@
+# SAST gate: GitHub's CodeQL static analysis over the Go tree, on every push
+# to main and every PR, plus a weekly run so new queries CodeQL ships get
+# applied to code that has not changed. Blocking by construction — there is
+# deliberately no continue-on-error here, unlike the advisory nilaway job in
+# ci.yml: a static-analysis gate that is allowed to fail is decoration, and
+# the last one (Rust predecessor's audit) taught us advisory lanes go unread.
+#
+# Runs in its own workflow rather than as a ci.yml job because GitHub's
+# code-scanning UI groups results by workflow, and because this lane needs
+# security-events: write, which the rest of ci.yml has no business holding.
+#
+# REPO SETTINGS: none for a public repo — GITHUB_TOKEN's security-events
+# scope is granted by the permissions block below. On a PRIVATE repo this
+# workflow fails at the upload step unless GitHub Advanced Security (or the
+# free-for-public code scanning org setting) is enabled under
+# Settings > Code security.
+name: codeql
+on:
+  push: { branches: [main] }
+  pull_request:
+  schedule:
+    # Mondays 05:23 UTC, ahead of the 06:17 contract lane; weekly so analysis
+    # re-runs as CodeQL's query packs improve even on quiet weeks.
+    - cron: "23 5 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Upload findings to the Security > Code scanning tab. This is the only
+      # scope this job gets beyond read.
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: go
+
+      # CodeQL's Go extractor observes a real build to know what is in the
+      # module. autobuild runs `go build ./...`, which matches this repo's
+      # no-cgo posture (ci.yml builds CGO_ENABLED=0) and needs no overrides.
+      - uses: github/codeql-action/autobuild@v3
+
+      - uses: github/codeql-action/analyze@v3
