@@ -501,9 +501,14 @@ func (e BudgetExceeded) Error() string {
 // the window rolls forward and older usage ages out. A resource the budget
 // does not list is unconstrained. A cap of 0 admits nothing for that
 // resource.
+//
+// The comparison is written as the negated !(consumed < limit), not
+// consumed >= limit, for the same reason FitsWithin's is: a NaN on either
+// side (a corrupt metering row, a hand-edited cap) is not "strictly below"
+// anything, and the negated form fails closed on it where >= would admit.
 func AdmitBudget(project string, budget *Budget, consumed ResourceMap) error {
 	for resource, limit := range budget.Limits {
-		if consumed[resource] >= limit {
+		if !(consumed[resource] < limit) {
 			return BudgetExceeded{
 				Project:    project,
 				Consumed:   consumed,
